@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "crates/opi-ai",
+    "crates/opi-agent",
+    "crates/opi-coding-agent",
+    "crates/opi-tui",
+    "crates/opi-web-ui",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/OdradekAI/opi"
+authors = ["OdradekAI"]
+
+[workspace.dependencies]
+opi-ai = { path = "crates/opi-ai" }
+opi-agent = { path = "crates/opi-agent" }
+opi-coding-agent = { path = "crates/opi-coding-agent" }
+opi-tui = { path = "crates/opi-tui" }
+opi-web-ui = { path = "crates/opi-web-ui" }
+
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+async-trait = "0.1"

@@ -1,0 +1,17 @@
+/target
+.repo
+
+# Claude Code local-only state
+.claude/settings.local.json
+
+# Secrets / credentials (must never be committed)
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.toml
+
+# Release skill resume state
+.opi-release-state.json

@@ -1,0 +1,22 @@
+[package]
+name = "opi-coding-agent"
+description = "Interactive coding agent CLI with file editing, shell execution, and session management"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "opi"
+path = "src/main.rs"
+
+[dependencies]
+opi-ai = { workspace = true }
+opi-agent = { workspace = true }
+opi-tui = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
