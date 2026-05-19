@@ -15,3 +15,9 @@ credentials.toml
 
 # Release skill resume state
 .opi-release-state.json
+
+# Release artifacts (uploaded to GitHub Release, not tracked)
+release-notes.md
+/opi-*.zip
+/opi-*.tar.gz
+/SHA256SUMS.txt
