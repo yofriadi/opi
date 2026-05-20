@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "opi-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "opi-ai",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "opi-ai"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "serde",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "opi-coding-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "opi-agent",
  "opi-ai",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "opi-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "opi-web-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "opi-ai",
  "serde",
