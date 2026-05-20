@@ -444,3 +444,49 @@ These rules are absolute. The skill MUST refuse to act if any would be violated,
 16. **Never broaden a task into cross-task refactors** without updating the task graph and returning to the review gate.
 17. **Never clean, restore, or discard user changes from a failure gate.**
 18. **Never let sub-agent completion order decide persisted result order.**
+
+## Interrupt Recovery
+
+On invocation, if a task has `status = in_progress` AND `verified_at_commit = null`:
+
+### Clean Working Tree
+
+If `git status --porcelain` is empty, prompt:
+> "Task <id> was marked `in_progress` but no commit was recorded. Was the prior session interrupted? Reset to `failing` and retry, or investigate first?"
+
+Options: (a) Reset to failing, (b) Investigate
+
+### Dirty Working Tree
+
+If working tree has changes, the skill MUST NOT reset, restore, clean, or discard. Print:
+- `start_commit` SHA
+- Current `git status --short`
+- Files changed since `start_commit`
+- Last failing gate and reproduction commands
+
+Offer only:
+- Continue investigation
+- Mark blocked with blocker text
+- Drop to manual session
+
+## Resume From Manual
+
+When `--resume-from-manual` is passed:
+- Skip commit creation ONLY if there is exactly one candidate manual commit since `start_commit`
+- Working tree must be clean
+- Phase D must pass
+- Manual commit must contain required `Opi-*` footers
+- If footer missing: print required footer text and STOP (do not amend user's commit)
+
+## Skill Composition
+
+| Phase | Skill Invoked | Purpose |
+|---|---|---|
+| C.1 | `superpowers:test-driven-development` | Red→green→refactor body |
+| C.1 (parallelize) | `superpowers:dispatching-parallel-agents` | Independent sub-units |
+| C.2 (attempt 3+) | `superpowers:systematic-debugging` | When stuck |
+| D.7 (risk-gated) | `superpowers:requesting-code-review` | Independent evaluator |
+| D pre-commit | `superpowers:verification-before-completion` | Evidence before claim |
+| Failure (b) | `superpowers:brainstorming` | DoD interpretation |
+
+Each invocation announces itself: "Using superpowers:<name> to <purpose> for task <id>"
