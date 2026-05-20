@@ -71,3 +71,80 @@ If smoke fails → STOP. Print the failure and refuse to proceed. The smoke must
 
 **Interrupt recovery** (task has `status = in_progress` AND `verified_at_commit = null`):
 - See §Interrupt Recovery section for handling.
+
+## Phase A.init: Initializer Mode
+
+Triggered when `.opi-impl-state.json` is absent OR `--reinit` is passed.
+
+### A.init.1 Pre-flight
+
+Confirm:
+- Working tree is clean (`git status --porcelain` is empty)
+- On `main` branch
+- `docs/opi-spec.md` exists
+
+If any check fails, print the issue and refuse to proceed.
+
+### A.init.2 Parse Spec Roadmap
+
+Parse `docs/opi-spec.md` §15 roadmap tables. For each task row, extract:
+- `id` — task number (e.g., `1.6`)
+- `title` — task name
+- `crate` — target crate
+- `definition_of_done` — DoD string (verbatim from spec when present)
+- `phase` — phase number from grouping
+
+Infer (with `inference_notes` for each):
+- `tier` — from crate + task description:
+  - `opi-ai`, `opi-agent` internals → `library`
+  - `opi-coding-agent` tool tasks → `cli-tool`
+  - `opi-coding-agent` runtime/wiring → `cli-runtime`
+  - `opi-tui` → `tui`
+  - workspace-level → `workspace`
+- `commit_type` — from task verbs (add/create → `feat`, fix → `fix`, etc.)
+- `depends_on` — from numeric ordering + DoD references
+  - Tasks requiring `MockProvider` get `"1.17"` as dependency
+- `evaluator_required` — true when tier is `cli-runtime`/`tui`, crosses crates, or touches public protocol/security
+
+Rows without a DoD → deferred spec rows (not executable), unless an imported draft supplies a concrete DoD.
+
+### A.init.3 Task-Graph Review Gate
+
+Render the complete draft as a table:
+
+| id | title | tier | commit_type | depends_on | exec_order | evaluator_required | inference_notes |
+|---|---|---|---|---|---|---|---|
+
+Present gate options:
+- `confirm-all` — accept the graph as shown
+- `edit-task <id>` — modify one task's inferred fields
+- `apply-rule <selector> <field> <value>` — batch edit (show before/after diff)
+- `export-draft` — write `.opi-impl-state.draft.json` for manual editing
+- `import-draft` — validate and load from `.opi-impl-state.draft.json`
+- `abort` — cancel initialization
+
+Every edit or import re-renders the table before confirmation. The skill MUST NOT proceed until the whole graph is confirmed.
+
+### A.init.4 Write Ledger
+
+Write `.opi-impl-state.json` atomically (via tmp + rename). Add to `.gitignore` if missing:
+- `.opi-impl-state.json`
+- `.opi-impl-state.json.tmp`
+- `.opi-impl-state.draft.json`
+
+### A.init.5 Write Smoke Script
+
+Ensure `scripts/opi-impl-smoke.sh` and `scripts/opi-impl-smoke.ps1` exist and contain the tracked templates from this plan. If they are missing, recreate them from the Smoke Script sections. If they already exist, leave them unchanged unless the template version changed.
+
+### A.init.6 Commit Tracked Files
+
+Commit ONLY tracked files that actually changed (smoke scripts + .gitignore update). The ledger is NOT committed. If no tracked file changed, do not create an empty commit.
+
+```bash
+git add scripts/opi-impl-smoke.sh scripts/opi-impl-smoke.ps1 .gitignore
+git commit -m "chore: bootstrap opi-implement ledger and smoke"
+```
+
+### A.init.7 Print Summary
+
+Print success with next-task hint: "Initialized N tasks. Next unblocked: <id> <title>"
