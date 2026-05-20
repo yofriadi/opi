@@ -326,3 +326,37 @@ Must answer:
 4. Is the evidence footer truthful and sufficient?
 
 If evaluator fails → back to Phase C with findings as input. Generator may NOT self-approve.
+
+## Phase E: Commit & Ledger Update
+
+### E.1 Conventional Commit
+
+Stage only the task's files. Create a conventional commit:
+- Type from ledger `commit_type` field (e.g., `feat`, `fix`, `refactor`)
+- Scope from crate name (e.g., `feat(opi-agent): implement agent_loop`)
+- Body: brief description of what was implemented
+- Footers (parseable, one per line):
+
+```text
+Opi-Task: <id>
+Opi-DoD-SHA256: <sha256 of definition_of_done string>
+Opi-Verification: <tier>; <short command/result summary>
+Opi-Evaluator: <not-required | passed>
+```
+
+### E.2 Record Evidence
+
+Capture into ledger:
+- `verified_at_commit` = new HEAD SHA
+- `evidence` = mirror of the Opi-* footers + full command list + reviewer summary
+
+### E.3 Flip Status
+
+- Set `status` → `passing`
+- Append to `session_notes`: `{timestamp, attempt, summary, gate_results}`
+- Reset `iteration_count` to 0
+- Write ledger atomically
+
+### E.4 No Push
+
+The skill never pushes. Push is a separate human action.
