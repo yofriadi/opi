@@ -489,4 +489,83 @@ When `--resume-from-manual` is passed:
 | D pre-commit | `superpowers:verification-before-completion` | Evidence before claim |
 | Failure (b) | `superpowers:brainstorming` | DoD interpretation |
 
-Each invocation announces itself: "Using superpowers:<name> to <purpose> for task <id>"
+## JSON Ledger Schema
+
+Path: `.opi-impl-state.json` (repo root, gitignored).
+
+### Atomic Write Protocol
+
+1. Serialize full JSON with structured writer (not string concat)
+2. Write to `.opi-impl-state.json.tmp`
+3. Rename over `.opi-impl-state.json`
+4. On failure: leave previous ledger intact, print tmp path
+
+### Write Boundaries
+
+Ledger is written ONLY at:
+1. End of Phase B (task confirmed → `in_progress`)
+2. Each attempt boundary (record attempt metadata)
+3. Failure decision gate (mark `blocked` or extend cap)
+4. End of Phase E (mark `passing`, record evidence)
+5. Reinit after graph confirmation
+
+### Schema (v1)
+
+```json
+{
+  "schema_version": 1,
+  "spec_path": "docs/opi-spec.md",
+  "spec_sha256": "<hash>",
+  "task_graph_confirmed_at": "<ISO-8601>",
+  "current_phase": 1,
+  "tasks": [{
+    "id": "1.6",
+    "phase": 1,
+    "title": "agent_loop",
+    "crate": "opi-agent",
+    "definition_of_done": "<verbatim from spec>",
+    "status": "failing",
+    "depends_on": ["1.1", "1.2", "1.5"],
+    "inference_notes": [{"field": "depends_on", "reason": "...", "source": "..."}],
+    "tier": "library",
+    "commit_type": "feat",
+    "parallelize": [],
+    "evaluator_required": false,
+    "verification": {
+      "library_gates": ["cargo test -p opi-agent", "..."],
+      "behavioral_tests": ["crates/opi-agent/tests/agent_loop_mock.rs"],
+      "snapshot_tests": [],
+      "smoke_addendum": null
+    },
+    "iteration_count": 0,
+    "max_iterations": 5,
+    "start_commit": null,
+    "last_attempt": null,
+    "verified_at_commit": null,
+    "evidence": null,
+    "blocker": null,
+    "session_notes": []
+  }],
+  "phase_exit": {
+    "1": {"completed_at": null, "exit_criteria_met": false, "evaluator_summary": null}
+  }
+}
+```
+
+### Status State Machine
+
+`failing` → `in_progress` → `passing`
+`in_progress` → `blocked` (via failure gate)
+`blocked` → `failing` (via `--clear-blocker`)
+Any → `archived` (via reinit reconciliation)
+
+### Platform Detection
+
+Detect host via `OSTYPE`/`OS` env vars:
+- Linux/macOS: run `scripts/opi-impl-smoke.sh`
+- Windows PowerShell: run `scripts/opi-impl-smoke.ps1`
+- Bash-on-Windows: run `scripts/opi-impl-smoke.sh` with forward slashes
+
+SHA-256: use `sha256sum` (Linux), `shasum -a 256` (macOS), or PowerShell `Get-FileHash`.
+
+JSON manipulation: use `jq` when present; fall back to Python `json` module or PowerShell `ConvertFrom-Json`/`ConvertTo-Json`.
