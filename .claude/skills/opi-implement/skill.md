@@ -569,3 +569,34 @@ Detect host via `OSTYPE`/`OS` env vars:
 SHA-256: use `sha256sum` (Linux), `shasum -a 256` (macOS), or PowerShell `Get-FileHash`.
 
 JSON manipulation: use `jq` when present; fall back to Python `json` module or PowerShell `ConvertFrom-Json`/`ConvertTo-Json`.
+
+## Status Mode
+
+When `--status` is passed, print a summary table and exit without modifying state.
+
+### Output Format
+
+```text
+opi-implement status — spec: docs/opi-spec.md (sha256: <first 8 chars>)
+Phase: <current_phase>
+
+| ID   | Title          | Tier     | Status   | Deps Met | Blocker |
+|------|----------------|----------|----------|----------|---------|
+| 1.0  | workspace_deps | workspace| passing  | yes      |         |
+| 1.1  | provider_trait | library  | failing  | yes      |         |
+| 1.14 | interactive    | cli-runtime | blocked | no (1.17) | needs MockProvider |
+...
+
+Summary: <N> passing, <M> failing, <K> blocked, <J> archived
+Next unblocked: <id> <title>
+```
+
+### Clear-Blocker Mode
+
+When `--clear-blocker <task-id> --because <text>`:
+1. Validate task exists and has `status = blocked`
+2. Append `--because` text to `session_notes`
+3. Clear `blocker` field
+4. Set `status` → `failing`
+5. Write ledger atomically
+6. Print: "Blocker cleared for <id>. Status reset to failing."
