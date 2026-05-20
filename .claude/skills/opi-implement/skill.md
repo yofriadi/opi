@@ -360,3 +360,25 @@ Capture into ledger:
 ### E.4 No Push
 
 The skill never pushes. Push is a separate human action.
+
+## Phase F: Phase-Exit Check
+
+### F.1 Check Phase Completion
+
+If ALL executable tasks in the current phase have status `passing`:
+- Run the phase-exit evaluator
+- Evaluator checks: phase exit criteria from opi-spec.md §15, list of task evidence footers, smoke output
+- Phase is complete only when evaluator finds no blocking gap
+
+### F.2 Phase-Complete Report
+
+If phase is complete:
+- Print phase-complete report with summary of all tasks
+- Record in `phase_exit[N]`: `completed_at`, `exit_criteria_met = true`, `evaluator_summary`
+- Mention `opi-release` as the next step (never auto-invoke)
+
+### F.3 Next-Task Hint
+
+If phase is NOT complete:
+- Print "Next unblocked: <id> <title>"
+- Update `current_phase` to lowest phase with non-passing tasks
