@@ -259,21 +259,23 @@ cross build --release --target $TARGET -p opi-coding-agent
 ```
 
 ### 4.4 Asset Packaging
+All build artifacts go into `release-artifacts/v$VERSION/`.
 ```bash
+mkdir -p release-artifacts/v$VERSION
 # Linux/macOS: tar.gz
-tar -czf opi-$PLATFORM.tar.gz -C target/$TARGET/release opi README.md LICENSE
+tar -czf release-artifacts/v$VERSION/opi-$PLATFORM.tar.gz -C target/$TARGET/release opi README.md LICENSE
 # Windows: zip
-zip opi-$PLATFORM.zip target/$TARGET/release/opi.exe README.md LICENSE
-# Checksums
-sha256sum opi-*.tar.gz opi-*.zip > SHA256SUMS.txt
+zip release-artifacts/v$VERSION/opi-$PLATFORM.zip target/$TARGET/release/opi.exe README.md LICENSE
+# Checksums (local integrity verification, NOT uploaded to GitHub Release)
+cd release-artifacts/v$VERSION && sha256sum opi-*.tar.gz opi-*.zip > SHA256SUMS.txt
 ```
 
 ### 4.5 Artifact Self-Check
-For each archive:
+For each archive in `release-artifacts/v$VERSION/`:
 1. Unpack to temp dir, verify expected files exist
 2. Native platform: run `./opi --version`, confirm output = target version
 3. Cross-compiled: verify file type with `file` command
-4. Verify SHA256SUMS.txt covers all archives
+4. Verify SHA256SUMS.txt covers all archives: `cd release-artifacts/v$VERSION && sha256sum -c SHA256SUMS.txt`
 5. Warn if any archive >50MB
 
 ## Phase 5: Commit, Tag, Push & GitHub Draft Release
@@ -299,14 +301,10 @@ gh release create "v$VERSION" \
   --draft \
   --title "v$VERSION" \
   --notes-file release-notes.md \
-  opi-linux-x64.tar.gz \
-  opi-linux-arm64.tar.gz \
-  opi-darwin-x64.tar.gz \
-  opi-darwin-arm64.tar.gz \
-  opi-windows-x64.zip \
-  opi-windows-arm64.zip \
-  SHA256SUMS.txt
+  release-artifacts/v$VERSION/opi-*.tar.gz \
+  release-artifacts/v$VERSION/opi-*.zip
 ```
+Only upload archive files (tar.gz/zip). Do NOT upload SHA256SUMS.txt to GitHub Release.
 Only include archives that were actually built (skip unavailable targets).
 
 ### 5.3 User Confirmation Gate
@@ -391,11 +389,11 @@ opi --version  # must output $VERSION
 
 **GitHub Release asset check:**
 ```bash
-gh release download "v$VERSION" --pattern "opi-$(uname -s | tr A-Z a-z)-*.tar.gz" -D /tmp/opi-verify
-# Verify checksum
-cd /tmp/opi-verify && sha256sum -c SHA256SUMS.txt
+gh release download "v$VERSION" -D /tmp/opi-verify
+# Verify against local checksums
+cd /tmp/opi-verify && sha256sum -c ../../../release-artifacts/v$VERSION/SHA256SUMS.txt
 # Run binary if native platform
-./opi --version
+# (unpack native archive, run ./opi --version)
 ```
 
 **docs.rs build status (all crates):**
@@ -480,4 +478,12 @@ If yes, skip to Phase 6 and only publish remaining crates.
 - `gh` (GitHub CLI, authenticated)
 - `git`
 - `cargo-audit` (optional, for security checks)
+
+## Post-Release Cleanup
+
+After Phase 7 completes (or on abort), remove transient release artifacts:
+```bash
+rm -f release-notes.md
+```
+The `release-artifacts/v$VERSION/` directory is retained for local reference (checksums, archives). It is in `.gitignore` and does not pollute the repo.
 
