@@ -194,10 +194,10 @@ Internal dependencies MUST be declared in root `[workspace.dependencies]` and re
 
 | Crate | Type | Publish target | Role |
 |---|---|---|---|
-| `opi-ai` | library | crates.io from 0.2.0 target | provider protocols, model metadata, provider-facing messages |
-| `opi-agent` | library | crates.io from 0.2.0 target | loop, agent, hooks, tools, queues, sessions |
-| `opi-tui` | library | crates.io from 0.2.0 target | terminal rendering library |
-| `opi-coding-agent` | binary | crates.io from 0.2.0 target | `opi` CLI application |
+| `opi-ai` | library | crates.io after publish gates pass | provider protocols, model metadata, provider-facing messages |
+| `opi-agent` | library | crates.io after publish gates pass | loop, agent, hooks, tools, queues, sessions |
+| `opi-tui` | library | crates.io after publish gates pass | terminal rendering library |
+| `opi-coding-agent` | binary | crates.io after publish gates pass | `opi` CLI application |
 | `opi-web-ui` | library | not published | future browser UI placeholder |
 
 ### 5.4 Why There Is No `opi-types`
@@ -240,15 +240,28 @@ phase additions over broad defaults.
 
 ### 5.6 JSON Schema Draft Compatibility
 
-Anthropic's Messages API expects tool `input_schema` to conform to JSON Schema draft 2020-12 with a top-level `type: "object"` constraint. `schemars` 0.8 generates draft-07 by default.
+Anthropic's Messages API accepts tool `input_schema` as a JSON Schema object
+with a top-level `type: "object"` constraint. API validation errors indicate a
+draft-2020-12-compatible validator, while `schemars` 0.8 generates draft-07 by
+default.
 
-For Phase 1 tool schemas (simple object + properties + required), draft-07 output is generally accepted by Anthropic because the basic keywords are unchanged between drafts. However, complex schemas using features that diverged between drafts (array `items` vs `prefixItems`, `definitions` vs `$defs`, conditional keywords) MAY be rejected.
+For Phase 1 tool schemas (simple object + properties + required), draft-07
+output should stay within the common JSON Schema subset accepted by Anthropic.
+Complex schemas using features that diverged between drafts (array `items` vs
+`prefixItems`, `definitions` vs `$defs`, conditional keywords) MAY be rejected.
 
 Requirements:
 
-- Phase 1 MUST include an integration test that submits generated tool schemas to the Anthropic API and verifies acceptance.
-- If incompatibilities surface, a schema post-processing step SHOULD normalize draft-07 output to draft 2020-12 (rename `definitions` to `$defs`, etc.).
-- `schemars` 1.0 (when stable) MAY resolve this natively; until then, treat this as a known risk with a tested mitigation path.
+- Phase 1 MUST include local fixture tests for generated built-in tool schemas,
+  including validation of representative model arguments before deserialization.
+- Phase 1 SHOULD include an ignored, environment-gated live Anthropic schema
+  acceptance test, but default CI MUST NOT require paid credentials or network
+  access.
+- If incompatibilities surface, a schema post-processing step SHOULD normalize
+  draft-07 output to the accepted provider subset (for example, rename
+  `definitions` to `$defs` when needed).
+- `schemars` 1.0 (when stable) MAY resolve this natively; until then, treat this
+  as a known risk with a tested mitigation path.
 
 ## 6. Architecture
 
@@ -437,7 +450,9 @@ pub enum AgentSessionEvent {
 }
 ```
 
-`--json` mode emits one JSON object per line. The event protocol MUST include a schema version before downstream tooling treats it as stable.
+When Phase 2 JSON mode is implemented, `--json` emits one JSON object per line.
+The event protocol MUST include a schema version before downstream tooling
+treats it as stable.
 
 ### 7.6 Queues
 
@@ -684,11 +699,6 @@ budget_tokens = 10000
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
 
-[compaction]
-enabled = true
-reserve_tokens = 8000
-keep_recent_tokens = 4000
-
 [keybindings]
 submit = "enter"
 abort = "ctrl+c"
@@ -713,6 +723,9 @@ Phase 1 config loading only needs defaults, provider credentials, model
 selection, timeouts, theme selection, and high-risk tool policy. Compaction,
 session, and advanced keybinding settings MAY be accepted as reserved fields,
 but they must not imply those Phase 2 features are active.
+
+Phase 2 MAY add a `[compaction]` table with fields such as `enabled`,
+`reserve_tokens`, and `keep_recent_tokens` after session persistence exists.
 
 ### 9.2 Directory Layout
 
