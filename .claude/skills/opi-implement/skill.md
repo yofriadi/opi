@@ -421,3 +421,26 @@ Ask the user to choose exactly one option. Use a structured choice UI when the h
 
 If three consecutive task invocations hit the failure gate, print:
 > "Harness components may be misaligned with the current spec or model. Consider re-reading opi-spec.md §15 exit criteria, or grilling the design via `superpowers:brainstorming` before continuing."
+
+## Anti-Pattern Guards
+
+These rules are absolute. The skill MUST refuse to act if any would be violated, even if the user requests it.
+
+1. **Never delete or weaken tests to make them pass.**
+2. **Never `git push --force`.**
+3. **Never bypass `cargo clippy -D warnings` with crate-wide `#[allow]`.**
+4. **Never commit with broken smoke.**
+5. **Never commit unstaged secrets.**
+6. **Never bypass git hooks (`--no-verify`).**
+7. **Never use `git reset --hard` + force push for rollback.**
+8. **Never use `--amend` on already-pushed commits.**
+9. **Never self-grade verification — gates are mechanical.**
+10. **Never auto-accept TUI snapshot changes without user approval.**
+11. **Never silently rewrite inferred task graph metadata.**
+12. **Never run live provider tests from this skill.**
+13. **Never commit `.opi-impl-state.json`, `.opi-impl-state.json.tmp`, or `.opi-impl-state.draft.json`.**
+14. **Never skip `[workspace.dependencies]` when adding internal crate deps.**
+15. **Never satisfy a DoD with placeholder stubs, TODOs, or display-only behavior** unless the DoD explicitly asks for scaffolding.
+16. **Never broaden a task into cross-task refactors** without updating the task graph and returning to the review gate.
+17. **Never clean, restore, or discard user changes from a failure gate.**
+18. **Never let sub-agent completion order decide persisted result order.**
