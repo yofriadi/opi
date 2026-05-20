@@ -1,634 +1,240 @@
 ---
 name: opi-implement
-description: Use when implementing opi roadmap tasks from docs/opi-spec.md, checking opi implementation status, resuming blocked or in-progress opi task work, or reconciling the opi task ledger after spec changes
-arguments: "[<task-id>] [--status] [--reinit] [--resume-from-manual] [--extend-cap <N>] [--clear-blocker <task-id> --because <text>]"
+description: Use when executing opi-spec.md tasks, checking implementation status, reinitializing the task ledger, resuming interrupted implementation, clearing task blockers, or auto-selecting the next unblocked task. Triggers on requests to implement, resume, verify, or query progress of spec tasks — not on merely reading or discussing opi-spec.md.
 ---
 
 # opi-implement
 
-Long-running-agent harness that implements `docs/opi-spec.md` one spec task per invocation. Reads task definitions from a JSON ledger, drives TDD to completion, runs tiered verification gates, and commits exactly one conventional commit on success.
+Long-running-agent harness that drives `docs/opi-spec.md` implementation one
+task at a time with TDD, tiered verification, and JSON-ledger checkpointing.
 
-## Arguments
+This is a **harness**, not a coding assistant. It encodes opinions about state,
+evidence, failure recovery, and escalation. It does NOT edit `opi-spec.md`,
+push commits, publish crates, or make network calls to providers.
 
-| Invocation | Effect |
-|---|---|
-| `/skill opi-implement` | Auto-pick lowest-ID unblocked failing task |
-| `/skill opi-implement <task-id>` | Specific task; validates deps, refuses if blocked |
-| `/skill opi-implement --status` | Print ledger summary table, exit |
-| `/skill opi-implement --reinit` | Re-parse spec, reconcile ledger |
-| `/skill opi-implement <task-id> --resume-from-manual` | Verify one manual task commit with Opi-* footers |
-| `/skill opi-implement <task-id> --extend-cap <N>` | Raise iteration cap for this invocation only |
-| `/skill opi-implement --clear-blocker <task-id> --because <text>` | Remove blocker, status → failing, append justification |
+## Invocation
 
-`<task-id>` matches the ID format in opi-spec.md §15 (e.g., `1.6`, `2.7`).
-
-## Phase A: Bootstrap
-
-Run on every invocation. Establishes context and selects the target task.
-
-### A.1 Detect Mode
-
-Parse arguments to determine mode:
-- No args → `auto` mode
-- `--status` → print ledger summary, exit
-- `--reinit` → jump to Initializer Mode (§Phase A.init)
-- `<task-id>` → `task` mode (validate deps before proceeding)
-- `<task-id> --resume-from-manual` → resume mode
-- `--clear-blocker <task-id> --because <text>` → clear blocker, exit
-
-### A.2 Load Ledger
-
-1. If `.opi-impl-state.json` is absent → jump to Initializer Mode (§Phase A.init)
-2. Read and parse the JSON ledger
-3. Validate `schema_version` equals 1; refuse on unknown versions
-4. Compute SHA-256 of `docs/opi-spec.md`; if it differs from `spec_sha256`, warn:
-   > "Spec has changed since last init. Consider running `--reinit` to reconcile."
-
-### A.3 Session Ritual
-
-Run these commands and print results:
-
-```bash
-pwd
-git status --short
-git log -5 --oneline
-bash scripts/opi-impl-smoke.sh   # or PowerShell on Windows
+```text
+opi-implement                                  # auto-pick next unblocked task
+opi-implement <task-id>                        # specific task (validates deps)
+opi-implement --status                         # print ledger summary
+opi-implement --reinit                         # re-parse spec, reconcile
+opi-implement <task-id> --resume-from-manual   # verify a manual commit
+opi-implement <task-id> --extend-cap <N>       # raise iteration cap
+opi-implement --clear-blocker <id> --because <text>  # unblock a task
 ```
 
-If smoke fails → STOP. Print the failure and refuse to proceed. The smoke must pass before any task work begins.
+## Mode Detection
 
-### A.4 Select Target Task
+```dot
+digraph mode {
+  "Parse args" [shape=box];
+  "Ledger exists?" [shape=diamond];
+  "--reinit?" [shape=diamond];
+  "--status?" [shape=diamond];
+  "Task arg?" [shape=diamond];
+  "Init mode" [shape=box];
+  "Reinit mode" [shape=box];
+  "Status mode" [shape=box];
+  "Task mode" [shape=box];
+  "Auto-pick mode" [shape=box];
 
-**Auto-pick rule** (no task-id argument):
-- Find the lowest task `id` (lexicographic, numerically aware: 1.2 < 1.10) whose `status` is `failing` AND every entry in `depends_on` has status `passing`.
-- Tasks with `status: blocked` are skipped.
-- If no task is eligible, print "All tasks are either passing, blocked, or have unmet dependencies" and exit.
-
-**User-override rule** (task-id argument):
-- Validate the task exists in the ledger.
-- Refuse if any `depends_on` entry is not `passing`, printing which dep is missing.
-- Refuse if status is `blocked` (suggest `--clear-blocker`).
-
-**Interrupt recovery** (task has `status = in_progress` AND `verified_at_commit = null`):
-- See §Interrupt Recovery section for handling.
-
-## Phase A.init: Initializer Mode
-
-Triggered when `.opi-impl-state.json` is absent OR `--reinit` is passed.
-
-### A.init.1 Pre-flight
-
-Confirm:
-- Working tree is clean (`git status --porcelain` is empty)
-- On `main` branch
-- `docs/opi-spec.md` exists
-
-If any check fails, print the issue and refuse to proceed.
-
-### A.init.2 Parse Spec Roadmap
-
-Parse `docs/opi-spec.md` §15 roadmap tables. For each task row, extract:
-- `id` — task number (e.g., `1.6`)
-- `title` — task name
-- `crate` — target crate
-- `definition_of_done` — DoD string (verbatim from spec when present)
-- `phase` — phase number from grouping
-
-Infer (with `inference_notes` for each):
-- `tier` — from crate + task description:
-  - `opi-ai`, `opi-agent` internals → `library`
-  - `opi-coding-agent` tool tasks → `cli-tool`
-  - `opi-coding-agent` runtime/wiring → `cli-runtime`
-  - `opi-tui` → `tui`
-  - workspace-level → `workspace`
-- `commit_type` — from task verbs (add/create → `feat`, fix → `fix`, etc.)
-- `depends_on` — from numeric ordering + DoD references
-  - Tasks requiring `MockProvider` get `"1.17"` as dependency
-- `evaluator_required` — true when tier is `cli-runtime`/`tui`, crosses crates, or touches public protocol/security
-
-Rows without a DoD → deferred spec rows (not executable), unless an imported draft supplies a concrete DoD.
-
-### A.init.3 Task-Graph Review Gate
-
-Render the complete draft as a table:
-
-| id | title | tier | commit_type | depends_on | exec_order | evaluator_required | inference_notes |
-|---|---|---|---|---|---|---|---|
-
-Present gate options:
-- `confirm-all` — accept the graph as shown
-- `edit-task <id>` — modify one task's inferred fields
-- `apply-rule <selector> <field> <value>` — batch edit (show before/after diff)
-- `export-draft` — write `.opi-impl-state.draft.json` for manual editing
-- `import-draft` — validate and load from `.opi-impl-state.draft.json`
-- `abort` — cancel initialization
-
-Every edit or import re-renders the table before confirmation. The skill MUST NOT proceed until the whole graph is confirmed.
-
-### A.init.4 Write Ledger
-
-Write `.opi-impl-state.json` atomically (via tmp + rename). Add to `.gitignore` if missing:
-- `.opi-impl-state.json`
-- `.opi-impl-state.json.tmp`
-- `.opi-impl-state.draft.json`
-
-### A.init.5 Write Smoke Script
-
-Ensure `scripts/opi-impl-smoke.sh` and `scripts/opi-impl-smoke.ps1` exist and contain the tracked templates from this plan. If they are missing, recreate them from the Smoke Script sections. If they already exist, leave them unchanged unless the template version changed.
-
-### A.init.6 Commit Tracked Files
-
-Commit ONLY tracked files that actually changed (smoke scripts + .gitignore update). The ledger is NOT committed. If no tracked file changed, do not create an empty commit.
-
-```bash
-git add scripts/opi-impl-smoke.sh scripts/opi-impl-smoke.ps1 .gitignore
-git commit -m "chore: bootstrap opi-implement ledger and smoke"
+  "Parse args" -> "Ledger exists?";
+  "Ledger exists?" -> "Init mode" [label="no"];
+  "Ledger exists?" -> "--reinit?" [label="yes"];
+  "--reinit?" -> "Reinit mode" [label="yes"];
+  "--reinit?" -> "--status?" [label="no"];
+  "--status?" -> "Status mode" [label="yes"];
+  "--status?" -> "Task arg?" [label="no"];
+  "Task arg?" -> "Task mode" [label="yes"];
+  "Task arg?" -> "Auto-pick mode" [label="no"];
+}
 ```
 
-### A.init.7 Print Summary
+**Auto-pick rule:** Lowest task ID (lexicographic, numerically aware) whose
+`status` is `failing` AND every `depends_on` entry is `passing`. Tasks with
+`status: blocked` are skipped until `--clear-blocker`.
 
-Print success with next-task hint: "Initialized N tasks. Next unblocked: <id> <title>"
+**User-override rule:** Refuse if any `depends_on` is not `passing`; print
+which dep is missing.
 
-## Reinit Reconciliation
+## Six Phases Per Invocation
 
-When `--reinit` runs against an existing ledger:
+Phases A, B, F are cheap and always execute. C and D are the work body.
+E is the only phase that mutates git **during normal task execution**.
+(Init and reinit also commit tracked harness files — see `references/initializer.md`.)
 
-### Step 1: Drift Check
+1. **Phase A: Bootstrap**
+   - A.1 Detect mode (init / status / reinit / task / auto)
+   - A.2 Load or create `.opi-impl-state.json`
+   - A.3 Session ritual: `pwd`, `git status`, `git log -5 --oneline`, smoke
+   - A.4 Select target task (auto-pick or validate override)
 
-Recompute `spec_sha256`. If unchanged, refuse — suggest `--status` instead.
+2. **Phase B: Plan-the-task**
+   - B.1 Print task DoD + verification tier + parallelize plan
+   - B.2 User gate: "proceed with task `<id>`?"
+   - B.3 If confirmed: mark `in_progress`, record `start_commit`, write ledger
 
-### Step 2: Re-parse
+3. **Phase C: Implement**
+   - C.1 Invoke `superpowers:test-driven-development` (red→green→refactor)
+     - If `parallelize` non-empty → `superpowers:dispatching-parallel-agents`
+   - C.2 Iteration cap 3 → invoke `superpowers:systematic-debugging`
+   - C.3 Total cap 5 → failure decision gate
 
-Re-parse the spec into a fresh ledger using the same logic as A.init.2.
+4. **Phase D: Verify**
+   - D.1 Tier-specific mechanical gates
+   - D.2 Task-level risk evaluator (when `evaluator_required = true`)
+   - D.3 Cross-cutting gates: fmt, clippy, doc, smoke
+   - D.4 If any fail → back to Phase C
 
-### Step 3: Reconcile Field-by-Field
+5. **Phase E: Commit & Ledger Update**
+   - E.1 Conventional commit with `Opi-*` evidence footers
+   - E.2 Capture HEAD SHA + evidence → ledger
+   - E.3 Flip status to `passing`; append session_note
+   - E.4 No push (push is separate human action)
 
-- **Task IDs in both old and new:** Preserve runtime fields (`status`, `verified_at_commit`, `iteration_count`, `session_notes`, `blocker`).
-- **Task IDs only in old:** Warn, ask "keep history, mark `archived`?"
-- **Task IDs only in new:** Add with status `failing`.
-- **DoD changed for existing passing task:** Warn, ask:
-  - Preserve as `passing` (wording change is cosmetic), OR
-  - Demote to `failing` (DoD substantively widened)
-- **`depends_on`, `tier`, `commit_type`, or `evaluator_required` changed:** Re-run task-graph review gate with row-level diff. Require confirmation.
+6. **Phase F: Phase-Exit Check**
+   - F.1 If all phase tasks passing → run phase-exit evaluator
+   - F.2 Print phase-complete report; no auto-release
+   - F.3 Else → print "next unblocked: X.Y" hint
 
-### Step 4: Finalize
+**When init/reinit runs:** Read `references/initializer.md` for the full flow.
 
-Update `spec_sha256`. If tracked files changed (.gitignore or smoke scripts), commit:
-```bash
-git commit -m "chore: reconcile opi-implement harness files with opi-spec.md changes"
-```
-If no tracked file changed, do not create an empty commit.
+**When Phase D runs:** Read `references/verification-tiers.md` for gate details.
 
-## Phase B: Plan-the-Task
+**When iteration cap hits:** Read `references/failure-gate.md` for the protocol.
 
-### B.1 Print Task Summary
+## Task Selection
 
-Display:
-- Task ID and title
-- Definition of Done (verbatim)
-- Verification tier and gate list
-- Parallelize plan (if non-empty)
-- Dependencies (all must be `passing`)
+```dot
+digraph select {
+  "Check interrupt" [shape=diamond];
+  "in_progress + no commit?" [shape=diamond];
+  "Working tree dirty?" [shape=diamond];
+  "Prompt: reset status to failing, or investigate" [shape=box];
+  "Print state, offer: continue/block/manual" [shape=box];
+  "Auto-pick or user override" [shape=box];
+  "Validate depends_on" [shape=diamond];
+  "All deps passing?" [shape=diamond];
+  "Proceed to Phase B" [shape=box];
+  "Refuse: print missing dep" [shape=box];
 
-### B.2 User Gate
-
-Ask: "Proceed with task `<id>` — `<title>`?"
-
-If the user declines, exit cleanly without modifying state.
-
-### B.3 Mark In-Progress
-
-On confirmation:
-1. Record `start_commit` = current HEAD SHA
-2. Set `status` → `in_progress`
-3. Initialize `last_attempt` = `{attempt: 1, started_at: <now>, ended_at: null, outcome: null, failing_gate: null, touched_files: []}`
-4. Write ledger atomically
-
-Phase A task selection alone does NOT mutate task status. Only Phase B confirmation triggers the state change.
-
-## Phase C: Implement
-
-### C.1 TDD Loop
-
-Announce: "Using superpowers:test-driven-development to drive red-green for task <id>"
-
-Invoke `superpowers:test-driven-development` with the task's DoD as the requirement.
-
-If `parallelize` is non-empty, announce: "Using superpowers:dispatching-parallel-agents for sub-units: <list>"
-- Sub-agents work on disjoint files, do NOT create commits
-- Parent applies results in ledger order
-- Runs full verification after each merge
-- Conflicts or overlapping edits fail the attempt
-
-### C.2 Iteration Cap (3 attempts)
-
-On the 3rd consecutive failure to reach green:
-- Announce: "Using superpowers:systematic-debugging — implementation stuck after 3 attempts"
-- Invoke `superpowers:systematic-debugging` with the failing test output
-
-### C.3 Total Cap (5 attempts)
-
-On reaching `max_iterations` (default 5):
-- Jump to §Failure Decision Gate
-
-Each attempt boundary updates `last_attempt` in the ledger:
-- `attempt` number
-- `started_at` / `ended_at` timestamps
-- `outcome`: `pass` or `fail`
-- `failing_gate`: which verification gate failed
-- `touched_files`: list of files modified
-
-## Phase D: Verify
-
-Run tier-specific gates, then cross-cutting gates. If any fail → back to Phase C.
-
-### D.1 Tier: `workspace`
-
-Tasks whose crate is `workspace` (e.g., 1.0, 1.17).
-
-```bash
-cargo fmt --check --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-bash scripts/opi-impl-smoke.sh
+  "Check interrupt" -> "in_progress + no commit?";
+  "in_progress + no commit?" -> "Working tree dirty?" [label="yes"];
+  "in_progress + no commit?" -> "Auto-pick or user override" [label="no"];
+  "Working tree dirty?" -> "Print state, offer: continue/block/manual" [label="yes"];
+  "Working tree dirty?" -> "Prompt: reset status to failing, or investigate" [label="no"];
+  "Auto-pick or user override" -> "Validate depends_on";
+  "Validate depends_on" -> "All deps passing?";
+  "All deps passing?" -> "Proceed to Phase B" [label="yes"];
+  "All deps passing?" -> "Refuse: print missing dep" [label="no"];
+}
 ```
 
-### D.2 Tier: `library`
+## Composition With Sub-Skills
 
-Tasks in `opi-ai`, `opi-agent` internals (e.g., 1.1–1.8).
+| Phase | Skill | Purpose |
+|---|---|---|
+| C.1 | `superpowers:test-driven-development` | red→green→refactor body |
+| C.1 | `superpowers:dispatching-parallel-agents` | when `parallelize` non-empty |
+| C.2 | `superpowers:systematic-debugging` | attempt 3+ can't reach green |
+| D.2 | code-reviewer subagent OR `superpowers:requesting-code-review` | independent evaluator for risk-gated tasks |
+| D pre-commit | `superpowers:verification-before-completion` | evidence-before-claim |
+| Failure (b) | `superpowers:brainstorming` | DoD interpretation ambiguous |
 
-Gates:
-1. TDD produced new/changed tests: inspect `git diff --stat <start_commit> -- crates/<crate>` for test files, `#[test]`, async test attributes, or changed assertions.
-2. `cargo test -p <crate>` green
-3. `cargo clippy -p <crate> -- -D warnings` green
-4. `cargo doc -p <crate> -- -D warnings` green
-5. `cargo build --workspace` green (catches breaking API changes)
-6. No `unwrap`/`expect` in non-test code: `grep -rn "unwrap\(\)\|expect(" crates/<crate>/src/ --include="*.rs"` must return empty (allow-list via `.opi-impl-allow-unwrap` if needed)
+Each invocation announces itself:
+`"Using superpowers:test-driven-development to drive red-green for task 1.6"`
 
-### D.3 Tier: `cli-tool`
+## Parallel Sub-Unit Contract
 
-Tasks: 1.9, 1.10 (filesystem tools).
+When `parallelize` is non-empty:
+- Sub-agents work on disjoint files; MUST NOT create commits
+- Parent applies results in ledger order, runs full verification after each merge
+- Completion events may arrive out of order; persisted evidence uses `parallelize` array order
+- Conflict or overlapping edit → fail attempt → normal debug/failure path
 
-All `library` gates above, plus:
-- Behavioral tests in `crates/opi-coding-agent/tests/` using `tempfile` for real filesystem ops
-- For `bash` tool: tests for timeout, cwd capture, cancellation
-- For mutating tools: test asserting Phase-1 safety boundary is reported before execution
+## Commit Evidence Format
 
-### D.4 Tier: `cli-runtime`
-
-Tasks: 1.11, 1.14, 1.15, 1.16.
-
-All `library` gates plus:
-- E2E test booting `MockProvider` and running `opi` binary in subprocess
-- Assertions on stdout, stderr, exit code
-
-**MockProvider precondition:** Grep `crates/opi-ai/src/test_support.rs` for `MockProvider` symbol. If absent:
-> "Task `<id>` depends on MockProvider scaffolding (task 1.17). Run task 1.17 first."
-
-### D.5 Tier: `tui`
-
-Tasks: 1.12, 1.13.
-
-All `library` gates plus:
-- Ratatui snapshot tests at 80×24 and 120×40 using `insta`
-- Snapshot diffs require explicit user approval — never auto-accept
-
-### D.6 Cross-Cutting Gates (every tier)
-
-Run after tier-specific gates:
-
-```bash
-cargo fmt --check --all
-cargo clippy --workspace --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-bash scripts/opi-impl-smoke.sh
-```
-
-Additional checks:
-- `git status --porcelain --untracked-files=all` contains only intentional task files
-- Before commit: `HEAD` must equal `tasks[].start_commit` (no intermediate manual commits)
-- After commit: `git status --porcelain` must be clean; `HEAD^` must equal `start_commit`
-- Commit message includes `Opi-*` evidence footers
-
-### D.7 Risk Evaluator Gate
-
-When `evaluator_required = true` for the task:
-
-Announce: "Using superpowers:requesting-code-review for independent evaluation"
-
-Evaluator receives: DoD, diff from `start_commit`, new/changed tests, verification outputs, planned commit message.
-
-Must answer:
-1. Does the diff satisfy the DoD without scope creep?
-2. Do tests exercise behavior, not just implementation details?
-3. Are there public API/protocol/security risks not covered by mechanical gates?
-4. Is the evidence footer truthful and sufficient?
-
-If evaluator fails → back to Phase C with findings as input. Generator may NOT self-approve.
-
-## Phase E: Commit & Ledger Update
-
-### E.1 Conventional Commit
-
-Stage only the task's files. Create a conventional commit:
-- Type from ledger `commit_type` field (e.g., `feat`, `fix`, `refactor`)
-- Scope from crate name (e.g., `feat(opi-agent): implement agent_loop`)
-- Body: brief description of what was implemented
-- Footers (parseable, one per line):
+Every successful task commit MUST include these parseable footers:
 
 ```text
 Opi-Task: <id>
-Opi-DoD-SHA256: <sha256 of definition_of_done string>
+Opi-DoD-SHA256: <sha256 of definition_of_done>
 Opi-Verification: <tier>; <short command/result summary>
 Opi-Evaluator: <not-required | passed>
 ```
 
-### E.2 Record Evidence
+Commit type is derived from the ledger `commit_type` field (feat/fix/docs/etc).
+Commit scope is the crate name. Example: `feat(opi-agent): implement agent_loop`
 
-Capture into ledger:
-- `verified_at_commit` = new HEAD SHA
-- `evidence` = mirror of the Opi-* footers + full command list + reviewer summary
+## Ledger Location & Safety
 
-### E.3 Flip Status
+- Path: `.opi-impl-state.json` (gitignored, NEVER committed)
+- Temp: `.opi-impl-state.json.tmp` (gitignored)
+- Draft: `.opi-impl-state.draft.json` (gitignored)
+- All writes use structured JSON APIs, never string concatenation
+- **When ledger manipulation needed:** Read `references/ledger-schema.md`
 
-- Set `status` → `passing`
-- Append to `session_notes`: `{timestamp, attempt, summary, gate_results}`
-- Reset `iteration_count` to 0
-- Write ledger atomically
+## Platform Detection
 
-### E.4 No Push
-
-The skill never pushes. Push is a separate human action.
-
-## Phase F: Phase-Exit Check
-
-### F.1 Check Phase Completion
-
-If ALL executable tasks in the current phase have status `passing`:
-- Run the phase-exit evaluator
-- Evaluator checks: phase exit criteria from opi-spec.md §15, list of task evidence footers, smoke output
-- Phase is complete only when evaluator finds no blocking gap
-
-### F.2 Phase-Complete Report
-
-If phase is complete:
-- Print phase-complete report with summary of all tasks
-- Record in `phase_exit[N]`: `completed_at`, `exit_criteria_met = true`, `evaluator_summary`
-- Mention `opi-release` as the next step (never auto-invoke)
-
-### F.3 Next-Task Hint
-
-If phase is NOT complete:
-- Print "Next unblocked: <id> <title>"
-- Update `current_phase` to lowest phase with non-passing tasks
-
-## Failure Decision Gate
-
-When `iteration_count` reaches `max_iterations` (default 5), stop and present to user.
-
-### Gate Payload
-
-Print:
-```text
-Task: <id> <title>
-DoD: <definition_of_done>
-Tier: <tier>
-Iterations: <iteration_count> / <max_iterations>
-Last gate output (truncated to 50 lines): <…>
-Tests added but failing: <list>
-Files modified: <list>
-Smallest failing assertion: <quote from test output>
-Start commit: <start_commit>
-Dirty status: <git status --short>
-Reproduction commands: <exact commands to reproduce failure>
-```
-
-### Options
-
-Ask the user to choose exactly one option. Use a structured choice UI when the host provides one; otherwise print the options and wait for an explicit answer.
-
-| Option | Effect |
-|---|---|
-| (a) Retry with extended cap | Adds 5 attempts (total 10). Status stays `in_progress`. |
-| (b) Escalate to design | Invoke `superpowers:brainstorming` on DoD interpretation. User may amend spec and `--reinit`. |
-| (c) Mark blocked | Record blocker text. Status → `blocked`. Skip on auto until `--clear-blocker`. |
-| (d) Drop to manual | Print reproduction commands + touched files. User finishes manually, then `--resume-from-manual`. |
-
-**No auto-revert.** The skill MUST NOT run `git restore`, `git clean`, `git reset`, or equivalent. If cleanup needed, print candidate commands scoped to files changed since `start_commit` and exit.
-
-### Meta-Warning
-
-If three consecutive task invocations hit the failure gate, print:
-> "Harness components may be misaligned with the current spec or model. Consider re-reading opi-spec.md §15 exit criteria, or grilling the design via `superpowers:brainstorming` before continuing."
-
-## Anti-Pattern Guards
-
-These rules are absolute. The skill MUST refuse to act if any would be violated, even if the user requests it.
-
-1. **Never delete or weaken tests to make them pass.**
-2. **Never `git push --force`.**
-3. **Never bypass `cargo clippy -D warnings` with crate-wide `#[allow]`.**
-4. **Never commit with broken smoke.**
-5. **Never commit unstaged secrets.**
-6. **Never bypass git hooks (`--no-verify`).**
-7. **Never use `git reset --hard` + force push for rollback.**
-8. **Never use `--amend` on already-pushed commits.**
-9. **Never self-grade verification — gates are mechanical.**
-10. **Never auto-accept TUI snapshot changes without user approval.**
-11. **Never silently rewrite inferred task graph metadata.**
-12. **Never run live provider tests from this skill.**
-13. **Never commit `.opi-impl-state.json`, `.opi-impl-state.json.tmp`, or `.opi-impl-state.draft.json`.**
-14. **Never skip `[workspace.dependencies]` when adding internal crate deps.**
-15. **Never satisfy a DoD with placeholder stubs, TODOs, or display-only behavior** unless the DoD explicitly asks for scaffolding.
-16. **Never broaden a task into cross-task refactors** without updating the task graph and returning to the review gate.
-17. **Never clean, restore, or discard user changes from a failure gate.**
-18. **Never let sub-agent completion order decide persisted result order.**
-
-## Interrupt Recovery
-
-On invocation, if a task has `status = in_progress` AND `verified_at_commit = null`:
-
-### Clean Working Tree
-
-If `git status --porcelain` is empty, prompt:
-> "Task <id> was marked `in_progress` but no commit was recorded. Was the prior session interrupted? Reset to `failing` and retry, or investigate first?"
-
-Options: (a) Reset to failing, (b) Investigate
-
-### Dirty Working Tree
-
-If working tree has changes, the skill MUST NOT reset, restore, clean, or discard. Print:
-- `start_commit` SHA
-- Current `git status --short`
-- Files changed since `start_commit`
-- Last failing gate and reproduction commands
-
-Offer only:
-- Continue investigation
-- Mark blocked with blocker text
-- Drop to manual session
-
-## Resume From Manual
-
-When `--resume-from-manual` is passed:
-- Skip commit creation ONLY if there is exactly one candidate manual commit since `start_commit`
-- Working tree must be clean
-- Phase D must pass
-- Manual commit must contain required `Opi-*` footers
-- If footer missing: print required footer text and STOP (do not amend user's commit)
-
-## Skill Composition
-
-| Phase | Skill Invoked | Purpose |
-|---|---|---|
-| C.1 | `superpowers:test-driven-development` | Red→green→refactor body |
-| C.1 (parallelize) | `superpowers:dispatching-parallel-agents` | Independent sub-units |
-| C.2 (attempt 3+) | `superpowers:systematic-debugging` | When stuck |
-| D.7 (risk-gated) | `superpowers:requesting-code-review` | Independent evaluator |
-| D pre-commit | `superpowers:verification-before-completion` | Evidence before claim |
-| Failure (b) | `superpowers:brainstorming` | DoD interpretation |
-
-## JSON Ledger Schema
-
-Path: `.opi-impl-state.json` (repo root, gitignored).
-
-### Atomic Write Protocol
-
-1. Serialize full JSON with structured writer (not string concat)
-2. Write to `.opi-impl-state.json.tmp`
-3. Rename over `.opi-impl-state.json`
-4. On failure: leave previous ledger intact, print tmp path
-
-### Write Boundaries
-
-Ledger is written ONLY at:
-1. End of Phase B (task confirmed → `in_progress`)
-2. Each attempt boundary (record attempt metadata)
-3. Failure decision gate (mark `blocked` or extend cap)
-4. End of Phase E (mark `passing`, record evidence)
-5. Reinit after graph confirmation
-
-### Schema (v1)
-
-```json
-{
-  "schema_version": 1,
-  "spec_path": "docs/opi-spec.md",
-  "spec_sha256": "<hash>",
-  "task_graph_confirmed_at": "<ISO-8601>",
-  "current_phase": 1,
-  "tasks": [{
-    "id": "1.6",
-    "phase": 1,
-    "title": "agent_loop",
-    "crate": "opi-agent",
-    "definition_of_done": "<verbatim from spec>",
-    "status": "failing",
-    "depends_on": ["1.1", "1.2", "1.5"],
-    "inference_notes": [{"field": "depends_on", "reason": "...", "source": "..."}],
-    "tier": "library",
-    "commit_type": "feat",
-    "parallelize": [],
-    "evaluator_required": false,
-    "verification": {
-      "library_gates": ["cargo test -p opi-agent", "..."],
-      "behavioral_tests": ["crates/opi-agent/tests/agent_loop_mock.rs"],
-      "snapshot_tests": [],
-      "smoke_addendum": null
-    },
-    "iteration_count": 0,
-    "max_iterations": 5,
-    "start_commit": null,
-    "last_attempt": null,
-    "verified_at_commit": null,
-    "evidence": null,
-    "blocker": null,
-    "session_notes": []
-  }],
-  "phase_exit": {
-    "1": {"completed_at": null, "exit_criteria_met": false, "evaluator_summary": null}
-  }
-}
-```
-
-### Status State Machine
-
-`failing` → `in_progress` → `passing`
-`in_progress` → `blocked` (via failure gate)
-`blocked` → `failing` (via `--clear-blocker`)
-Any → `archived` (via reinit reconciliation)
-
-### Platform Detection
-
-Detect host via `OSTYPE`/`OS` env vars:
+- Detect host via `OSTYPE`/`OS` env vars and shell type
 - Linux/macOS: run `scripts/opi-impl-smoke.sh`
-- Windows PowerShell: run `scripts/opi-impl-smoke.ps1`
-- Bash-on-Windows: run `scripts/opi-impl-smoke.sh` with forward slashes
+- Windows native PowerShell: run `scripts/opi-impl-smoke.ps1`
+- Windows bash (Git Bash/MSYS/WSL): run `scripts/opi-impl-smoke.sh` with
+  forward-slash paths
+- SHA-256: use `sha256sum`, PowerShell `Get-FileHash`, Python, or Rust helper
+- JSON manipulation: `jq` when present; fallback to PowerShell/Python
+- Required: `cargo` (Rust ≥ 1.85), `git`
+- NOT required: `gh` CLI (belongs to `opi-release`)
 
-SHA-256: use `sha256sum` (Linux), `shasum -a 256` (macOS), or PowerShell `Get-FileHash`.
+## Red Flags — STOP Immediately
 
-JSON manipulation: use `jq` when present; fall back to Python `json` module or PowerShell `ConvertFrom-Json`/`ConvertTo-Json`.
+These are the top violations this harness prevents. Full table with reasoning
+in `references/anti-patterns.md`.
 
-## Status Mode
+1. **Never delete or weaken tests to make them pass.** Fix the implementation.
+2. **Never bypass clippy with crate-wide `#[allow]`.** Per-item with comment OK.
+3. **Never self-grade verification.** Gates are mechanical (exit codes, grep).
+4. **Never auto-accept TUI snapshot changes.** Require explicit user approval.
+5. **Never clean/restore/discard user changes from failure gate.** Print
+   candidate commands; let the human decide.
+6. **Never satisfy DoD with stubs/TODOs.** Unless DoD explicitly says scaffolding.
+7. **Never silently rewrite task graph metadata.** Graph is a reviewed contract.
+8. **Never commit ledger files.** They are gitignored runtime state.
+9. **Never skip `[workspace.dependencies]` for internal deps.** Lockstep versioning.
+10. **Never run live provider tests.** They belong in `#[ignore]`-gated tests.
 
-When `--status` is passed, print a summary table and exit without modifying state.
+The skill refuses to act if any rule would be violated, even if the user
+requests it during a failure-decision gate.
 
-### Output Format
+## Status Mode (`--status`)
 
-```text
-opi-implement status — spec: docs/opi-spec.md (sha256: <first 8 chars>)
-Phase: <current_phase>
+Print a summary table of all tasks:
+- id, title, status, tier, depends_on (with pass/fail indicators)
+- Current phase number
+- Next unblocked task hint
+- Any blocked tasks with blocker text
+- Phase-exit status for completed phases
 
-| ID   | Title          | Tier     | Status   | Deps Met | Blocker |
-|------|----------------|----------|----------|----------|---------|
-| 1.0  | workspace_deps | workspace| passing  | yes      |         |
-| 1.1  | provider_trait | library  | failing  | yes      |         |
-| 1.14 | interactive    | cli-runtime | blocked | no (1.17) | needs MockProvider |
-...
+## Clear-Blocker Mode (`--clear-blocker <id> --because <text>`)
 
-Summary: <N> passing, <M> failing, <K> blocked, <J> archived
-Next unblocked: <id> <title>
-```
-
-### Clear-Blocker Mode
-
-When `--clear-blocker <task-id> --because <text>`:
-1. Validate task exists and has `status = blocked`
+1. Validate task exists and `status = blocked`
 2. Append `--because` text to `session_notes`
 3. Clear `blocker` field
-4. Set `status` → `failing`
-5. Write ledger atomically
-6. Print: "Blocker cleared for <id>. Status reset to failing."
+4. Set `status = failing`
+5. Write ledger
+6. Print confirmation + next-task hint
 
-## Platform & Tooling Requirements
+## Scope Boundaries (Never Cross)
 
-Checked at Phase A.1. Missing tool = clean refusal.
+- Editing `opi-spec.md`
+- Pushing commits or tags to `origin`
+- Publishing to crates.io
+- Building cross-platform binaries
+- Network calls to any provider API
+- Opening GitHub issues, PRs, or releases
+- Reading/writing `~/.config/opi/` or session storage
 
-| Tool | Required | Notes |
-|---|---|---|
-| `cargo` | yes | Rust ≥ 1.85 (edition 2024). Verify via `rustc --version`. |
-| `git` | yes | |
-| `jq` | preferred | Non-jq fallback via Python or PowerShell JSON cmdlets. |
-| SHA-256 | yes | `sha256sum`, `shasum -a 256`, or PowerShell `Get-FileHash`. |
-| POSIX `sh` | yes (Linux/macOS) | Runs smoke script. |
-| PowerShell | yes (Windows) | Runs `.ps1` smoke variant. |
-| `gh` CLI | NO | Never required. Release actions belong to `opi-release`. |
+## Design Spec
 
-## Out of Scope
-
-This skill MUST NOT:
-- Edit `docs/opi-spec.md`
-- Push commits or tags to `origin`
-- Publish to crates.io
-- Build cross-platform release binaries
-- Make live provider API calls
-- Open GitHub issues, PRs, or releases
-- Read or write runtime user config or session paths such as `~/.config/opi/`
-
-## References
-
-- `docs/opi-spec.md` — the spec this skill implements
-- `.claude/skills/opi-release/skill.md` — companion release skill
-- `docs/superpowers/specs/2026-05-20-opi-implement-skill-design.md` — design decisions
-- superpowers skills: `test-driven-development`, `systematic-debugging`, `dispatching-parallel-agents`, `verification-before-completion`, `brainstorming`, `requesting-code-review`
+Full design rationale: `docs/superpowers/specs/2026-05-20-opi-implement-skill-design.md`
