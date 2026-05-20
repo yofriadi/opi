@@ -600,3 +600,35 @@ When `--clear-blocker <task-id> --because <text>`:
 4. Set `status` → `failing`
 5. Write ledger atomically
 6. Print: "Blocker cleared for <id>. Status reset to failing."
+
+## Platform & Tooling Requirements
+
+Checked at Phase A.1. Missing tool = clean refusal.
+
+| Tool | Required | Notes |
+|---|---|---|
+| `cargo` | yes | Rust ≥ 1.85 (edition 2024). Verify via `rustc --version`. |
+| `git` | yes | |
+| `jq` | preferred | Non-jq fallback via Python or PowerShell JSON cmdlets. |
+| SHA-256 | yes | `sha256sum`, `shasum -a 256`, or PowerShell `Get-FileHash`. |
+| POSIX `sh` | yes (Linux/macOS) | Runs smoke script. |
+| PowerShell | yes (Windows) | Runs `.ps1` smoke variant. |
+| `gh` CLI | NO | Never required. Release actions belong to `opi-release`. |
+
+## Out of Scope
+
+This skill MUST NOT:
+- Edit `docs/opi-spec.md`
+- Push commits or tags to `origin`
+- Publish to crates.io
+- Build cross-platform release binaries
+- Make live provider API calls
+- Open GitHub issues, PRs, or releases
+- Read or write runtime user config or session paths such as `~/.config/opi/`
+
+## References
+
+- `docs/opi-spec.md` — the spec this skill implements
+- `.claude/skills/opi-release/skill.md` — companion release skill
+- `docs/superpowers/specs/2026-05-20-opi-implement-skill-design.md` — design decisions
+- superpowers skills: `test-driven-development`, `systematic-debugging`, `dispatching-parallel-agents`, `verification-before-completion`, `brainstorming`, `requesting-code-review`
