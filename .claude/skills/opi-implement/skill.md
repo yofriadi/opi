@@ -205,3 +205,35 @@ On confirmation:
 4. Write ledger atomically
 
 Phase A task selection alone does NOT mutate task status. Only Phase B confirmation triggers the state change.
+
+## Phase C: Implement
+
+### C.1 TDD Loop
+
+Announce: "Using superpowers:test-driven-development to drive red-green for task <id>"
+
+Invoke `superpowers:test-driven-development` with the task's DoD as the requirement.
+
+If `parallelize` is non-empty, announce: "Using superpowers:dispatching-parallel-agents for sub-units: <list>"
+- Sub-agents work on disjoint files, do NOT create commits
+- Parent applies results in ledger order
+- Runs full verification after each merge
+- Conflicts or overlapping edits fail the attempt
+
+### C.2 Iteration Cap (3 attempts)
+
+On the 3rd consecutive failure to reach green:
+- Announce: "Using superpowers:systematic-debugging — implementation stuck after 3 attempts"
+- Invoke `superpowers:systematic-debugging` with the failing test output
+
+### C.3 Total Cap (5 attempts)
+
+On reaching `max_iterations` (default 5):
+- Jump to §Failure Decision Gate
+
+Each attempt boundary updates `last_attempt` in the ledger:
+- `attempt` number
+- `started_at` / `ended_at` timestamps
+- `outcome`: `pass` or `fail`
+- `failing_gate`: which verification gate failed
+- `touched_files`: list of files modified
