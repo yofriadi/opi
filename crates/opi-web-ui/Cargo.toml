@@ -1,5 +1,6 @@
 [package]
 name = "opi-web-ui"
+publish = false
 description = "Reusable web UI components for AI chat interfaces"
 readme = "README.md"
 version.workspace = true
