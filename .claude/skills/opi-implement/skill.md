@@ -237,3 +237,92 @@ Each attempt boundary updates `last_attempt` in the ledger:
 - `outcome`: `pass` or `fail`
 - `failing_gate`: which verification gate failed
 - `touched_files`: list of files modified
+
+## Phase D: Verify
+
+Run tier-specific gates, then cross-cutting gates. If any fail → back to Phase C.
+
+### D.1 Tier: `workspace`
+
+Tasks whose crate is `workspace` (e.g., 1.0, 1.17).
+
+```bash
+cargo fmt --check --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+bash scripts/opi-impl-smoke.sh
+```
+
+### D.2 Tier: `library`
+
+Tasks in `opi-ai`, `opi-agent` internals (e.g., 1.1–1.8).
+
+Gates:
+1. TDD produced new/changed tests: inspect `git diff --stat <start_commit> -- crates/<crate>` for test files, `#[test]`, async test attributes, or changed assertions.
+2. `cargo test -p <crate>` green
+3. `cargo clippy -p <crate> -- -D warnings` green
+4. `cargo doc -p <crate> -- -D warnings` green
+5. `cargo build --workspace` green (catches breaking API changes)
+6. No `unwrap`/`expect` in non-test code: `grep -rn "unwrap\(\)\|expect(" crates/<crate>/src/ --include="*.rs"` must return empty (allow-list via `.opi-impl-allow-unwrap` if needed)
+
+### D.3 Tier: `cli-tool`
+
+Tasks: 1.9, 1.10 (filesystem tools).
+
+All `library` gates above, plus:
+- Behavioral tests in `crates/opi-coding-agent/tests/` using `tempfile` for real filesystem ops
+- For `bash` tool: tests for timeout, cwd capture, cancellation
+- For mutating tools: test asserting Phase-1 safety boundary is reported before execution
+
+### D.4 Tier: `cli-runtime`
+
+Tasks: 1.11, 1.14, 1.15, 1.16.
+
+All `library` gates plus:
+- E2E test booting `MockProvider` and running `opi` binary in subprocess
+- Assertions on stdout, stderr, exit code
+
+**MockProvider precondition:** Grep `crates/opi-ai/src/test_support.rs` for `MockProvider` symbol. If absent:
+> "Task `<id>` depends on MockProvider scaffolding (task 1.17). Run task 1.17 first."
+
+### D.5 Tier: `tui`
+
+Tasks: 1.12, 1.13.
+
+All `library` gates plus:
+- Ratatui snapshot tests at 80×24 and 120×40 using `insta`
+- Snapshot diffs require explicit user approval — never auto-accept
+
+### D.6 Cross-Cutting Gates (every tier)
+
+Run after tier-specific gates:
+
+```bash
+cargo fmt --check --all
+cargo clippy --workspace --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+bash scripts/opi-impl-smoke.sh
+```
+
+Additional checks:
+- `git status --porcelain --untracked-files=all` contains only intentional task files
+- Before commit: `HEAD` must equal `tasks[].start_commit` (no intermediate manual commits)
+- After commit: `git status --porcelain` must be clean; `HEAD^` must equal `start_commit`
+- Commit message includes `Opi-*` evidence footers
+
+### D.7 Risk Evaluator Gate
+
+When `evaluator_required = true` for the task:
+
+Announce: "Using superpowers:requesting-code-review for independent evaluation"
+
+Evaluator receives: DoD, diff from `start_commit`, new/changed tests, verification outputs, planned commit message.
+
+Must answer:
+1. Does the diff satisfy the DoD without scope creep?
+2. Do tests exercise behavior, not just implementation details?
+3. Are there public API/protocol/security risks not covered by mechanical gates?
+4. Is the evidence footer truthful and sufficient?
+
+If evaluator fails → back to Phase C with findings as input. Generator may NOT self-approve.
