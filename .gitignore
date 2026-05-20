@@ -19,3 +19,8 @@ credentials.toml
 # Release artifacts (uploaded to GitHub Release, not tracked)
 release-notes.md
 /release-artifacts/
+
+# opi-implement runtime state (never committed)
+.opi-impl-state.json
+.opi-impl-state.json.tmp
+.opi-impl-state.draft.json
