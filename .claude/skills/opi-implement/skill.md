@@ -148,3 +148,33 @@ git commit -m "chore: bootstrap opi-implement ledger and smoke"
 ### A.init.7 Print Summary
 
 Print success with next-task hint: "Initialized N tasks. Next unblocked: <id> <title>"
+
+## Reinit Reconciliation
+
+When `--reinit` runs against an existing ledger:
+
+### Step 1: Drift Check
+
+Recompute `spec_sha256`. If unchanged, refuse — suggest `--status` instead.
+
+### Step 2: Re-parse
+
+Re-parse the spec into a fresh ledger using the same logic as A.init.2.
+
+### Step 3: Reconcile Field-by-Field
+
+- **Task IDs in both old and new:** Preserve runtime fields (`status`, `verified_at_commit`, `iteration_count`, `session_notes`, `blocker`).
+- **Task IDs only in old:** Warn, ask "keep history, mark `archived`?"
+- **Task IDs only in new:** Add with status `failing`.
+- **DoD changed for existing passing task:** Warn, ask:
+  - Preserve as `passing` (wording change is cosmetic), OR
+  - Demote to `failing` (DoD substantively widened)
+- **`depends_on`, `tier`, `commit_type`, or `evaluator_required` changed:** Re-run task-graph review gate with row-level diff. Require confirmation.
+
+### Step 4: Finalize
+
+Update `spec_sha256`. If tracked files changed (.gitignore or smoke scripts), commit:
+```bash
+git commit -m "chore: reconcile opi-implement harness files with opi-spec.md changes"
+```
+If no tracked file changed, do not create an empty commit.
