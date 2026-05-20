@@ -46,7 +46,7 @@ These scenarios validate the skill as process documentation. Run them before the
 
 | Scenario | RED result | GREEN result | Notes |
 |---|---|---|---|
-| Dirty failure gate | No skill loaded — default agent behavior (would attempt cleanup) | Pending | |
-| MockProvider dependency | No skill loaded — default agent behavior (would start task directly) | Pending | |
-| Durable evidence | No skill loaded — default agent behavior (would claim done without footers) | Pending | |
-| Snapshot approval | No skill loaded — default agent behavior (would auto-accept) | Pending | |
+| Dirty failure gate | No skill loaded — default agent behavior (would attempt cleanup) | PASS — skill.md:461 "MUST NOT reset, restore, clean, or discard" + guard #17 | |
+| MockProvider dependency | No skill loaded — default agent behavior (would start task directly) | PASS — skill.md:106,286-287 infers dep + precondition check refuses execution | |
+| Durable evidence | No skill loaded — default agent behavior (would claim done without footers) | PASS — skill.md:312,341-342 requires Opi-* footers + evidence gates | |
+| Snapshot approval | No skill loaded — default agent behavior (would auto-accept) | PASS — skill.md:295,438 "never auto-accept" + guard #10 | |
