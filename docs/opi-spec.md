@@ -47,7 +47,7 @@ The central design rule:
 | Streaming first | `AssistantMessageEventStream` and agent event streams | `Stream<Item = Result<Event, Error>>` with terminal events |
 | Provider agnostic | API, provider, and model are separate concepts | `Provider` trait, registry, provider adapters |
 | Agent vs LLM messages | `AgentMessage[] -> transformContext -> convertToLlm -> Message[]` | app messages in `opi-agent`, provider messages in `opi-ai` |
-| Tool isolation | TypeBox schema at LLM boundary | JSON Schema at boundary, typed Rust inside tools |
+| Tool isolation | TypeBox schema at LLM boundary | typed Rust tool inputs, generated JSON Schema at the LLM boundary |
 | Errors in band | provider failures become `error` stream events | provider/runtime failures surface as events, not panics |
 | Append-only sessions | crash-safe JSONL session files | opi versioned tree JSONL inspired by pi |
 | Lockstep release | all packages share a version | all crates share `workspace.package.version` |
@@ -60,7 +60,7 @@ Opi is not API-compatible with pi. TypeScript declaration merging, `jiti` extens
 
 Opi is not required to read pi config or pi session files in Phase 1. A migration command MAY be added later, but runtime compatibility is not assumed.
 
-Opi is not an extensibility platform in its MVP. MCP, WASM plugins, RPC, multi-agent orchestration, and web UI work are later phases.
+Opi is not an extensibility platform in its MVP. MCP is a later protocol adapter after core tools and permissions are stable; WASM plugins, subprocess plugins, RPC, multi-agent orchestration, and web UI work are later extension surfaces.
 
 ## 3. Relationship to pi
 
@@ -88,7 +88,7 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 | pi mechanism | opi replacement | Rationale |
 |---|---|---|
 | TypeScript unions and declaration merging | Rust enums plus explicit extension variants | exhaustive matching and safer evolution |
-| TypeBox schemas | JSON Schema plus typed tool internals | dynamic provider boundary, static tool code |
+| TypeBox schemas | `schemars`-generated JSON Schema plus `jsonschema` validation | dynamic provider boundary, static tool code |
 | dynamic provider imports | feature flags plus explicit registration | predictable binaries and cross-compilation |
 | `jiti` TypeScript extensions | deferred Rust-compatible plugin story | avoids Node dependency and unstable ABI in MVP |
 | pi `settings.json` / `auth.json` | TOML config and explicit credential resolution | Rust ecosystem convention and comments |
@@ -106,13 +106,14 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 | `agentLoop` / `Agent` | Phase 1 | semantic parity |
 | read/write/edit/bash/glob/grep tools | Phase 1 | behavior parity |
 | interactive TUI | Phase 1 | user-facing parity |
-| OpenAI/Gemini/Mistral | Phase 2 | provider contract parity |
+| OpenAI-compatible/OpenRouter/OpenAI/Gemini/Mistral | Phase 2 | provider contract parity |
 | sessions/resume | Phase 2 | opi format |
 | compaction | Phase 2 | semantic parity |
 | JSON event mode | Phase 2 | versioned opi NDJSON |
 | image support | Phase 3 | semantic parity |
 | permissions | Phase 3 | opi UX |
-| extensions/MCP/RPC/web UI | Phase 4 | opi-specific design |
+| MCP client adapter | Phase 3 | protocol adapter after core tools and permissions |
+| extensions/RPC/web UI | Phase 4 | opi-specific design |
 
 ## 4. Current Baseline
 
@@ -217,17 +218,18 @@ A shared types crate would become a hub dependency. If a type crosses a crate bo
 | async runtime | `tokio` | present | networking, process IO, timers |
 | serialization | `serde`, `serde_json` | present | provider/session protocols |
 | library errors | `thiserror` | present | typed error handling |
-| async traits | `async-trait` | present | object-safe async trait ergonomics |
+| async traits | `async-trait` | present, use sparingly | existing scaffolding convenience; target APIs should prefer boxed futures/streams when clearer |
 | HTTP/SSE | `reqwest` with `rustls-tls` | Phase 1 | provider streaming without OpenSSL |
-| streams | `futures-core`, `tokio-stream` | Phase 1 | public stream APIs |
+| streams | `futures-core`, internal stream helpers as needed | Phase 1 | public stream APIs without overexposing helper crates |
 | cancellation | `tokio-util` | Phase 1 | cooperative cancellation |
 | CLI | `clap` | Phase 1 | stable options and completions |
 | config | `toml` | Phase 1 | human-editable config |
 | TUI | `ratatui`, `crossterm` | Phase 1 | cross-platform terminal UI |
-| schema | `jsonschema` | Phase 1 | tool argument validation |
-| IDs/time | `uuid`, `chrono` or `time` | Phase 1 | session IDs and timestamps |
+| schema | `schemars`, `jsonschema` | Phase 1 | typed tool schemas plus runtime boundary validation |
+| IDs/time | `uuid`, `time` | Phase 1 | session IDs and timestamps without `chrono`'s extra surface |
+| file search | `ignore`, `globset`, `regex` | Phase 1 | gitignore-aware glob and grep behavior |
 | tracing | `tracing`, `tracing-subscriber` | Phase 1/2 | observability |
-| markdown/code | `pulldown-cmark`, `syntect` | Phase 1/2 | rendering |
+| markdown/code | `pulldown-cmark`, optional `syntect` later | Phase 1/2 | markdown first; syntax highlighting should not threaten binary size targets |
 | diff | `similar` | Phase 2 | patch visualization |
 
 ## 6. Architecture
@@ -468,15 +470,15 @@ Provider priority:
 
 | Provider | API style | Phase | Reason |
 |---|---|---:|---|
-| Anthropic | Messages SSE | 1 | MVP target |
-| OpenAI Chat Completions | SSE | 2 | broad compatibility |
+| Anthropic | Messages SSE | 1 | MVP target and pi's default model family |
+| OpenAI-compatible chat | SSE | 2 | broad compatibility across OpenAI-style services |
+| OpenRouter | OpenAI-compatible router | 2 | fast model coverage expansion and routing diagnostics |
 | OpenAI Responses | SSE | 2 | separate event mapping |
 | Google Gemini | streaming generateContent | 2 | major non-OpenAI family |
 | Mistral | chat SSE | 2 | provider matrix expansion |
 | AWS Bedrock | response stream / SigV4 | 3 | enterprise auth complexity |
 | Azure OpenAI | OpenAI-compatible | 3 | deployment-name differences |
 | Google Vertex | OAuth/service account | 3 | enterprise auth complexity |
-| OpenRouter | OpenAI-compatible router | 3 | routing diagnostics |
 
 Credential precedence:
 
@@ -520,6 +522,8 @@ pub struct ToolResult {
     pub terminate: bool,
 }
 ```
+
+Built-in tools SHOULD define typed Rust argument structs deriving `Deserialize` and `schemars::JsonSchema`. `ToolDef` exposes the generated JSON Schema to providers, while dynamic input from the model is validated with `jsonschema` before deserialization. `serde_json::Value` is acceptable at protocol boundaries and for diagnostics, but tool business logic should not remain Value-driven.
 
 Argument validation happens after `ToolExecutionStart` and before `before_tool_call`. Validation failure becomes an error tool result.
 
@@ -589,6 +593,8 @@ Phase 1 components:
 
 The TUI target is user-visible behavior, not renderer compatibility with pi: low flicker, responsive streaming, resize safety, Windows compatibility, and graceful degradation on small terminals.
 
+Phase 1 should remain a minimal usable TUI: streaming messages, prompt input, status, and tool-call visibility. Themes, fuzzy pickers, rich diff views, and syntax highlighting beyond basic fenced-code presentation belong in later phases or optional features.
+
 ### 8.4 `opi-coding-agent`
 
 The binary owns CLI parsing, config loading, provider registry construction, built-in tools, system prompt construction, session UX, permission prompts, and runtime modes.
@@ -599,8 +605,8 @@ The binary owns CLI parsing, config loading, provider registry construction, bui
 | `write` | sequential | 1 | create or replace file |
 | `edit` | sequential | 1 | exact string replacement or structured patch |
 | `bash` | sequential | 1 | subprocess command with timeout and streamed output |
-| `glob` | parallel | 1 | file discovery by glob |
-| `grep` | parallel | 1 | regex search over file contents |
+| `glob` | parallel | 1 | gitignore-aware file discovery by glob |
+| `grep` | parallel | 1 | gitignore-aware regex search over file contents |
 
 CLI target:
 
@@ -831,7 +837,7 @@ Structured arguments reduce shell injection risk, but invoking a shell still exe
 | Bash tool performs destructive actions | high | high | sequential mode, permissions, visible command, timeout |
 | Secrets leak to logs/session | high | medium | redaction tests and secret types |
 | Windows TUI issues | medium | medium | crossterm tests and Windows smoke checks |
-| Premature crates.io publish | high | medium | defer until 0.2.0 real implementation |
+| Premature crates.io publish | high | medium | defer until 0.2.0 real implementation and hide or remove placeholder APIs first |
 | Extension scope bloats core | medium | high | minimal-core rule |
 | Duplicate session stacks | high | medium | explicit Harness vs CodingHarness ownership |
 
@@ -846,6 +852,8 @@ All crates share one workspace version.
 | 0.3.0 | Phase 2 persistence and providers | GitHub + crates.io |
 | 0.4.0+ | Phase 3 hardening | GitHub + crates.io |
 
+The 0.2.0 crates.io publish requires all published crates to expose real, documented behavior rather than placeholder public APIs. Because the binary crate depends on internal library crates, those libraries should publish together in dependency order; `opi-web-ui` remains unpublished until it has a concrete implementation. All 0.x public APIs are unstable unless explicitly documented otherwise.
+
 The release process SHOULD follow `.claude/skills/opi-release/skill.md`: pre-flight, version bump, changelog, checks, tag/draft release, crates.io publish, finalize. crates.io publishing is irreversible except yanking; rollback should use new commits and tag management, not force-pushed public history.
 
 Release CI builds:
@@ -857,7 +865,7 @@ Release CI builds:
 - `opi-windows-x64.zip`;
 - `opi-windows-arm64.zip`.
 
-`SHA256SUMS.txt` SHOULD be uploaded with release artifacts once the workflow supports it.
+`SHA256SUMS.txt` SHOULD be uploaded with release artifacts.
 
 ## 15. Implementation Roadmap
 
@@ -910,21 +918,22 @@ Target: 0.3.0.
 
 | # | Task | Crate |
 |---|---|---|
-| 2.1 | OpenAI Chat Completions provider | `opi-ai` |
-| 2.2 | OpenAI Responses provider | `opi-ai` |
-| 2.3 | Google Gemini provider | `opi-ai` |
-| 2.4 | Mistral provider | `opi-ai` |
-| 2.5 | opi session v1 JSONL storage | `opi-agent` |
-| 2.6 | session list/resume/delete | `opi-coding-agent` |
-| 2.7 | compaction | `opi-agent` / `opi-coding-agent` |
-| 2.8 | thinking/reasoning support | `opi-ai` |
-| 2.9 | usage and cost tracking | `opi-ai` |
-| 2.10 | diff view | `opi-tui` |
-| 2.11 | themes | `opi-tui` |
-| 2.12 | keybindings | `opi-tui` |
-| 2.13 | `--json` NDJSON mode | `opi-coding-agent` |
-| 2.14 | retry/backoff/rate limits | `opi-ai` |
-| 2.15 | session contract tests | `opi-agent` |
+| 2.1 | OpenAI-compatible chat provider | `opi-ai` |
+| 2.2 | OpenRouter provider profile | `opi-ai` |
+| 2.3 | OpenAI Responses provider | `opi-ai` |
+| 2.4 | Google Gemini provider | `opi-ai` |
+| 2.5 | Mistral provider | `opi-ai` |
+| 2.6 | opi session v1 JSONL storage | `opi-agent` |
+| 2.7 | session list/resume/delete | `opi-coding-agent` |
+| 2.8 | compaction | `opi-agent` / `opi-coding-agent` |
+| 2.9 | thinking/reasoning support | `opi-ai` |
+| 2.10 | usage and cost tracking | `opi-ai` |
+| 2.11 | diff view | `opi-tui` |
+| 2.12 | themes | `opi-tui` |
+| 2.13 | keybindings | `opi-tui` |
+| 2.14 | `--json` NDJSON mode | `opi-coding-agent` |
+| 2.15 | retry/backoff/rate limits | `opi-ai` |
+| 2.16 | session contract tests | `opi-agent` |
 
 Exit criteria: sessions survive restart, multiple providers pass contract fixtures, long conversations compact before overflow, and JSON mode has schema tests.
 
@@ -937,12 +946,12 @@ Target: 0.4.0+.
 | 3.1 | AWS Bedrock provider | `opi-ai` |
 | 3.2 | Azure OpenAI provider | `opi-ai` |
 | 3.3 | Google Vertex provider | `opi-ai` |
-| 3.4 | OpenRouter provider | `opi-ai` |
-| 3.5 | image input | `opi-ai` |
-| 3.6 | image tool results | `opi-agent` |
-| 3.7 | terminal image rendering | `opi-tui` |
-| 3.8 | `OPI.md` context loading | `opi-coding-agent` |
-| 3.9 | permission system | `opi-coding-agent` |
+| 3.4 | image input | `opi-ai` |
+| 3.5 | image tool results | `opi-agent` |
+| 3.6 | terminal image rendering | `opi-tui` |
+| 3.7 | `OPI.md` context loading | `opi-coding-agent` |
+| 3.8 | permission system | `opi-coding-agent` |
+| 3.9 | MCP client adapter | `opi-agent` |
 | 3.10 | shell completions | `opi-coding-agent` |
 | 3.11 | fuzzy model/session picker | `opi-tui` |
 | 3.12 | proxy support | `opi-ai` |
@@ -958,14 +967,13 @@ Exit criteria: enterprise providers work, risky tools have permissions, release 
 |---|---|---|
 | 4.1 | extension trait design | `opi-agent` |
 | 4.2 | extension loading strategy | `opi-coding-agent` |
-| 4.3 | MCP client adapter | `opi-agent` |
-| 4.4 | session branching UI | `opi-agent` / `opi-tui` |
-| 4.5 | multi-agent orchestration | `opi-agent` |
-| 4.6 | skills and prompt fragments | `opi-coding-agent` |
-| 4.7 | web UI implementation | `opi-web-ui` |
-| 4.8 | RPC JSONL mode | `opi-coding-agent` |
-| 4.9 | WASM or subprocess plugin runtime | `opi-agent` or a new plugin crate after interface review |
-| 4.10 | streaming proxy | `opi-agent` or new crate |
+| 4.3 | session branching UI | `opi-agent` / `opi-tui` |
+| 4.4 | multi-agent orchestration | `opi-agent` |
+| 4.5 | skills and prompt fragments | `opi-coding-agent` |
+| 4.6 | web UI implementation | `opi-web-ui` |
+| 4.7 | RPC JSONL mode | `opi-coding-agent` |
+| 4.8 | WASM or subprocess plugin runtime | `opi-agent` or a new plugin crate after interface review |
+| 4.9 | streaming proxy | `opi-agent` or new crate |
 
 Exit criteria: third parties can extend opi without patching core crates.
 
@@ -982,15 +990,15 @@ Exit criteria: third parties can extend opi without patching core crates.
 | ADR-007 | Stream protocol | start/delta/end/done/error | aligns with pi and UI partial state |
 | ADR-008 | Agent layering | loop -> Agent -> Harness | testability and separation |
 | ADR-009 | Agent vs LLM messages | keep separate | custom messages should not leak to providers |
-| ADR-010 | Tool boundary | JSON Schema | dynamic LLM boundary, typed internals |
+| ADR-010 | Tool boundary | typed args plus generated JSON Schema | dynamic LLM boundary, typed internals, runtime validation |
 | ADR-011 | Tool execution | parallel default with sequential override | matches pi and avoids races |
 | ADR-012 | Session format | opi tree JSONL | branch semantics without TS format lock-in |
 | ADR-013 | Config format | TOML | comments and Rust ecosystem fit |
 | ADR-014 | TUI | ratatui/crossterm | cross-platform Rust terminal stack |
-| ADR-015 | Plugin strategy | defer dynamic plugins | prevents MVP scope creep |
+| ADR-015 | Plugin strategy | MCP adapter before dynamic plugins | protocol integration is lower risk than arbitrary runtime extension |
 | ADR-016 | Web UI | unpublished until core stable | avoids premature WASM commitment |
 | ADR-017 | Transport stub | reserve for Phase 4 or remove | avoids undocumented public surface |
-| ADR-018 | crates.io timing | first publish target 0.2.0 | 0.1.0 APIs are placeholders |
+| ADR-018 | crates.io timing | first publish target 0.2.0 | publish only after placeholder APIs are hidden or replaced |
 
 ## 17. Non-Functional Requirements
 
