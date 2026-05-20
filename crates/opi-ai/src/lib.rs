@@ -3,6 +3,7 @@
 //! Provides a standardized interface for interacting with multiple LLM providers
 //! including OpenAI, Anthropic, Google Gemini, Mistral, AWS Bedrock, and Azure OpenAI.
 
+pub mod anthropic;
 pub mod config;
 pub mod message;
 pub mod model;
