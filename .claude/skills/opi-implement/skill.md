@@ -382,3 +382,42 @@ If phase is complete:
 If phase is NOT complete:
 - Print "Next unblocked: <id> <title>"
 - Update `current_phase` to lowest phase with non-passing tasks
+
+## Failure Decision Gate
+
+When `iteration_count` reaches `max_iterations` (default 5), stop and present to user.
+
+### Gate Payload
+
+Print:
+```text
+Task: <id> <title>
+DoD: <definition_of_done>
+Tier: <tier>
+Iterations: <iteration_count> / <max_iterations>
+Last gate output (truncated to 50 lines): <…>
+Tests added but failing: <list>
+Files modified: <list>
+Smallest failing assertion: <quote from test output>
+Start commit: <start_commit>
+Dirty status: <git status --short>
+Reproduction commands: <exact commands to reproduce failure>
+```
+
+### Options
+
+Ask the user to choose exactly one option. Use a structured choice UI when the host provides one; otherwise print the options and wait for an explicit answer.
+
+| Option | Effect |
+|---|---|
+| (a) Retry with extended cap | Adds 5 attempts (total 10). Status stays `in_progress`. |
+| (b) Escalate to design | Invoke `superpowers:brainstorming` on DoD interpretation. User may amend spec and `--reinit`. |
+| (c) Mark blocked | Record blocker text. Status → `blocked`. Skip on auto until `--clear-blocker`. |
+| (d) Drop to manual | Print reproduction commands + touched files. User finishes manually, then `--resume-from-manual`. |
+
+**No auto-revert.** The skill MUST NOT run `git restore`, `git clean`, `git reset`, or equivalent. If cleanup needed, print candidate commands scoped to files changed since `start_commit` and exit.
+
+### Meta-Warning
+
+If three consecutive task invocations hit the failure gate, print:
+> "Harness components may be misaligned with the current spec or model. Consider re-reading opi-spec.md §15 exit criteria, or grilling the design via `superpowers:brainstorming` before continuing."
