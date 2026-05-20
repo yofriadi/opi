@@ -223,6 +223,13 @@ Also generate GitHub Release notes (same content, for `--notes-file`).
 
 Create a TaskCreate for Phase 4.
 
+### Build Strategy Selection
+
+Ask user which build strategy to use:
+1. **CI-driven** (recommended) — Only build native platform locally for smoke-testing. After Phase 5 pushes the tag, the `release.yml` workflow builds all 6 targets in CI and uploads them to the GitHub Release automatically.
+2. **Local cross-compile** — Build all available targets locally using `cross`. Use when CI is unavailable or for pre-CI verification.
+3. **Skip builds** (`--skip-cross`) — Source-only release, no binary artifacts.
+
 ### 4.1 Release Build
 ```bash
 cargo build --release --workspace
@@ -306,6 +313,11 @@ gh release create "v$VERSION" \
 ```
 Only upload archive files (tar.gz/zip). Do NOT upload SHA256SUMS.txt to GitHub Release.
 Only include archives that were actually built (skip unavailable targets).
+
+**CI-driven strategy:** If using CI-driven builds, create the draft release with only the release notes (no local artifacts). After the tag push triggers `release.yml`, CI builds all 6 targets and uploads them via `gh release upload --clobber`. Wait for the workflow to complete before proceeding to Phase 7:
+```bash
+gh run list --workflow=release.yml --branch="v$VERSION" --limit=1 --json status
+```
 
 ### 5.3 User Confirmation Gate
 Show draft release URL and ask:
@@ -474,10 +486,15 @@ If yes, skip to Phase 6 and only publish remaining crates.
 ## Tools Required
 
 - `cargo` (Rust toolchain)
-- `cross` (optional, for cross-compilation: `cargo install cross`)
+- `cross` (optional, for local cross-compilation: `cargo install cross`)
 - `gh` (GitHub CLI, authenticated)
 - `git`
 - `cargo-audit` (optional, for security checks)
+
+## CI Workflows
+
+- `.github/workflows/ci.yml` — Runs on push/PR to main: fmt, clippy, test, doc. Makes Phase 1.3 meaningful.
+- `.github/workflows/release.yml` — Triggered by `v*` tags or manual dispatch. Builds all 6 platform targets (linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64, windows-arm64) and uploads to the GitHub Release.
 
 ## Post-Release Cleanup
 

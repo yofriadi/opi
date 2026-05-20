@@ -61,8 +61,16 @@ Releases go to both **GitHub Releases** and **crates.io** via the `opi-release` 
 - All crates publish at the same version, in dependency order, computed dynamically via `cargo metadata`.
 - Never use `git reset --hard` + `git push --force` for rollback. Use `git revert` + tag deletion (this is enforced in the skill).
 - Interrupted releases can resume from `.opi-release-state.json` at the repo root.
+- **CI-driven builds** (recommended): Push the tag → `release.yml` builds all 6 platform targets and uploads to the GitHub Release. No local `cross` needed.
 
 The design rationale is in `docs/superpowers/specs/2026-05-19-opi-release-skill-design.md`.
+
+## CI
+
+Two GitHub Actions workflows in `.github/workflows/`:
+
+- **ci.yml** — Runs on push/PR to `main`. Jobs: `fmt`, `clippy`, `test`, `doc`. These are the gates that Phase 1.3 of the release skill checks.
+- **release.yml** — Triggered by `v*` tags or manual `workflow_dispatch`. Builds `opi` binary for 6 targets (linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64, windows-arm64) using native runners + `cross` for linux-arm64. Uploads artifacts to the GitHub Release.
 
 ## Conventions
 
