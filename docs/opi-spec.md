@@ -221,20 +221,34 @@ phase additions over broad defaults.
 |---|---|---|---|
 | async runtime | `tokio` | present, narrow features | networking, process IO, signals, timers; avoid `features = ["full"]` unless a concrete need appears |
 | serialization | `serde`, `serde_json` | present | provider/session protocols |
-| library errors | `thiserror` | present | typed error handling |
-| async traits | `async-trait` | present, use sparingly | existing scaffolding convenience; target APIs should prefer boxed futures/streams when clearer |
+| library errors | `thiserror` | present | typed error handling for library crates |
+| application errors | `anyhow` | Phase 1 | top-level error aggregation in `opi-coding-agent`; library crates MUST NOT use `anyhow` in public APIs |
+| async traits | `async-trait` | present, remove before 0.2.0 | not a target public API dependency; dyn traits use explicit boxed future/stream returns; internal non-dyn traits may use native async fn |
 | HTTP/SSE | `reqwest` with `rustls-tls` | Phase 1, narrow features | provider streaming without OpenSSL; use `default-features = false` and enable only required HTTP/JSON/stream features |
+| SSE parsing | hand-written line parser or `eventsource-stream` | Phase 1 | `reqwest-eventsource` is excluded (does not support POST); Anthropic uses POST-based streaming |
 | streams | `futures-core`, internal stream helpers as needed | Phase 1 | public stream APIs should expose `futures-core::Stream`; keep helpers such as `futures-util` internal |
 | cancellation | `tokio-util` | Phase 1 | cooperative cancellation |
 | CLI | `clap` | Phase 1 | stable options and completions |
 | config | `toml` | Phase 1 | human-editable config |
 | TUI | `ratatui`, `crossterm` | Phase 1 | cross-platform terminal UI |
-| schema | `schemars`, `jsonschema` | Phase 1, tool boundary first | typed tool schemas plus runtime validation at the model/tool boundary; avoid broad protocol validation until schemas stabilize |
+| schema | `schemars`, `jsonschema` | Phase 1, tool boundary first | typed tool schemas plus runtime validation at the model/tool boundary; avoid broad protocol validation until schemas stabilize; see §5.6 for draft compatibility |
 | IDs/time | `uuid`, `time` | Phase 1 | session IDs and timestamps without `chrono`'s extra surface |
 | file search | `ignore`, `globset`, `regex` | Phase 1 | gitignore-aware glob and grep behavior |
 | tracing | `tracing`, `tracing-subscriber` | Phase 1/2 | observability |
 | markdown/code | `pulldown-cmark`, optional `syntect` later | Phase 1/2 | basic markdown first; syntax highlighting must be optional or later so it does not threaten binary size targets |
 | diff | `similar` | Phase 2 | patch visualization; do not add before a real diff view ships |
+
+### 5.6 JSON Schema Draft Compatibility
+
+Anthropic's Messages API expects tool `input_schema` to conform to JSON Schema draft 2020-12 with a top-level `type: "object"` constraint. `schemars` 0.8 generates draft-07 by default.
+
+For Phase 1 tool schemas (simple object + properties + required), draft-07 output is generally accepted by Anthropic because the basic keywords are unchanged between drafts. However, complex schemas using features that diverged between drafts (array `items` vs `prefixItems`, `definitions` vs `$defs`, conditional keywords) MAY be rejected.
+
+Requirements:
+
+- Phase 1 MUST include an integration test that submits generated tool schemas to the Anthropic API and verifies acceptance.
+- If incompatibilities surface, a schema post-processing step SHOULD normalize draft-07 output to draft 2020-12 (rename `definitions` to `$defs`, etc.).
+- `schemars` 1.0 (when stable) MAY resolve this natively; until then, treat this as a known risk with a tested mitigation path.
 
 ## 6. Architecture
 
@@ -683,6 +697,18 @@ new_line = "shift+enter"
 
 Malformed config files SHOULD fail clearly. Silent fallback is allowed for missing optional files, not invalid user config.
 
+### 9.1.1 Configuration Precedence
+
+Configuration values are resolved in the following priority order (highest wins):
+
+1. CLI arguments (`--model`, `--config`, etc.)
+2. Environment variables (`ANTHROPIC_API_KEY`, `OPI_MODEL`, etc.)
+3. Project config file (`.opi/config.toml` in workspace root, when implemented)
+4. User config file (`~/.config/opi/config.toml`)
+5. Built-in defaults
+
+Phase 1 implements this with clap (CLI args) + `std::env` (env vars) + `toml` deserialization (config file) + struct defaults. No configuration framework (figment, config-rs) is required for Phase 1. A framework MAY be introduced in later phases if configuration source complexity grows beyond what manual merging handles cleanly.
+
 Phase 1 config loading only needs defaults, provider credentials, model
 selection, timeouts, theme selection, and high-risk tool policy. Compaction,
 session, and advanced keybinding settings MAY be accepted as reserved fields,
@@ -780,16 +806,35 @@ RPC mode is Phase 4. It should use strict JSONL framing: one command per line on
 | `opi-ai` | typed `ProviderError` plus stream `Error` terminal events |
 | `opi-agent` | typed `AgentError`, `ToolError`, `SessionError` |
 | `opi-tui` | typed terminal/render errors |
-| `opi-coding-agent` | top-level reporting and mapped exit codes |
+| `opi-coding-agent` | `anyhow::Result` at top level for error aggregation; mapped exit codes; library errors converted via `From` impls |
+
+Library crates (`opi-ai`, `opi-agent`, `opi-tui`) MUST use `thiserror` for typed errors and MUST NOT expose `anyhow` in public APIs. `opi-coding-agent` MAY use `anyhow` (or `eyre`) for top-level error aggregation where typed errors add no value to the end user.
 
 Library crates MUST avoid `unwrap` and `expect` except in tests or provably safe static initialization.
 
 ### 11.2 Cancellation and Backpressure
 
-- Cancellation uses `tokio_util::sync::CancellationToken` or an equivalent cooperative token.
-- Ctrl+C in interactive mode aborts the active operation first; repeated Ctrl+C MAY exit.
-- Provider streams should use bounded channels to propagate backpressure.
+Cancellation uses `tokio_util::sync::CancellationToken` organized in a three-layer tree:
+
+```text
+session_token (program exit / repeated Ctrl+C)
+  └── operation_token (current agent turn / first Ctrl+C)
+        └── tool_token (individual tool execution / tool timeout)
+```
+
+Cancellation semantics:
+
+- First Ctrl+C cancels `operation_token`: aborts the active provider request and any running tool executions. The agent returns to idle (ready for new input).
+- Second Ctrl+C (or Ctrl+C while idle) cancels `session_token`: triggers graceful shutdown (flush pending session writes, restore terminal state, exit).
+- Tool timeout cancels only the affected `tool_token`. In parallel execution mode, other tools in the batch continue. In sequential mode, the batch is abandoned after the timed-out tool.
+- `Agent::abort()` cancels `operation_token` programmatically (equivalent to first Ctrl+C).
+- Dropping a provider stream SHOULD cancel the underlying HTTP request via the `operation_token` or `Request::cancel` field.
+
+Additional rules:
+
+- Provider streams SHOULD use bounded channels to propagate backpressure.
 - Tool subprocesses MUST be killed or deliberately detached on cancellation.
+- Child tokens are created per-operation and per-tool; they MUST NOT outlive their parent scope.
 
 ### 11.3 Observability
 
