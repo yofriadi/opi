@@ -49,8 +49,10 @@ jobs:
             os: windows-latest
             artifact: opi-windows-arm64
             ext: zip
+            tier2: true
 
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.tier2 == true }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -118,10 +120,6 @@ jobs:
         run: |
           cd artifacts
           gh release upload "${RELEASE_TAG}" \
-            opi-linux-x64.tar.gz \
-            opi-linux-arm64.tar.gz \
-            opi-darwin-x64.tar.gz \
-            opi-darwin-arm64.tar.gz \
-            opi-windows-x64.zip \
-            opi-windows-arm64.zip \
+            opi-* \
+            SHA256SUMS.txt \
             --clobber

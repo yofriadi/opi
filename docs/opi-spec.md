@@ -213,24 +213,28 @@ A shared types crate would become a hub dependency. If a type crosses a crate bo
 
 ### 5.5 Dependency Plan
 
+Phase 1 dependencies SHOULD be introduced with the narrowest feature set that can
+ship the MVP. Prefer explicit features, optional heavy functionality, and later
+phase additions over broad defaults.
+
 | Category | Crate | Status | Rationale |
 |---|---|---|---|
-| async runtime | `tokio` | present | networking, process IO, timers |
+| async runtime | `tokio` | present, narrow features | networking, process IO, signals, timers; avoid `features = ["full"]` unless a concrete need appears |
 | serialization | `serde`, `serde_json` | present | provider/session protocols |
 | library errors | `thiserror` | present | typed error handling |
 | async traits | `async-trait` | present, use sparingly | existing scaffolding convenience; target APIs should prefer boxed futures/streams when clearer |
-| HTTP/SSE | `reqwest` with `rustls-tls` | Phase 1 | provider streaming without OpenSSL |
-| streams | `futures-core`, internal stream helpers as needed | Phase 1 | public stream APIs without overexposing helper crates |
+| HTTP/SSE | `reqwest` with `rustls-tls` | Phase 1, narrow features | provider streaming without OpenSSL; use `default-features = false` and enable only required HTTP/JSON/stream features |
+| streams | `futures-core`, internal stream helpers as needed | Phase 1 | public stream APIs should expose `futures-core::Stream`; keep helpers such as `futures-util` internal |
 | cancellation | `tokio-util` | Phase 1 | cooperative cancellation |
 | CLI | `clap` | Phase 1 | stable options and completions |
 | config | `toml` | Phase 1 | human-editable config |
 | TUI | `ratatui`, `crossterm` | Phase 1 | cross-platform terminal UI |
-| schema | `schemars`, `jsonschema` | Phase 1 | typed tool schemas plus runtime boundary validation |
+| schema | `schemars`, `jsonschema` | Phase 1, tool boundary first | typed tool schemas plus runtime validation at the model/tool boundary; avoid broad protocol validation until schemas stabilize |
 | IDs/time | `uuid`, `time` | Phase 1 | session IDs and timestamps without `chrono`'s extra surface |
 | file search | `ignore`, `globset`, `regex` | Phase 1 | gitignore-aware glob and grep behavior |
 | tracing | `tracing`, `tracing-subscriber` | Phase 1/2 | observability |
-| markdown/code | `pulldown-cmark`, optional `syntect` later | Phase 1/2 | markdown first; syntax highlighting should not threaten binary size targets |
-| diff | `similar` | Phase 2 | patch visualization |
+| markdown/code | `pulldown-cmark`, optional `syntect` later | Phase 1/2 | basic markdown first; syntax highlighting must be optional or later so it does not threaten binary size targets |
+| diff | `similar` | Phase 2 | patch visualization; do not add before a real diff view ships |
 
 ## 6. Architecture
 
@@ -608,6 +612,14 @@ The binary owns CLI parsing, config loading, provider registry construction, bui
 | `glob` | parallel | 1 | gitignore-aware file discovery by glob |
 | `grep` | parallel | 1 | gitignore-aware regex search over file contents |
 
+Phase 1 MUST include a minimal safety boundary for high-risk tools. `write`,
+`edit`, and `bash` must show the proposed path or command, effective cwd,
+environment policy, timeout, and whether the target is inside the workspace
+before execution. Interactive mode SHOULD require confirmation for these
+high-risk operations. Non-interactive mode MUST provide an explicit opt-in
+policy before running mutating file tools or shell commands. Full reusable
+permission profiles remain Phase 3 scope.
+
 CLI target:
 
 ```text
@@ -617,15 +629,15 @@ Options:
   -m, --model <SPEC>       Model, e.g. anthropic:claude-sonnet-4
   -c, --config <PATH>      Config file path
   -s, --system <PATH>      System prompt file
-  -r, --resume <ID>        Resume session
-      --list-sessions      List saved sessions
       --list-models        List available models
       --non-interactive    Single prompt mode
-      --json               Emit NDJSON session events
   -v, --verbose            Enable debug tracing
   -V, --version            Print version
   -h, --help               Print help
 ```
+
+Phase 2 adds `--resume`, `--list-sessions`, and `--json` after session storage
+and JSON event schemas have contract tests.
 
 Prompt layers:
 
@@ -671,6 +683,11 @@ new_line = "shift+enter"
 
 Malformed config files SHOULD fail clearly. Silent fallback is allowed for missing optional files, not invalid user config.
 
+Phase 1 config loading only needs defaults, provider credentials, model
+selection, timeouts, theme selection, and high-risk tool policy. Compaction,
+session, and advanced keybinding settings MAY be accepted as reserved fields,
+but they must not imply those Phase 2 features are active.
+
 ### 9.2 Directory Layout
 
 ```text
@@ -684,7 +701,8 @@ Windows SHOULD use `%APPDATA%\opi\` for config-like data and `%LOCALAPPDATA%\opi
 
 ### 9.3 Session Format
 
-Opi sessions are append-only, versioned JSONL files. The first line is a header:
+Session persistence starts in Phase 2, not Phase 1. The target format is
+append-only, versioned JSONL. The first line is a header:
 
 ```json
 {"type":"session","version":1,"id":"018f...","timestamp":"2026-05-20T12:00:00Z","cwd":"/repo","parent_session":null}
@@ -721,6 +739,8 @@ Opi keeps pi's branch and compaction ideas but not its file format because pi st
 
 ### 9.5 Compaction
 
+Compaction starts in Phase 2 after session storage exists.
+
 Triggers:
 
 - manual;
@@ -747,7 +767,7 @@ Suggested exit codes:
 | 5 | unrecovered tool failure |
 | 130 | interrupted by user |
 
-JSON mode emits one `AgentSessionEvent` JSON object per line to stdout. Human-readable logs go to stderr. Phase 2 JSON mode SHOULD stay close to pi's event model but MUST include an opi schema version.
+JSON mode is Phase 2 scope. It emits one `AgentSessionEvent` JSON object per line to stdout after the event schema has contract tests. Human-readable logs go to stderr. Phase 2 JSON mode SHOULD stay close to pi's event model but MUST include an opi schema version.
 
 RPC mode is Phase 4. It should use strict JSONL framing: one command per line on stdin, correlated responses by optional `id`, and async events on stdout.
 
@@ -801,6 +821,8 @@ Library crates MUST avoid `unwrap` and `expect` except in tests or provably safe
 | fuzz/property | selected crates | JSONL loader, provider parser, tool argument schemas |
 
 Phase 1 MUST include a mock provider harness. Live provider tests are not sufficient because they are slow, paid, flaky, and credential-dependent.
+Session round-trip, JSON contract, and session-loader fuzz/property tests become
+required when the corresponding Phase 2 features are implemented.
 
 Current CI gates:
 
@@ -823,6 +845,7 @@ Opi runs local tools with the user's privileges. The main risks are dangerous lo
 - File tools MUST resolve paths deliberately and record whether paths are inside or outside the workspace.
 - Path traversal MAY be allowed, but permission policy SHOULD be able to restrict it.
 - Provider HTTP MUST use TLS by default.
+- Phase 1 MUST include minimal confirmation and auditability for `write`, `edit`, and `bash`; richer reusable permission profiles are Phase 3 scope.
 - Permission prompts MUST exist before high-risk tools are considered production ready.
 
 Structured arguments reduce shell injection risk, but invoking a shell still executes model-supplied command text. The mitigation is permission, auditability, timeout, cwd/env control, and careful command construction.
@@ -837,7 +860,7 @@ Structured arguments reduce shell injection risk, but invoking a shell still exe
 | Bash tool performs destructive actions | high | high | sequential mode, permissions, visible command, timeout |
 | Secrets leak to logs/session | high | medium | redaction tests and secret types |
 | Windows TUI issues | medium | medium | crossterm tests and Windows smoke checks |
-| Premature crates.io publish | high | medium | defer until 0.2.0 real implementation and hide or remove placeholder APIs first |
+| Premature crates.io publish | high | medium | gate first publish on real implementation, docs, and contract tests; defer crates.io if those gates miss 0.2.0 |
 | Extension scope bloats core | medium | high | minimal-core rule |
 | Duplicate session stacks | high | medium | explicit Harness vs CodingHarness ownership |
 
@@ -848,11 +871,20 @@ All crates share one workspace version.
 | Version | Milestone | Publish |
 |---|---|---|
 | 0.1.0 | scaffolding | GitHub Release only |
-| 0.2.0 | Phase 1 MVP | GitHub Release + first crates.io publish except `opi-web-ui` |
+| 0.2.0 | Phase 1 MVP | GitHub Release; crates.io only if publish gates pass except `opi-web-ui` |
 | 0.3.0 | Phase 2 persistence and providers | GitHub + crates.io |
 | 0.4.0+ | Phase 3 hardening | GitHub + crates.io |
 
-The 0.2.0 crates.io publish requires all published crates to expose real, documented behavior rather than placeholder public APIs. Because the binary crate depends on internal library crates, those libraries should publish together in dependency order; `opi-web-ui` remains unpublished until it has a concrete implementation. All 0.x public APIs are unstable unless explicitly documented otherwise.
+The first crates.io publish is gated by quality, not by the version number alone.
+It MAY happen at 0.2.0 if all published crates expose real, documented behavior
+rather than placeholder public APIs, public docs build cleanly, contract tests
+cover the shipped provider/tool/runtime boundaries, and the release skill's
+checks pass. If those gates are not met, crates.io publishing SHOULD move to a
+later 0.2.x or 0.3.0 release while GitHub binary releases continue. Because the
+binary crate depends on internal library crates, those libraries should publish
+together in dependency order; `opi-web-ui` remains unpublished until it has a
+concrete implementation. All 0.x public APIs are unstable unless explicitly
+documented otherwise.
 
 The release process SHOULD follow `.claude/skills/opi-release/skill.md`: pre-flight, version bump, changelog, checks, tag/draft release, crates.io publish, finalize. crates.io publishing is irreversible except yanking; rollback should use new commits and tag management, not force-pushed public history.
 
@@ -865,7 +897,9 @@ Release CI builds:
 - `opi-windows-x64.zip`;
 - `opi-windows-arm64.zip`.
 
-`SHA256SUMS.txt` SHOULD be uploaded with release artifacts.
+`SHA256SUMS.txt` SHOULD be uploaded with release artifacts. Windows ARM64 is a
+Tier 2 target and should be treated as non-blocking for Phase 1 MVP releases if
+the target-specific build flakes while Tier 1 targets pass.
 
 ## 15. Implementation Roadmap
 
@@ -887,11 +921,13 @@ Status: complete in 0.1.0.
 
 Target: 0.2.0.
 
-Goal: Anthropic-only coding agent with core loop, six tools, basic TUI, TOML config, and mock-provider tests.
+Goal: Anthropic-only coding agent with core loop, six tools, minimal safety
+boundaries for mutating tools and shell execution, basic TUI, TOML config, and
+mock-provider tests.
 
 | # | Task | Crate | Definition of done |
 |---|---|---|---|
-| 1.0 | introduce Phase 1 dependencies | workspace | manifests include needed deps without unused-dep warnings |
+| 1.0 | introduce Phase 1 dependencies | workspace | manifests include needed deps with minimal features and without unused-dep warnings |
 | 1.1 | message and stream types | `opi-ai` | serialize where needed; terminal stream events tested |
 | 1.2 | replace placeholder provider trait | `opi-ai` | `stream(Request)` replaces `complete` |
 | 1.3 | Anthropic SSE provider | `opi-ai` | fixtures cover text, tool call, usage, error |
@@ -900,7 +936,7 @@ Goal: Anthropic-only coding agent with core loop, six tools, basic TUI, TOML con
 | 1.6 | `agent_loop` | `opi-agent` | mock tests cover no-tool and tool-use turns |
 | 1.7 | `Agent` wrapper | `opi-agent` | prompt, continue, abort, subscribe tested |
 | 1.8 | hooks and queues | `opi-agent` | before/after, should-stop, steering, follow-up tested |
-| 1.9 | `read`, `write`, `edit`, `bash` | `opi-coding-agent` | temp-dir tests cover success and failure |
+| 1.9 | `read`, `write`, `edit`, `bash` | `opi-coding-agent` | temp-dir tests cover success, failure, timeout/cancellation, cwd/env reporting, and minimal confirmation policy |
 | 1.10 | `glob`, `grep` | `opi-coding-agent` | tests cover ignored dirs and regex errors |
 | 1.11 | system prompt construction | `opi-coding-agent` | prompt includes tool defs and system layer |
 | 1.12 | TUI shell | `opi-tui` | fixed-size render snapshots |
@@ -910,7 +946,12 @@ Goal: Anthropic-only coding agent with core loop, six tools, basic TUI, TOML con
 | 1.16 | TOML config loading | `opi-coding-agent` | missing defaults and malformed errors tested |
 | 1.17 | integration harness | cross-crate | mock-provider E2E runs in CI |
 
-Exit criteria: `opi` accepts a prompt, streams Claude output, executes `read/write/edit/bash/glob/grep`, displays results in TUI, supports non-interactive mode, and passes mock-provider CI tests.
+Exit criteria: `opi` accepts a prompt, streams Claude output, executes
+`read/write/edit/bash/glob/grep` behind the Phase 1 safety boundary, displays
+results in TUI, supports non-interactive mode with explicit high-risk tool
+policy, and passes mock-provider CI tests. Sessions, compaction, JSON mode, MCP,
+plugins, web UI, rich diff views, and syntax-highlighted code blocks are not
+Phase 1 exit criteria.
 
 ### Phase 2 - Multi-Provider and Persistence
 
@@ -923,7 +964,7 @@ Target: 0.3.0.
 | 2.3 | OpenAI Responses provider | `opi-ai` |
 | 2.4 | Google Gemini provider | `opi-ai` |
 | 2.5 | Mistral provider | `opi-ai` |
-| 2.6 | opi session v1 JSONL storage | `opi-agent` |
+| 2.6 | opi session v1 JSONL storage and contract tests | `opi-agent` |
 | 2.7 | session list/resume/delete | `opi-coding-agent` |
 | 2.8 | compaction | `opi-agent` / `opi-coding-agent` |
 | 2.9 | thinking/reasoning support | `opi-ai` |
@@ -950,7 +991,7 @@ Target: 0.4.0+.
 | 3.5 | image tool results | `opi-agent` |
 | 3.6 | terminal image rendering | `opi-tui` |
 | 3.7 | `OPI.md` context loading | `opi-coding-agent` |
-| 3.8 | permission system | `opi-coding-agent` |
+| 3.8 | reusable permission profiles and policy system | `opi-coding-agent` |
 | 3.9 | MCP client adapter | `opi-agent` |
 | 3.10 | shell completions | `opi-coding-agent` |
 | 3.11 | fuzzy model/session picker | `opi-tui` |
@@ -998,7 +1039,7 @@ Exit criteria: third parties can extend opi without patching core crates.
 | ADR-015 | Plugin strategy | MCP adapter before dynamic plugins | protocol integration is lower risk than arbitrary runtime extension |
 | ADR-016 | Web UI | unpublished until core stable | avoids premature WASM commitment |
 | ADR-017 | Transport stub | reserve for Phase 4 or remove | avoids undocumented public surface |
-| ADR-018 | crates.io timing | first publish target 0.2.0 | publish only after placeholder APIs are hidden or replaced |
+| ADR-018 | crates.io timing | quality-gated first publish | publish only after placeholder APIs are hidden or replaced and release gates pass |
 
 ## 17. Non-Functional Requirements
 
