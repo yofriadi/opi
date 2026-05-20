@@ -178,3 +178,30 @@ Update `spec_sha256`. If tracked files changed (.gitignore or smoke scripts), co
 git commit -m "chore: reconcile opi-implement harness files with opi-spec.md changes"
 ```
 If no tracked file changed, do not create an empty commit.
+
+## Phase B: Plan-the-Task
+
+### B.1 Print Task Summary
+
+Display:
+- Task ID and title
+- Definition of Done (verbatim)
+- Verification tier and gate list
+- Parallelize plan (if non-empty)
+- Dependencies (all must be `passing`)
+
+### B.2 User Gate
+
+Ask: "Proceed with task `<id>` — `<title>`?"
+
+If the user declines, exit cleanly without modifying state.
+
+### B.3 Mark In-Progress
+
+On confirmation:
+1. Record `start_commit` = current HEAD SHA
+2. Set `status` → `in_progress`
+3. Initialize `last_attempt` = `{attempt: 1, started_at: <now>, ended_at: null, outcome: null, failing_gate: null, touched_files: []}`
+4. Write ledger atomically
+
+Phase A task selection alone does NOT mutate task status. Only Phase B confirmation triggers the state change.
