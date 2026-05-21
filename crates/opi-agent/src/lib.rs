@@ -72,8 +72,11 @@ pub async fn agent_loop(
 
         events(AgentEvent::TurnStart);
 
+        // H5: transform context before provider call
+        let transformed = hooks.transform_context(messages.clone(), cancel.clone()).await?;
+
         // Convert messages for the provider
-        let llm_messages = hooks.convert_to_llm(&messages)?;
+        let llm_messages = hooks.convert_to_llm(&transformed)?;
 
         // Build the provider request
         let request = Request {
@@ -283,6 +286,15 @@ pub async fn agent_loop(
         }
 
         // -- Queue polling after turn completes --------------------------------
+
+        // H5: prepare_next_turn hook
+        let next_turn_ctx = hooks::PrepareNextTurnContext {
+            messages: messages.clone(),
+            turn: turn_idx as u32 + 1,
+        };
+        if let Some(update) = hooks.prepare_next_turn(next_turn_ctx).await {
+            messages.extend(update.extra_messages);
+        }
 
         // Poll steering queue (drain all)
         let steering = drain_queue(&context.steering_queue);
