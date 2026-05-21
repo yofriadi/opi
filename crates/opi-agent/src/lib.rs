@@ -290,7 +290,7 @@ pub async fn agent_loop(
         // H5: prepare_next_turn hook
         let next_turn_ctx = hooks::PrepareNextTurnContext {
             messages: messages.clone(),
-            turn: turn_idx as u32 + 1,
+            turn: turn_idx + 1,
         };
         if let Some(update) = hooks.prepare_next_turn(next_turn_ctx).await {
             messages.extend(update.extra_messages);

@@ -229,6 +229,12 @@ pub fn resolve_config(source: ConfigSource) -> Result<OpiConfig, ConfigError> {
         project_raw.merge_into(&mut config);
     }
 
+    // --config file overrides project and user config
+    if let Some(config_path) = &source.config_path {
+        let cli_raw = load_raw_config(config_path)?;
+        cli_raw.merge_into(&mut config);
+    }
+
     if let Some(env_model) = &source.env_model {
         config.defaults.model = env_model.clone();
     }

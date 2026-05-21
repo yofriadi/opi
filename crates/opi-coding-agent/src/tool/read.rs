@@ -90,10 +90,18 @@ impl Tool for ReadTool {
             };
 
             let output = selected.join("\n");
+            let inside_workspace = std::fs::canonicalize(&file_path)
+                .ok()
+                .and_then(|cp| {
+                    std::fs::canonicalize(&workspace_root)
+                        .ok()
+                        .map(|cr| cp.starts_with(&cr))
+                })
+                .unwrap_or(false);
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
                 "path": args.path,
-                "inside_workspace": true,
+                "inside_workspace": inside_workspace,
             });
 
             let text = format!("{}\n{}", file_path.display(), output);

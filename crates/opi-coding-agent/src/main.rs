@@ -59,8 +59,12 @@ async fn run_non_interactive(
 
     let provider = match build_provider(config) {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("opi: {e}");
+        Err(ProviderBuildError::Auth(msg)) => {
+            eprintln!("opi: {msg}");
+            return ExitCode::AuthFailure as i32;
+        }
+        Err(ProviderBuildError::Config(msg)) => {
+            eprintln!("opi: {msg}");
             return ExitCode::ConfigError as i32;
         }
     };
@@ -87,25 +91,30 @@ async fn run_non_interactive(
     result.exit_code
 }
 
+enum ProviderBuildError {
+    Auth(String),
+    Config(String),
+}
+
 fn build_provider(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<Box<dyn opi_ai::provider::Provider>, String> {
+) -> Result<Box<dyn opi_ai::provider::Provider>, ProviderBuildError> {
     use opi_ai::anthropic::AnthropicProvider;
     use opi_ai::provider::Provider;
 
     let spec = &config.defaults.model;
     let (provider_id, _) = spec
         .split_once(':')
-        .ok_or_else(|| format!("invalid model spec: {spec:?} (expected provider:model)"))?;
+        .ok_or_else(|| ProviderBuildError::Config(format!("invalid model spec: {spec:?} (expected provider:model)")))?;
 
     match provider_id {
         "anthropic" => {
             let api_key_env = &config.providers.anthropic.api_key_env;
             let api_key = std::env::var(api_key_env)
-                .map_err(|_| format!("missing API key: set {api_key_env} environment variable"))?;
+                .map_err(|_| ProviderBuildError::Auth(format!("missing API key: set {api_key_env} environment variable")))?;
             let provider = AnthropicProvider::new(api_key, None);
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
-        other => Err(format!("unknown provider: {other}")),
+        other => Err(ProviderBuildError::Config(format!("unknown provider: {other}"))),
     }
 }

@@ -88,8 +88,9 @@ impl NonInteractiveRunner {
                 assistant_event, ..
             } = event
                 && let AssistantStreamEvent::TextDelta { delta, .. } = assistant_event.as_ref()
+                && let Ok(mut guard) = tp.lock()
             {
-                tp.lock().unwrap().push(delta.clone());
+                guard.push(delta.clone());
             }
         }));
 
@@ -104,7 +105,7 @@ impl NonInteractiveRunner {
                     };
                 }
 
-                let stdout = text_parts.lock().unwrap().join("");
+                let stdout = text_parts.lock().map(|g| g.join("")).unwrap_or_default();
                 NonInteractiveResult {
                     stdout,
                     stderr: String::new(),
