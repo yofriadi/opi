@@ -73,7 +73,9 @@ pub async fn agent_loop(
         events(AgentEvent::TurnStart);
 
         // H5: transform context before provider call
-        let transformed = hooks.transform_context(messages.clone(), cancel.clone()).await?;
+        let transformed = hooks
+            .transform_context(messages.clone(), cancel.clone())
+            .await?;
 
         // Convert messages for the provider
         let llm_messages = hooks.convert_to_llm(&transformed)?;
@@ -159,8 +161,15 @@ pub async fn agent_loop(
                                     });
 
                                     let result = execute_tool(
-                                        &tc.id, &tc.name, &args, &tools_map, hooks, &messages, cancel.clone(),
-                                    ).await;
+                                        &tc.id,
+                                        &tc.name,
+                                        &args,
+                                        &tools_map,
+                                        hooks,
+                                        &messages,
+                                        cancel.clone(),
+                                    )
+                                    .await;
 
                                     let is_error = result.is_error;
                                     terminate_flags.push(result.terminate);
@@ -184,19 +193,25 @@ pub async fn agent_loop(
                                 }
                             } else {
                                 // Parallel execution
-                                let futures: Vec<_> = tool_calls.iter().map(|tc| {
-                                    let args: serde_json::Value =
-                                        serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
-                                    let tools_map = &tools_map;
-                                    let messages = &messages;
-                                    let cancel = cancel.clone();
-                                    async move {
-                                        let result = execute_tool(
-                                            &tc.id, &tc.name, &args, tools_map, hooks, messages, cancel,
-                                        ).await;
-                                        (tc, args, result)
-                                    }
-                                }).collect();
+                                let futures: Vec<_> = tool_calls
+                                    .iter()
+                                    .map(|tc| {
+                                        let args: serde_json::Value =
+                                            serde_json::from_str(&tc.arguments)
+                                                .unwrap_or(json!({}));
+                                        let tools_map = &tools_map;
+                                        let messages = &messages;
+                                        let cancel = cancel.clone();
+                                        async move {
+                                            let result = execute_tool(
+                                                &tc.id, &tc.name, &args, tools_map, hooks,
+                                                messages, cancel,
+                                            )
+                                            .await;
+                                            (tc, args, result)
+                                        }
+                                    })
+                                    .collect();
                                 let results = futures_util::future::join_all(futures).await;
                                 for (tc, args, result) in results {
                                     events(AgentEvent::ToolExecutionStart {
@@ -226,8 +241,8 @@ pub async fn agent_loop(
                             }
 
                             // H4: early stop if ALL results have terminate=true
-                            let all_terminate = !terminate_flags.is_empty()
-                                && terminate_flags.iter().all(|t| *t);
+                            let all_terminate =
+                                !terminate_flags.is_empty() && terminate_flags.iter().all(|t| *t);
 
                             events(AgentEvent::TurnEnd {
                                 message: agent_msg,

@@ -77,15 +77,19 @@ async fn run_non_interactive(
 
     let allow_mutating = cli.allow_mutating || config.defaults.allow_mutating_tools;
 
-    let user_system_prompt = cli.system.as_ref().and_then(|path| {
-        match std::fs::read_to_string(path) {
-            Ok(content) => Some(content),
-            Err(e) => {
-                eprintln!("opi: warning: failed to read system prompt file {}: {e}", path.display());
-                None
-            }
-        }
-    });
+    let user_system_prompt =
+        cli.system
+            .as_ref()
+            .and_then(|path| match std::fs::read_to_string(path) {
+                Ok(content) => Some(content),
+                Err(e) => {
+                    eprintln!(
+                        "opi: warning: failed to read system prompt file {}: {e}",
+                        path.display()
+                    );
+                    None
+                }
+            });
 
     let mut runner = NonInteractiveRunner::new(
         provider,
@@ -108,13 +112,10 @@ async fn run_non_interactive(
     result.exit_code
 }
 
-async fn run_interactive(
-    cli: &Cli,
-    config: &opi_coding_agent::config::OpiConfig,
-) {
-    use opi_coding_agent::harness::{CodingHarness, InteractiveCodingHooks};
+async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig) {
     use opi_agent::message::AgentMessage;
     use opi_ai::message::{AssistantContent, Message};
+    use opi_coding_agent::harness::{CodingHarness, InteractiveCodingHooks};
 
     let provider = match build_provider(config) {
         Ok(p) => p,
@@ -129,9 +130,10 @@ async fn run_interactive(
     };
 
     let allow_mutating = cli.allow_mutating || config.defaults.allow_mutating_tools;
-    let user_system_prompt = cli.system.as_ref().and_then(|path| {
-        std::fs::read_to_string(path).ok()
-    });
+    let user_system_prompt = cli
+        .system
+        .as_ref()
+        .and_then(|path| std::fs::read_to_string(path).ok());
 
     let hooks = Box::new(InteractiveCodingHooks::new(allow_mutating));
     let mut harness = CodingHarness::new_with_hooks(
@@ -143,7 +145,10 @@ async fn run_interactive(
         user_system_prompt,
     );
 
-    println!("opi {} - AI coding agent (type 'exit' to quit)", env!("CARGO_PKG_VERSION"));
+    println!(
+        "opi {} - AI coding agent (type 'exit' to quit)",
+        env!("CARGO_PKG_VERSION")
+    );
 
     let stdin = std::io::stdin();
     loop {
@@ -186,18 +191,25 @@ fn build_provider(
     use opi_ai::provider::Provider;
 
     let spec = &config.defaults.model;
-    let (provider_id, _) = spec
-        .split_once(':')
-        .ok_or_else(|| ProviderBuildError::Config(format!("invalid model spec: {spec:?} (expected provider:model)")))?;
+    let (provider_id, _) = spec.split_once(':').ok_or_else(|| {
+        ProviderBuildError::Config(format!(
+            "invalid model spec: {spec:?} (expected provider:model)"
+        ))
+    })?;
 
     match provider_id {
         "anthropic" => {
             let api_key_env = &config.providers.anthropic.api_key_env;
-            let api_key = std::env::var(api_key_env)
-                .map_err(|_| ProviderBuildError::Auth(format!("missing API key: set {api_key_env} environment variable")))?;
+            let api_key = std::env::var(api_key_env).map_err(|_| {
+                ProviderBuildError::Auth(format!(
+                    "missing API key: set {api_key_env} environment variable"
+                ))
+            })?;
             let provider = AnthropicProvider::new(api_key, None);
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
-        other => Err(ProviderBuildError::Config(format!("unknown provider: {other}"))),
+        other => Err(ProviderBuildError::Config(format!(
+            "unknown provider: {other}"
+        ))),
     }
 }

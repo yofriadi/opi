@@ -176,7 +176,9 @@ impl AgentHooks for InteractiveCodingHooks {
     fn before_tool_call(
         &self,
         ctx: opi_agent::hooks::BeforeToolCallContext,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = opi_agent::hooks::BeforeToolCallResult> + Send>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = opi_agent::hooks::BeforeToolCallResult> + Send>,
+    > {
         use opi_agent::hooks::BeforeToolCallResult;
         let allow = self.allow_mutating || !Self::is_mutating_tool(&ctx.tool_name);
         Box::pin(async move {

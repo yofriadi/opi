@@ -303,9 +303,7 @@ async fn text_content_preserved_in_assistant_message() {
         provider: Box::new(provider),
         tools: vec![],
         messages: vec![AgentMessage::Llm(Message::User(UserMessage {
-            content: vec![InputContent::Text {
-                text: "Hi".into(),
-            }],
+            content: vec![InputContent::Text { text: "Hi".into() }],
             timestamp_ms: 0,
         }))],
         model: "mock-model".into(),
@@ -320,10 +318,9 @@ async fn text_content_preserved_in_assistant_message() {
     };
 
     let hooks = TestHooks;
-    let result =
-        opi_agent::agent_loop(context, config, &hooks, sink, CancellationToken::new())
-            .await
-            .unwrap();
+    let result = opi_agent::agent_loop(context, config, &hooks, sink, CancellationToken::new())
+        .await
+        .unwrap();
 
     // Find the assistant message
     let assistant = result
@@ -335,9 +332,9 @@ async fn text_content_preserved_in_assistant_message() {
         .expect("should have assistant message");
 
     // Verify text content is preserved
-    let has_text = assistant.content.iter().any(|c| {
-        matches!(c, opi_ai::message::AssistantContent::Text { text } if text.contains("Hello"))
-    });
+    let has_text = assistant.content.iter().any(
+        |c| matches!(c, opi_ai::message::AssistantContent::Text { text } if text.contains("Hello")),
+    );
     assert!(
         has_text,
         "assistant message must contain text, got: {:?}",
