@@ -6,7 +6,11 @@
 pub mod state;
 pub mod tool;
 pub mod transport;
+pub mod validation;
 
 pub use state::AgentState;
-pub use tool::{Error, Tool};
+pub use tool::{ExecutionMode, Tool, ToolError, ToolResult};
 pub use transport::Transport;
+
+// Re-export provider-facing types needed at the agent boundary.
+pub use opi_ai::message::ToolDef;
