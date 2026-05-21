@@ -1,0 +1,18 @@
+---
+source: crates/opi-tui/tests/markdown_snapshots.rs
+assertion_line: 68
+expression: "render(md, 120, 40)"
+---
+Getting Started
+
+Welcome to opi, your AI coding assistant.
+
+Features
+
+- Fast responses - Tool integration
+
+┌ bash ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│cargo install opi                                                                                                     │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Enjoy!

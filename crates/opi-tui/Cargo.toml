@@ -14,7 +14,6 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
-pulldown-cmark = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

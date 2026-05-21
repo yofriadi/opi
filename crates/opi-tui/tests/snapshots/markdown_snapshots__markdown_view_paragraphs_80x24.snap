@@ -1,0 +1,10 @@
+---
+source: crates/opi-tui/tests/markdown_snapshots.rs
+assertion_line: 52
+expression: "render(md, 80, 24)"
+---
+First paragraph here.
+
+Second paragraph with more text.
+
+Third one.

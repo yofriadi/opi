@@ -11,6 +11,7 @@ pub mod status_bar;
 pub mod tool_call;
 
 pub use editor::InputEditor;
+pub use markdown::{CodeBlock, MarkdownView};
 pub use message_list::MessageList;
 pub use render::Shell;
 pub use status_bar::StatusBar;
