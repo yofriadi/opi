@@ -3,14 +3,332 @@
 //! Provides the foundation for building specialized agents with pluggable
 //! tool systems and communication transports.
 
+pub mod event;
+pub mod hooks;
+pub mod loop_types;
+pub mod message;
 pub mod state;
 pub mod tool;
 pub mod transport;
 pub mod validation;
 
+pub use event::{AgentEvent, AgentEventSink};
+pub use hooks::AgentHooks;
+pub use loop_types::{AgentError, AgentLoopConfig, AgentLoopContext};
+pub use message::AgentMessage;
 pub use state::AgentState;
 pub use tool::{ExecutionMode, Tool, ToolError, ToolResult};
 pub use transport::Transport;
 
 // Re-export provider-facing types needed at the agent boundary.
 pub use opi_ai::message::ToolDef;
+
+use std::collections::HashMap;
+
+use futures_util::StreamExt;
+use hooks::{BeforeToolCallContext, BeforeToolCallResult};
+use opi_ai::message::{AssistantContent, Message, ToolResultMessage};
+use opi_ai::provider::Request;
+use serde_json::json;
+use tokio_util::sync::CancellationToken;
+
+/// Run the agent loop until completion or cancellation.
+///
+/// The loop iterates: provider request → stream response → detect tool calls
+/// → validate and execute tools → send tool results back → repeat until no
+/// tool calls or stop condition.
+pub async fn agent_loop(
+    context: AgentLoopContext,
+    config: AgentLoopConfig,
+    hooks: &dyn AgentHooks,
+    events: AgentEventSink,
+    cancel: CancellationToken,
+) -> Result<Vec<AgentMessage>, AgentError> {
+    let tools_map: HashMap<String, &dyn Tool> = context
+        .tools
+        .iter()
+        .map(|t| (t.definition().name.clone(), t.as_ref()))
+        .collect();
+    let tool_defs: Vec<_> = context.tools.iter().map(|t| t.definition()).collect();
+
+    let mut messages = context.messages;
+
+    events(AgentEvent::AgentStart);
+
+    let mut has_tools_pending;
+    for _turn in 0..config.max_turns {
+        if cancel.is_cancelled() {
+            events(AgentEvent::AgentEnd {
+                messages: messages.clone(),
+            });
+            return Err(AgentError::Cancelled);
+        }
+
+        events(AgentEvent::TurnStart);
+
+        // Convert messages for the provider
+        let llm_messages = hooks.convert_to_llm(&messages)?;
+
+        // Build the provider request
+        let request = Request {
+            model: context.model.clone(),
+            system: context.system.clone(),
+            messages: llm_messages,
+            tools: tool_defs.clone(),
+            max_tokens: config.max_tokens,
+            temperature: config.temperature,
+            thinking: Default::default(),
+            stop_sequences: vec![],
+            metadata: None,
+            cancel: cancel.clone(),
+        };
+
+        // Stream the response
+        let mut stream = context.provider.stream(request);
+        let mut assistant_content: Vec<AssistantContent> = Vec::new();
+        has_tools_pending = false;
+
+        while let Some(item) = stream.next().await {
+            if cancel.is_cancelled() {
+                events(AgentEvent::AgentEnd {
+                    messages: messages.clone(),
+                });
+                return Err(AgentError::Cancelled);
+            }
+
+            match item {
+                Ok(event) => {
+                    if let Some(msg) = process_stream_event(&event, &mut assistant_content, &events)
+                    {
+                        // Build the assistant message from accumulated content
+                        let mut assistant_msg = msg;
+                        assistant_msg.content = assistant_content.clone();
+                        let agent_msg = AgentMessage::Llm(Message::Assistant(assistant_msg));
+
+                        events(AgentEvent::MessageEnd {
+                            message: agent_msg.clone(),
+                        });
+
+                        messages.push(agent_msg.clone());
+
+                        // Check for tool calls
+                        let tool_calls: Vec<_> = assistant_content
+                            .iter()
+                            .filter_map(|c| match c {
+                                AssistantContent::ToolCall { tool_call } => Some(tool_call.clone()),
+                                _ => None,
+                            })
+                            .collect();
+
+                        if !tool_calls.is_empty() {
+                            has_tools_pending = true;
+                            let mut tool_results = Vec::new();
+                            for tc in &tool_calls {
+                                let args: serde_json::Value =
+                                    serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
+
+                                events(AgentEvent::ToolExecutionStart {
+                                    tool_call_id: tc.id.clone(),
+                                    tool_name: tc.name.clone(),
+                                    args: args.clone(),
+                                });
+
+                                let result = execute_tool(
+                                    &tc.id,
+                                    &tc.name,
+                                    &args,
+                                    &tools_map,
+                                    hooks,
+                                    &messages,
+                                    cancel.clone(),
+                                )
+                                .await;
+
+                                let is_error = result.is_error;
+
+                                events(AgentEvent::ToolExecutionEnd {
+                                    tool_call_id: tc.id.clone(),
+                                    tool_name: tc.name.clone(),
+                                    result: serde_json::json!(&result.content),
+                                    is_error,
+                                });
+
+                                let trm = ToolResultMessage {
+                                    tool_call_id: tc.id.clone(),
+                                    tool_name: tc.name.clone(),
+                                    content: result.content,
+                                    details: result.details,
+                                    is_error,
+                                    timestamp_ms: 0,
+                                };
+
+                                tool_results.push(trm.clone());
+                                messages.push(AgentMessage::Llm(Message::ToolResult(trm)));
+                            }
+
+                            events(AgentEvent::TurnEnd {
+                                message: agent_msg,
+                                tool_results,
+                            });
+
+                            // Check should_stop_after_turn
+                            let recent_trs: Vec<_> = messages
+                                .iter()
+                                .filter_map(|m| match m {
+                                    AgentMessage::Llm(Message::ToolResult(tr)) => Some(tr.clone()),
+                                    _ => None,
+                                })
+                                .collect();
+                            if hooks.should_stop_after_turn(&messages, &recent_trs).await {
+                                events(AgentEvent::AgentEnd {
+                                    messages: messages.clone(),
+                                });
+                                return Ok(messages);
+                            }
+
+                            // Break inner loop; outer for loop continues to next turn
+                            break;
+                        }
+
+                        // No tool calls — this turn is done
+                        events(AgentEvent::TurnEnd {
+                            message: agent_msg.clone(),
+                            tool_results: vec![],
+                        });
+
+                        let recent_trs: Vec<_> = messages
+                            .iter()
+                            .filter_map(|m| match m {
+                                AgentMessage::Llm(Message::ToolResult(tr)) => Some(tr.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        if hooks.should_stop_after_turn(&messages, &recent_trs).await {
+                            events(AgentEvent::AgentEnd {
+                                messages: messages.clone(),
+                            });
+                            return Ok(messages);
+                        }
+                    }
+                }
+                Err(e) => {
+                    events(AgentEvent::AgentEnd {
+                        messages: messages.clone(),
+                    });
+                    return Err(AgentError::Provider(e.to_string()));
+                }
+            }
+        }
+
+        // If no tools were executed this turn, the conversation is complete
+        if !has_tools_pending {
+            break;
+        }
+    }
+
+    events(AgentEvent::AgentEnd {
+        messages: messages.clone(),
+    });
+    Ok(messages)
+}
+
+/// Process a single stream event, updating content and emitting message events.
+/// Returns Some(AssistantMessage) when a terminal event is received.
+fn process_stream_event(
+    event: &opi_ai::stream::AssistantStreamEvent,
+    content: &mut Vec<AssistantContent>,
+    events: &AgentEventSink,
+) -> Option<opi_ai::message::AssistantMessage> {
+    use opi_ai::stream::AssistantStreamEvent::*;
+
+    match event {
+        Start { partial } => {
+            let msg = AgentMessage::Llm(Message::Assistant(partial.clone()));
+            events(AgentEvent::MessageStart { message: msg });
+            None
+        }
+        TextDelta { partial, .. } => {
+            let msg = AgentMessage::Llm(Message::Assistant(partial.clone()));
+            events(AgentEvent::MessageUpdate {
+                message: msg,
+                assistant_event: Box::new(event.clone()),
+            });
+            None
+        }
+        ToolCallEnd { tool_call, .. } => {
+            content.push(AssistantContent::ToolCall {
+                tool_call: tool_call.clone(),
+            });
+            None
+        }
+        Done { message, .. } => Some(message.clone()),
+        Error { message, .. } => Some(message.clone()),
+        _ => None,
+    }
+}
+
+/// Execute a single tool, with validation and hook integration.
+async fn execute_tool(
+    call_id: &str,
+    tool_name: &str,
+    args: &serde_json::Value,
+    tools_map: &HashMap<String, &dyn Tool>,
+    hooks: &dyn AgentHooks,
+    messages: &[AgentMessage],
+    cancel: CancellationToken,
+) -> ToolResult {
+    let tool = match tools_map.get(tool_name) {
+        Some(t) => *t,
+        None => {
+            return ToolResult {
+                content: vec![opi_ai::message::OutputContent::Text {
+                    text: format!("unknown tool: {tool_name}"),
+                }],
+                details: None,
+                is_error: true,
+                terminate: false,
+            };
+        }
+    };
+
+    // Validate arguments against schema
+    let schema = &tool.definition().input_schema;
+    if let Err(err) = validation::validate(schema, args) {
+        return ToolResult::from_validation_error(err);
+    }
+
+    // Run before_tool_call hook
+    let ctx = BeforeToolCallContext {
+        tool_call_id: call_id.to_owned(),
+        tool_name: tool_name.to_owned(),
+        args: args.clone(),
+        messages: messages.to_vec(),
+    };
+    match hooks.before_tool_call(ctx).await {
+        BeforeToolCallResult::Allow => {}
+        BeforeToolCallResult::Deny { reason } => {
+            return ToolResult {
+                content: vec![opi_ai::message::OutputContent::Text { text: reason }],
+                details: None,
+                is_error: true,
+                terminate: false,
+            };
+        }
+    }
+
+    // Execute the tool
+    match tool.execute(call_id, args.clone(), cancel, None).await {
+        Ok(result) => {
+            hooks.after_tool_call(call_id, tool_name, &result).await;
+            result
+        }
+        Err(e) => ToolResult {
+            content: vec![opi_ai::message::OutputContent::Text {
+                text: e.to_string(),
+            }],
+            details: None,
+            is_error: true,
+            terminate: false,
+        },
+    }
+}
