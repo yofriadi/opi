@@ -75,11 +75,9 @@ pub async fn run_interactive_tui(
             } => {
                 for content in &a.content {
                     match content {
-                        AssistantContent::Text { text } => {
-                            if !s.streaming_started {
-                                s.messages
-                                    .push(TuiMessage::new(TuiRole::Assistant, text.clone()));
-                            }
+                        AssistantContent::Text { text } if !s.streaming_started => {
+                            s.messages
+                                .push(TuiMessage::new(TuiRole::Assistant, text.clone()));
                         }
                         AssistantContent::ToolCall { tool_call } => {
                             s.active_tool = Some((
@@ -248,10 +246,8 @@ async fn tui_event_loop(
                     });
                     pending = Some(handle);
                 }
-                KeyCode::Char(c) => {
-                    if pending.is_none() {
-                        state.lock().unwrap().input_text.push(c);
-                    }
+                KeyCode::Char(c) if pending.is_none() => {
+                    state.lock().unwrap().input_text.push(c);
                 }
                 KeyCode::Backspace => {
                     if pending.is_none() {
