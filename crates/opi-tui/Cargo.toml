@@ -16,3 +16,6 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 pulldown-cmark = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
