@@ -150,6 +150,11 @@ impl Agent {
         self.cancel.cancel();
     }
 
+    /// Add an additional tool to the agent's tool set.
+    pub fn add_tool(&mut self, tool: Box<dyn Tool>) {
+        self.tools.push(Arc::from(tool));
+    }
+
     /// Register an event subscriber that receives all `AgentEvent`s.
     pub fn subscribe(&mut self, callback: EventSubscriber) {
         self.subscribers.lock().unwrap().push(callback);
