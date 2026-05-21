@@ -146,3 +146,50 @@ impl AgentHooks for CodingAgentHooks {
         Ok(result)
     }
 }
+
+/// Interactive hooks that deny mutating tools unless auto-allowed.
+pub struct InteractiveCodingHooks {
+    pub allow_mutating: bool,
+}
+
+impl InteractiveCodingHooks {
+    pub fn new(allow_mutating: bool) -> Self {
+        Self { allow_mutating }
+    }
+
+    fn is_mutating_tool(name: &str) -> bool {
+        matches!(name, "write" | "edit" | "bash")
+    }
+}
+
+impl AgentHooks for InteractiveCodingHooks {
+    fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
+        let mut result = Vec::new();
+        for msg in messages {
+            if let AgentMessage::Llm(m) = msg {
+                result.push(m.clone());
+            }
+        }
+        Ok(result)
+    }
+
+    fn before_tool_call(
+        &self,
+        ctx: opi_agent::hooks::BeforeToolCallContext,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = opi_agent::hooks::BeforeToolCallResult> + Send>> {
+        use opi_agent::hooks::BeforeToolCallResult;
+        let allow = self.allow_mutating || !Self::is_mutating_tool(&ctx.tool_name);
+        Box::pin(async move {
+            if allow {
+                BeforeToolCallResult::Allow
+            } else {
+                BeforeToolCallResult::Deny {
+                    reason: format!(
+                        "mutating tool '{}' blocked in interactive mode (use --allow-mutating to override)",
+                        ctx.tool_name
+                    ),
+                }
+            }
+        })
+    }
+}

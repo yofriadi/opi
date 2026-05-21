@@ -39,9 +39,15 @@ fn main() {
             rt.block_on(async { run_non_interactive(&cli, &config, &prompt_text).await });
         std::process::exit(exit_code);
     } else {
-        // Interactive mode (requires TTY — stub for now)
-        println!("opi {} - AI coding agent", env!("CARGO_PKG_VERSION"));
-        println!("(interactive mode not yet wired to TUI)");
+        // Interactive mode
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("opi: runtime error: {e}");
+                std::process::exit(1);
+            }
+        };
+        rt.block_on(async { run_interactive(&cli, &config).await });
     }
 }
 
@@ -100,6 +106,72 @@ async fn run_non_interactive(
     }
 
     result.exit_code
+}
+
+async fn run_interactive(
+    cli: &Cli,
+    config: &opi_coding_agent::config::OpiConfig,
+) {
+    use opi_coding_agent::harness::{CodingHarness, InteractiveCodingHooks};
+    use opi_agent::message::AgentMessage;
+    use opi_ai::message::{AssistantContent, Message};
+
+    let provider = match build_provider(config) {
+        Ok(p) => p,
+        Err(ProviderBuildError::Auth(msg)) => {
+            eprintln!("opi: {msg}");
+            std::process::exit(3);
+        }
+        Err(ProviderBuildError::Config(msg)) => {
+            eprintln!("opi: {msg}");
+            std::process::exit(2);
+        }
+    };
+
+    let allow_mutating = cli.allow_mutating || config.defaults.allow_mutating_tools;
+    let user_system_prompt = cli.system.as_ref().and_then(|path| {
+        std::fs::read_to_string(path).ok()
+    });
+
+    let hooks = Box::new(InteractiveCodingHooks::new(allow_mutating));
+    let mut harness = CodingHarness::new_with_hooks(
+        provider,
+        config.defaults.model.clone(),
+        config.clone(),
+        std::env::current_dir().unwrap_or_default(),
+        hooks,
+        user_system_prompt,
+    );
+
+    println!("opi {} - AI coding agent (type 'exit' to quit)", env!("CARGO_PKG_VERSION"));
+
+    let stdin = std::io::stdin();
+    loop {
+        eprint!("> ");
+        let mut input = String::new();
+        if stdin.read_line(&mut input).is_err() || input.trim() == "exit" {
+            break;
+        }
+        let prompt = input.trim().to_string();
+        if prompt.is_empty() {
+            continue;
+        }
+
+        match harness.prompt(&prompt).await {
+            Ok(messages) => {
+                for msg in &messages {
+                    if let AgentMessage::Llm(Message::Assistant(a)) = msg {
+                        for content in &a.content {
+                            if let AssistantContent::Text { text } = content {
+                                println!("{text}");
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => eprintln!("error: {e}"),
+        }
+    }
 }
 
 enum ProviderBuildError {
