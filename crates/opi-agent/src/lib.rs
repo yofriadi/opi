@@ -294,7 +294,18 @@ fn process_stream_event(
             events(AgentEvent::MessageStart { message: msg });
             None
         }
-        TextDelta { partial, .. } => {
+        TextDelta { delta, partial, .. } => {
+            // Accumulate text into content vector
+            match content.last_mut() {
+                Some(AssistantContent::Text { text }) => {
+                    text.push_str(delta);
+                }
+                _ => {
+                    content.push(AssistantContent::Text {
+                        text: delta.clone(),
+                    });
+                }
+            }
             let msg = AgentMessage::Llm(Message::Assistant(partial.clone()));
             events(AgentEvent::MessageUpdate {
                 message: msg,

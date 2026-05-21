@@ -286,3 +286,61 @@ async fn tool_use_turn_executes_tool_and_loops() {
         turn_starts
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test: text content is preserved in assistant messages
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn text_content_preserved_in_assistant_message() {
+    let response_events = test_support::text_response("Hello, world!");
+
+    let provider = MockProvider::new("mock", vec![response_events]);
+
+    let sink: AgentEventSink = Box::new(|_| {});
+
+    let context = AgentLoopContext {
+        provider: Box::new(provider),
+        tools: vec![],
+        messages: vec![AgentMessage::Llm(Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "Hi".into(),
+            }],
+            timestamp_ms: 0,
+        }))],
+        model: "mock-model".into(),
+        system: None,
+        steering_queue: None,
+        follow_up_queue: None,
+    };
+
+    let config = AgentLoopConfig {
+        max_turns: 10,
+        ..Default::default()
+    };
+
+    let hooks = TestHooks;
+    let result =
+        opi_agent::agent_loop(context, config, &hooks, sink, CancellationToken::new())
+            .await
+            .unwrap();
+
+    // Find the assistant message
+    let assistant = result
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::Llm(Message::Assistant(a)) => Some(a),
+            _ => None,
+        })
+        .expect("should have assistant message");
+
+    // Verify text content is preserved
+    let has_text = assistant.content.iter().any(|c| {
+        matches!(c, opi_ai::message::AssistantContent::Text { text } if text.contains("Hello"))
+    });
+    assert!(
+        has_text,
+        "assistant message must contain text, got: {:?}",
+        assistant.content
+    );
+}
