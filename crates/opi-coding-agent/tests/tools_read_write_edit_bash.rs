@@ -310,10 +310,11 @@ async fn edit_tool_safety_context_in_details() {
 async fn bash_tool_runs_command() {
     let dir = tempfile::tempdir().unwrap();
     let tool = BashTool::new(dir.path().to_path_buf());
+    let cmd = "echo hello";
     let result = tool
         .execute(
             "c11",
-            json!({ "command": "echo hello" }),
+            json!({ "command": cmd }),
             CancellationToken::new(),
             None,
         )
@@ -333,10 +334,15 @@ async fn bash_tool_runs_command() {
 async fn bash_tool_nonzero_exit_is_error() {
     let dir = tempfile::tempdir().unwrap();
     let tool = BashTool::new(dir.path().to_path_buf());
+    let cmd = if cfg!(windows) {
+        "cmd /C exit 1"
+    } else {
+        "exit 1"
+    };
     let result = tool
         .execute(
             "c12",
-            json!({ "command": "exit 1" }),
+            json!({ "command": cmd }),
             CancellationToken::new(),
             None,
         )
@@ -350,10 +356,15 @@ async fn bash_tool_nonzero_exit_is_error() {
 async fn bash_tool_timeout() {
     let dir = tempfile::tempdir().unwrap();
     let tool = BashTool::new(dir.path().to_path_buf());
+    let cmd = if cfg!(windows) {
+        "ping -n 30 127.0.0.1 >nul"
+    } else {
+        "sleep 30"
+    };
     let result = tool
         .execute(
             "c13",
-            json!({ "command": "sleep 30", "timeout_secs": 1 }),
+            json!({ "command": cmd, "timeout_secs": 1 }),
             CancellationToken::new(),
             None,
         )
@@ -373,13 +384,18 @@ async fn bash_tool_cancellation() {
     let dir = tempfile::tempdir().unwrap();
     let tool = BashTool::new(dir.path().to_path_buf());
     let token = CancellationToken::new();
+    let cmd = if cfg!(windows) {
+        "ping -n 30 127.0.0.1 >nul"
+    } else {
+        "sleep 30"
+    };
 
     let handle = {
         let token = token.clone();
         tokio::spawn(async move {
             tool.execute(
                 "c14",
-                json!({ "command": "sleep 30", "timeout_secs": 60 }),
+                json!({ "command": cmd, "timeout_secs": 60 }),
                 token,
                 None,
             )
@@ -399,10 +415,11 @@ async fn bash_tool_cancellation() {
 async fn bash_tool_cwd_reporting() {
     let dir = tempfile::tempdir().unwrap();
     let tool = BashTool::new(dir.path().to_path_buf());
+    let cmd = if cfg!(windows) { "cd" } else { "pwd" };
     let result = tool
         .execute(
             "c15",
-            json!({ "command": "pwd" }),
+            json!({ "command": cmd }),
             CancellationToken::new(),
             None,
         )
@@ -451,10 +468,11 @@ async fn bash_tool_safety_context_in_details() {
 async fn bash_tool_env_inheritance_reporting() {
     let dir = tempfile::tempdir().unwrap();
     let tool = BashTool::new(dir.path().to_path_buf());
+    let cmd = if cfg!(windows) { "set" } else { "env" };
     let result = tool
         .execute(
             "c17",
-            json!({ "command": "env" }),
+            json!({ "command": cmd }),
             CancellationToken::new(),
             None,
         )

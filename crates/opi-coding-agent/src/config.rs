@@ -70,12 +70,14 @@ pub struct ProvidersConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnthropicProviderConfig {
     pub api_key_env: String,
+    pub base_url: Option<String>,
 }
 
 impl Default for AnthropicProviderConfig {
     fn default() -> Self {
         Self {
             api_key_env: "ANTHROPIC_API_KEY".into(),
+            base_url: None,
         }
     }
 }
@@ -119,6 +121,7 @@ struct TomlProviders {
 #[serde(default)]
 struct TomlAnthropic {
     api_key_env: Option<String>,
+    base_url: Option<String>,
 }
 
 impl TomlConfig {
@@ -146,6 +149,9 @@ impl TomlConfig {
         }
         if let Some(v) = self.providers.anthropic.api_key_env {
             config.providers.anthropic.api_key_env = v;
+        }
+        if let Some(v) = self.providers.anthropic.base_url {
+            config.providers.anthropic.base_url = Some(v);
         }
     }
 }
@@ -231,11 +237,21 @@ pub fn resolve_config(source: ConfigSource) -> Result<OpiConfig, ConfigError> {
 
     // --config file overrides project and user config
     if let Some(config_path) = &source.config_path {
+        if !config_path.exists() {
+            return Err(ConfigError::Read {
+                path: config_path.clone(),
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "config file not found"),
+            });
+        }
         let cli_raw = load_raw_config(config_path)?;
         cli_raw.merge_into(&mut config);
     }
 
-    if let Some(env_model) = &source.env_model {
+    // Env model only applies when --config was NOT explicitly provided,
+    // so that an explicit config file's model takes precedence over env.
+    if source.config_path.is_none()
+        && let Some(env_model) = &source.env_model
+    {
         config.defaults.model = env_model.clone();
     }
 

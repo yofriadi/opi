@@ -4,6 +4,9 @@ use opi_coding_agent::cli::Cli;
 use opi_coding_agent::config::{ConfigSource, resolve_config};
 
 fn main() {
+    // Load .env if present (for local development/testing convenience).
+    dotenvy::dotenv().ok();
+
     let cli = Cli::parse();
 
     if cli.verbose {
@@ -39,7 +42,7 @@ fn main() {
             rt.block_on(async { run_non_interactive(&cli, &config, &prompt_text).await });
         std::process::exit(exit_code);
     } else {
-        // Interactive mode
+        // Interactive mode — use TUI
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
@@ -113,9 +116,8 @@ async fn run_non_interactive(
 }
 
 async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig) {
-    use opi_agent::message::AgentMessage;
-    use opi_ai::message::{AssistantContent, Message};
     use opi_coding_agent::harness::{CodingHarness, InteractiveCodingHooks};
+    use opi_coding_agent::interactive;
 
     let provider = match build_provider(config) {
         Ok(p) => p,
@@ -136,7 +138,7 @@ async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig
         .and_then(|path| std::fs::read_to_string(path).ok());
 
     let hooks = Box::new(InteractiveCodingHooks::new(allow_mutating));
-    let mut harness = CodingHarness::new_with_hooks(
+    let harness = CodingHarness::new_with_hooks(
         provider,
         config.defaults.model.clone(),
         config.clone(),
@@ -145,37 +147,10 @@ async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig
         user_system_prompt,
     );
 
-    println!(
-        "opi {} - AI coding agent (type 'exit' to quit)",
-        env!("CARGO_PKG_VERSION")
-    );
-
-    let stdin = std::io::stdin();
-    loop {
-        eprint!("> ");
-        let mut input = String::new();
-        if stdin.read_line(&mut input).is_err() || input.trim() == "exit" {
-            break;
-        }
-        let prompt = input.trim().to_string();
-        if prompt.is_empty() {
-            continue;
-        }
-
-        match harness.prompt(&prompt).await {
-            Ok(messages) => {
-                for msg in &messages {
-                    if let AgentMessage::Llm(Message::Assistant(a)) = msg {
-                        for content in &a.content {
-                            if let AssistantContent::Text { text } = content {
-                                println!("{text}");
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => eprintln!("error: {e}"),
-        }
+    let model_display = config.defaults.model.clone();
+    if let Err(e) = interactive::run_interactive_tui(harness, model_display).await {
+        eprintln!("opi: TUI error: {e}");
+        std::process::exit(1);
     }
 }
 
@@ -205,7 +180,8 @@ fn build_provider(
                     "missing API key: set {api_key_env} environment variable"
                 ))
             })?;
-            let provider = AnthropicProvider::new(api_key, None);
+            let base_url = config.providers.anthropic.base_url.clone();
+            let provider = AnthropicProvider::new(api_key, base_url);
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         other => Err(ProviderBuildError::Config(format!(

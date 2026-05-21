@@ -125,6 +125,11 @@ impl NonInteractiveRunner {
                 stderr: "cancelled".into(),
                 exit_code: ExitCode::Interrupted as i32,
             },
+            Err(AgentError::AuthFailed(e)) => NonInteractiveResult {
+                stdout: String::new(),
+                stderr: format!("authentication error: {e}"),
+                exit_code: ExitCode::AuthFailure as i32,
+            },
             Err(AgentError::Provider(e)) => NonInteractiveResult {
                 stdout: String::new(),
                 stderr: format!("provider error: {e}"),

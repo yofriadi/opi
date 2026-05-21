@@ -3,23 +3,38 @@
 //! DoD: "fixtures cover text, tool call, usage, error"
 //! All tests use fixture strings — no live provider calls (red flag #10).
 
-use opi_ai::anthropic::{AnthropicEvent, AnthropicMapper, parse_sse_events};
+use opi_ai::anthropic::{AnthropicEvent, AnthropicMapper, ParsedEvent, parse_sse_events};
 use opi_ai::message::AssistantContent;
 use opi_ai::provider::Provider;
 use opi_ai::stream::{AssistantStreamEvent, StopReason};
 
-/// Helper: parse fixture and map all events through a stateful mapper.
+/// Helper: parse fixture, extract valid events, and map through a stateful mapper.
 fn map_fixture(input: &str) -> Vec<AssistantStreamEvent> {
-    let events: Vec<AnthropicEvent> = parse_sse_events(input).collect();
+    let events: Vec<AnthropicEvent> = parse_sse_events(input)
+        .filter_map(|p| match p {
+            ParsedEvent::Valid(e) => Some(e),
+            ParsedEvent::Malformed { .. } => None,
+        })
+        .collect();
     let mut mapper = AnthropicMapper::new();
     events.into_iter().flat_map(|e| mapper.process(e)).collect()
+}
+
+/// Helper: collect valid AnthropicEvents from parsed output.
+fn collect_valid_events(input: &str) -> Vec<AnthropicEvent> {
+    parse_sse_events(input)
+        .filter_map(|p| match p {
+            ParsedEvent::Valid(e) => Some(e),
+            ParsedEvent::Malformed { .. } => None,
+        })
+        .collect()
 }
 
 // --- SSE Parsing Tests ---
 
 #[test]
 fn sse_parse_empty_input_yields_no_events() {
-    let events: Vec<AnthropicEvent> = parse_sse_events("").collect();
+    let events = collect_valid_events("");
     assert!(events.is_empty());
 }
 
@@ -29,7 +44,7 @@ fn sse_parse_single_event() {
 data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250514","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}
 
 "#;
-    let events: Vec<AnthropicEvent> = parse_sse_events(input).collect();
+    let events = collect_valid_events(input);
     assert_eq!(events.len(), 1);
     assert!(matches!(events[0], AnthropicEvent::MessageStart { .. }));
 }
@@ -37,14 +52,14 @@ data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"a
 #[test]
 fn sse_parse_ignores_comments() {
     let input = ": this is a comment\n\n";
-    let events: Vec<AnthropicEvent> = parse_sse_events(input).collect();
+    let events = collect_valid_events(input);
     assert!(events.is_empty());
 }
 
 #[test]
 fn sse_parse_skips_unknown_event_types() {
     let input = "event: ping\ndata: {}\n\nevent: done\ndata: [DONE]\n\n";
-    let events: Vec<AnthropicEvent> = parse_sse_events(input).collect();
+    let events = collect_valid_events(input);
     assert!(events.is_empty());
 }
 
@@ -77,7 +92,7 @@ data: {"type":"message_stop"}
 
 #[test]
 fn text_fixture_yields_all_events() {
-    let events: Vec<AnthropicEvent> = parse_sse_events(text_fixture()).collect();
+    let events = collect_valid_events(text_fixture());
     assert_eq!(events.len(), 7);
 }
 
@@ -162,7 +177,7 @@ data: {"type":"message_stop"}
 
 #[test]
 fn tool_call_fixture_yields_tool_events() {
-    let events: Vec<AnthropicEvent> = parse_sse_events(tool_call_fixture()).collect();
+    let events = collect_valid_events(tool_call_fixture());
     assert_eq!(events.len(), 6);
 }
 
@@ -248,7 +263,7 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}
 
 #[test]
 fn error_fixture_parsed_as_error() {
-    let events: Vec<AnthropicEvent> = parse_sse_events(error_fixture()).collect();
+    let events = collect_valid_events(error_fixture());
     assert!(matches!(events[0], AnthropicEvent::Error { .. }));
 }
 
@@ -355,4 +370,79 @@ fn mixed_fixture_produces_text_then_tool_call() {
     } else {
         panic!("expected Done event");
     }
+}
+
+// --- Malformed SSE Tests ---
+
+#[test]
+fn malformed_sse_data_produces_malformed_event() {
+    let input = r#"event: message_start
+data: {invalid json here}
+
+"#;
+    let parsed: Vec<_> = parse_sse_events(input).collect();
+    assert_eq!(parsed.len(), 1);
+    assert!(
+        matches!(&parsed[0], ParsedEvent::Malformed { event_type, .. } if event_type == "message_start"),
+        "expected Malformed event for invalid JSON data"
+    );
+}
+
+#[test]
+fn malformed_and_valid_events_coexist() {
+    let input = r#"event: message_start
+data: {bad json}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+    let parsed: Vec<_> = parse_sse_events(input).collect();
+    assert_eq!(parsed.len(), 2);
+    assert!(matches!(parsed[0], ParsedEvent::Malformed { .. }));
+    assert!(matches!(parsed[1], ParsedEvent::Valid(_)));
+}
+
+// --- CRLF SSE Tests ---
+
+#[test]
+fn sse_parse_handles_crlf_line_endings() {
+    // Simulate real HTTP SSE with CRLF line endings
+    let input = "event: message_start\r\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-5-20250514\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\r\n\r\n";
+
+    let events = collect_valid_events(input);
+    assert_eq!(events.len(), 1);
+    assert!(
+        matches!(events[0], AnthropicEvent::MessageStart { .. }),
+        "CRLF-delimited SSE should parse correctly"
+    );
+}
+
+#[test]
+fn sse_parse_handles_crlf_full_fixture() {
+    // Build a CRLF version of the text fixture
+    let lf_fixture = text_fixture();
+    let crlf_fixture = lf_fixture.replace('\n', "\r\n");
+
+    let events = collect_valid_events(&crlf_fixture);
+    assert_eq!(
+        events.len(),
+        7,
+        "CRLF fixture should parse same as LF fixture"
+    );
+}
+
+#[tokio::test]
+async fn drain_sse_events_handles_crlf_stream() {
+    // Build a CRLF SSE stream with event separator
+    let lf_input = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_crlf\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-5-20250514\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n";
+    let crlf_input = lf_input.replace('\n', "\r\n");
+
+    let provider = opi_ai::anthropic::AnthropicProvider::new("test-key".into(), None);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let mut stream = provider.stream_from_sse(&crlf_input, cancel);
+
+    use futures_util::StreamExt;
+    let first = stream.next().await.expect("should have an event");
+    assert!(first.is_ok(), "CRLF SSE should produce valid stream events");
 }

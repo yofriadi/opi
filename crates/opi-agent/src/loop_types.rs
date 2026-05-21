@@ -12,6 +12,8 @@ use opi_ai::provider::Provider;
 pub enum AgentError {
     #[error("provider error: {0}")]
     Provider(String),
+    #[error("authentication failed: {0}")]
+    AuthFailed(String),
     #[error("tool error: {0}")]
     Tool(String),
     #[error("hook error: {0}")]

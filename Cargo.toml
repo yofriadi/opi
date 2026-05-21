@@ -75,3 +75,7 @@ pulldown-cmark = "0.13"
 # testing
 tempfile = "3"
 insta = "1"
+wiremock = "0.6"
+
+# env loading
+dotenvy = "0.15"

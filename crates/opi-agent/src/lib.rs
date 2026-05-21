@@ -192,44 +192,54 @@ pub async fn agent_loop(
                                     messages.push(AgentMessage::Llm(Message::ToolResult(trm)));
                                 }
                             } else {
-                                // Parallel execution
-                                let futures: Vec<_> = tool_calls
+                                // Parallel execution — emit Start events before spawning
+                                let tc_args: Vec<_> = tool_calls
                                     .iter()
                                     .map(|tc| {
                                         let args: serde_json::Value =
                                             serde_json::from_str(&tc.arguments)
                                                 .unwrap_or(json!({}));
+                                        events(AgentEvent::ToolExecutionStart {
+                                            tool_call_id: tc.id.clone(),
+                                            tool_name: tc.name.clone(),
+                                            args: args.clone(),
+                                        });
+                                        (tc.clone(), args)
+                                    })
+                                    .collect();
+
+                                let futures: Vec<_> = tc_args
+                                    .iter()
+                                    .map(|(tc, args)| {
                                         let tools_map = &tools_map;
                                         let messages = &messages;
                                         let cancel = cancel.clone();
+                                        let tc_id = tc.id.clone();
+                                        let tc_name = tc.name.clone();
+                                        let args = args.clone();
                                         async move {
                                             let result = execute_tool(
-                                                &tc.id, &tc.name, &args, tools_map, hooks,
+                                                &tc_id, &tc_name, &args, tools_map, hooks,
                                                 messages, cancel,
                                             )
                                             .await;
-                                            (tc, args, result)
+                                            (tc_id, tc_name, result)
                                         }
                                     })
                                     .collect();
                                 let results = futures_util::future::join_all(futures).await;
-                                for (tc, args, result) in results {
-                                    events(AgentEvent::ToolExecutionStart {
-                                        tool_call_id: tc.id.clone(),
-                                        tool_name: tc.name.clone(),
-                                        args,
-                                    });
+                                for (tc_id, tc_name, result) in results {
                                     let is_error = result.is_error;
                                     terminate_flags.push(result.terminate);
                                     events(AgentEvent::ToolExecutionEnd {
-                                        tool_call_id: tc.id.clone(),
-                                        tool_name: tc.name.clone(),
+                                        tool_call_id: tc_id.clone(),
+                                        tool_name: tc_name.clone(),
                                         result: serde_json::json!(&result.content),
                                         is_error,
                                     });
                                     let trm = ToolResultMessage {
-                                        tool_call_id: tc.id.clone(),
-                                        tool_name: tc.name.clone(),
+                                        tool_call_id: tc_id,
+                                        tool_name: tc_name,
                                         content: result.content,
                                         details: result.details,
                                         is_error,
@@ -295,7 +305,12 @@ pub async fn agent_loop(
                     events(AgentEvent::AgentEnd {
                         messages: messages.clone(),
                     });
-                    return Err(AgentError::Provider(e.to_string()));
+                    return Err(match &e {
+                        opi_ai::provider::ProviderError::AuthFailed(msg) => {
+                            AgentError::AuthFailed(msg.clone())
+                        }
+                        _ => AgentError::Provider(e.to_string()),
+                    });
                 }
             }
         }
@@ -307,7 +322,11 @@ pub async fn agent_loop(
             messages: messages.clone(),
             turn: turn_idx + 1,
         };
-        if let Some(update) = hooks.prepare_next_turn(next_turn_ctx).await {
+        let mut hook_injected = false;
+        if let Some(update) = hooks.prepare_next_turn(next_turn_ctx).await
+            && !update.extra_messages.is_empty()
+        {
+            hook_injected = true;
             messages.extend(update.extra_messages);
         }
 
@@ -322,6 +341,11 @@ pub async fn agent_loop(
                 messages.push(user_text_message(msg));
             }
             continue; // next turn
+        }
+
+        // If hook injected messages, continue so they reach the provider
+        if hook_injected {
+            continue;
         }
 
         // If no tools pending (agent would stop), poll follow-up (one at a time)

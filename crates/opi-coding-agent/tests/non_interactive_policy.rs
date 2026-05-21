@@ -6,9 +6,17 @@
 //! Smoke addendum: "non-interactive mode refuses mutating tools (write, edit,
 //! bash) unless explicitly opted in via CLI flag or config"
 
+use std::path::PathBuf;
+
 use opi_ai::test_support::{self, MockProvider};
 use opi_coding_agent::config::OpiConfig;
 use opi_coding_agent::runner::{ExitCode, NonInteractiveRunner};
+
+fn temp_workspace() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("opi-policy-test-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
 
 // ---------------------------------------------------------------------------
 // Test 1: write tool is blocked by default
@@ -29,7 +37,7 @@ async fn policy_write_blocked_by_default() {
         Box::new(provider),
         "mock-model".into(),
         OpiConfig::default(),
-        std::env::current_dir().unwrap(),
+        temp_workspace(),
         false, // allow_mutating = false
         None,
     );
@@ -66,7 +74,7 @@ async fn policy_edit_blocked_by_default() {
         Box::new(provider),
         "mock-model".into(),
         OpiConfig::default(),
-        std::env::current_dir().unwrap(),
+        temp_workspace(),
         false,
         None,
     );
@@ -99,7 +107,7 @@ async fn policy_bash_blocked_by_default() {
         Box::new(provider),
         "mock-model".into(),
         OpiConfig::default(),
-        std::env::current_dir().unwrap(),
+        temp_workspace(),
         false,
         None,
     );
@@ -132,7 +140,7 @@ async fn policy_read_allowed_by_default() {
         Box::new(provider),
         "mock-model".into(),
         OpiConfig::default(),
-        std::env::current_dir().unwrap(),
+        temp_workspace(),
         false,
         None,
     );
@@ -157,11 +165,12 @@ async fn policy_all_tools_allowed_when_opted_in() {
 
     let provider = MockProvider::new("mock", vec![first, second]);
 
+    let workspace = temp_workspace();
     let mut runner = NonInteractiveRunner::new(
         Box::new(provider),
         "mock-model".into(),
         OpiConfig::default(),
-        std::env::current_dir().unwrap(),
+        workspace.clone(),
         true, // allow_mutating = true
         None,
     );
@@ -175,6 +184,8 @@ async fn policy_all_tools_allowed_when_opted_in() {
         "should not contain denial message when opted in, got: {:?}",
         result.stdout
     );
+    // Clean up written file
+    let _ = std::fs::remove_file(workspace.join("test.txt"));
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +203,7 @@ async fn policy_readonly_tools_always_allowed() {
         Box::new(provider),
         "mock-model".into(),
         OpiConfig::default(),
-        std::env::current_dir().unwrap(),
+        temp_workspace(),
         false,
         None,
     );

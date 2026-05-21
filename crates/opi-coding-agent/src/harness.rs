@@ -116,6 +116,11 @@ impl CodingHarness {
         self.agent.abort();
     }
 
+    /// Return a clonable cancellation token for external cancellation.
+    pub fn cancel_token(&self) -> tokio_util::sync::CancellationToken {
+        self.agent.cancel_token()
+    }
+
     fn build_tools(workspace_root: &Path) -> Vec<Box<dyn Tool>> {
         vec![
             Box::new(ReadTool::new(workspace_root.to_path_buf())),

@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod config;
 pub mod harness;
+pub mod interactive;
 pub mod policy;
 pub mod prompt;
 pub mod runner;

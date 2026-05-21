@@ -313,3 +313,132 @@ fn malformed_project_config_is_error() {
         "malformed project config should be an error"
     );
 }
+
+// ---------------------------------------------------------------------------
+// --config with non-existent file is an error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn explicit_config_path_nonexistent_is_error() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let result = resolve_config(ConfigSource {
+        cli_model: None,
+        config_path: Some(temp.path().join("does_not_exist.toml")),
+        env_model: None,
+        project_dir: None,
+        user_config_path: None,
+    });
+
+    assert!(
+        result.is_err(),
+        "explicit --config with non-existent file should be an error"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("not found") || err.to_string().contains("config"),
+        "error message should indicate file not found, got: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// --config file loads and takes effect
+// ---------------------------------------------------------------------------
+
+#[test]
+fn explicit_config_path_overrides_project() {
+    let temp = tempfile::tempdir().unwrap();
+
+    write_config(
+        temp.path(),
+        "project/.opi/config.toml",
+        r#"
+[defaults]
+model = "project-model"
+"#,
+    );
+
+    let config_path = write_config(
+        temp.path(),
+        "cli_config.toml",
+        r#"
+[defaults]
+model = "cli-config-model"
+"#,
+    );
+
+    let config = resolve_config(ConfigSource {
+        cli_model: None,
+        config_path: Some(config_path),
+        env_model: None,
+        project_dir: Some(project_dir(temp.path())),
+        user_config_path: None,
+    })
+    .unwrap();
+
+    assert_eq!(config.defaults.model, "cli-config-model");
+}
+
+// ---------------------------------------------------------------------------
+// --config model is NOT overridden by OPI_MODEL
+// ---------------------------------------------------------------------------
+
+#[test]
+fn explicit_config_model_not_overridden_by_env() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let config_path = write_config(
+        temp.path(),
+        "cli_config.toml",
+        r#"
+[defaults]
+model = "config-model"
+"#,
+    );
+
+    let config = resolve_config(ConfigSource {
+        cli_model: None,
+        config_path: Some(config_path),
+        env_model: Some("env-model".into()),
+        project_dir: None,
+        user_config_path: None,
+    })
+    .unwrap();
+
+    assert_eq!(
+        config.defaults.model, "config-model",
+        "--config model should not be overridden by OPI_MODEL"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// --model still overrides --config model
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_model_overrides_explicit_config() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let config_path = write_config(
+        temp.path(),
+        "cli_config.toml",
+        r#"
+[defaults]
+model = "config-model"
+"#,
+    );
+
+    let config = resolve_config(ConfigSource {
+        cli_model: Some("cli-model".into()),
+        config_path: Some(config_path),
+        env_model: Some("env-model".into()),
+        project_dir: None,
+        user_config_path: None,
+    })
+    .unwrap();
+
+    assert_eq!(
+        config.defaults.model, "cli-model",
+        "--model should override --config and env"
+    );
+}

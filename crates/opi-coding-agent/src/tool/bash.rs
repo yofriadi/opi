@@ -68,10 +68,15 @@ impl Tool for BashTool {
         let cwd = self.workspace_root.clone();
         let workspace_root = self.workspace_root.clone();
         Box::pin(async move {
-            let child = tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .current_dir(&cwd)
+            let (program, args) = if cfg!(windows) {
+                ("cmd".to_string(), vec!["/C", &command])
+            } else {
+                ("sh".to_string(), vec!["-c", &command])
+            };
+
+            let mut cmd = tokio::process::Command::new(&program);
+            cmd.args(&args).current_dir(&cwd);
+            let child = cmd
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .spawn();

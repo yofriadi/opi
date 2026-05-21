@@ -83,6 +83,7 @@ impl Tool for ReadTool {
 
             let lines: Vec<&str> = content.lines().collect();
             let offset = args.offset.unwrap_or(1).saturating_sub(1);
+            let offset = offset.min(lines.len());
             let selected: Vec<&str> = if let Some(limit) = args.limit {
                 lines[offset..].iter().take(limit).copied().collect()
             } else {

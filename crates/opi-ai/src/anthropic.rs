@@ -1,6 +1,6 @@
 //! Anthropic Messages SSE provider (S8.1).
 
-use futures_util::stream;
+use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
@@ -29,20 +29,36 @@ struct SseFrame {
     data: String,
 }
 
+/// Parsed result for a single SSE frame — either a valid event or a parse error.
+pub enum ParsedEvent {
+    Valid(AnthropicEvent),
+    Malformed {
+        event_type: String,
+        data: String,
+        error: String,
+    },
+}
+
 /// Parse SSE text into frames, then deserialize each frame as an AnthropicEvent.
-pub fn parse_sse_events(input: &str) -> impl Iterator<Item = AnthropicEvent> + '_ {
+/// Returns [`ParsedEvent`] so callers can decide how to handle malformed data.
+pub fn parse_sse_events(input: &str) -> impl Iterator<Item = ParsedEvent> + '_ {
     parse_frames(input).filter_map(|frame| {
         if !ANTHROPIC_EVENTS.contains(&frame.event.as_str()) {
             return None;
         }
-        serde_json::from_str::<AnthropicRawEvent>(&frame.data)
-            .ok()
-            .map(AnthropicEvent::from_raw)
+        match serde_json::from_str::<AnthropicRawEvent>(&frame.data) {
+            Ok(raw) => Some(ParsedEvent::Valid(AnthropicEvent::from_raw(raw))),
+            Err(e) => Some(ParsedEvent::Malformed {
+                event_type: frame.event.clone(),
+                data: frame.data.clone(),
+                error: e.to_string(),
+            }),
+        }
     })
 }
 
 fn parse_frames(input: &str) -> impl Iterator<Item = SseFrame> + '_ {
-    let mut lines = input.split("\n").peekable();
+    let mut lines = input.split('\n').peekable();
     std::iter::from_fn(move || {
         let mut event = None;
         let mut data_parts: Vec<&str> = Vec::new();
@@ -50,7 +66,7 @@ fn parse_frames(input: &str) -> impl Iterator<Item = SseFrame> + '_ {
         loop {
             match lines.next() {
                 Some(line) if line.starts_with(':') => continue,
-                Some("") => {
+                Some(line) if line.trim_end_matches('\r').is_empty() => {
                     if event.is_some() || !data_parts.is_empty() {
                         return Some(SseFrame {
                             event: event.take().unwrap_or_else(|| "message".into()),
@@ -60,6 +76,7 @@ fn parse_frames(input: &str) -> impl Iterator<Item = SseFrame> + '_ {
                     continue;
                 }
                 Some(line) => {
+                    let line = line.trim_end_matches('\r');
                     let (field, value) = if let Some(idx) = line.find(':') {
                         let v = if line.get(idx + 1..idx + 2) == Some(" ") {
                             &line[idx + 2..]
@@ -603,8 +620,13 @@ impl AnthropicProvider {
 
     /// Build the Anthropic Messages API request body.
     pub fn build_request_body(&self, request: &Request) -> serde_json::Value {
+        let model_id = request
+            .model
+            .split_once(':')
+            .map(|(_, id)| id)
+            .unwrap_or(&request.model);
         let mut body = serde_json::json!({
-            "model": request.model,
+            "model": model_id,
             "stream": true,
             "messages": serialize_messages(&request.messages),
         });
@@ -657,16 +679,155 @@ impl AnthropicProvider {
 
     /// Stream events from a raw SSE response body.
     pub fn stream_from_sse(&self, sse_body: &str, cancel: CancellationToken) -> EventStream {
-        let events: Vec<AnthropicEvent> = parse_sse_events(sse_body).collect();
         let mut mapper = AnthropicMapper::new();
-        let stream_events: Vec<Result<AssistantStreamEvent, ProviderError>> = events
-            .into_iter()
-            .flat_map(|e| mapper.process(e))
-            .map(Ok)
-            .collect();
+        let mut stream_events: Vec<Result<AssistantStreamEvent, ProviderError>> = Vec::new();
+        for parsed in parse_sse_events(sse_body) {
+            match parsed {
+                ParsedEvent::Valid(event) => {
+                    stream_events.extend(mapper.process(event).into_iter().map(Ok));
+                }
+                ParsedEvent::Malformed {
+                    event_type, error, ..
+                } => {
+                    stream_events.push(Err(ProviderError::StreamError(format!(
+                        "malformed SSE event '{event_type}': {error}"
+                    ))));
+                }
+            }
+        }
 
         let _cancel = cancel; // used by the real HTTP path
         Box::pin(stream::iter(stream_events))
+    }
+
+    /// Real HTTP streaming: POST to Anthropic Messages API and parse SSE from the byte stream.
+    async fn stream_http(
+        api_key: String,
+        base_url: String,
+        body: &serde_json::Value,
+        cancel: CancellationToken,
+        tx: &tokio::sync::mpsc::Sender<Result<AssistantStreamEvent, ProviderError>>,
+    ) -> Result<(), ProviderError> {
+        let client = reqwest::Client::new();
+        let response = client
+            .post(format!("{base_url}/v1/messages"))
+            .header("x-api-key", &api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .body(serde_json::to_string(body).unwrap_or_default())
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(map_http_status(status, &error_body));
+        }
+
+        let mut byte_stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut mapper = AnthropicMapper::new();
+
+        loop {
+            let chunk = tokio::select! {
+                _ = cancel.cancelled() => {
+                    return Ok(());
+                }
+                chunk = byte_stream.next() => {
+                    match chunk {
+                        Some(c) => c,
+                        None => break, // stream ended
+                    }
+                }
+            };
+
+            let chunk = chunk.map_err(|e| ProviderError::StreamError(e.to_string()))?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            for parsed in drain_sse_events(&mut buffer) {
+                match parsed {
+                    ParsedEvent::Valid(event) => {
+                        for stream_event in mapper.process(event) {
+                            if tx.send(Ok(stream_event)).await.is_err() {
+                                return Ok(()); // receiver dropped
+                            }
+                        }
+                    }
+                    ParsedEvent::Malformed {
+                        event_type, error, ..
+                    } => {
+                        let err = ProviderError::StreamError(format!(
+                            "malformed SSE event '{event_type}': {error}"
+                        ));
+                        if tx.send(Err(err)).await.is_err() {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Stream ended without a terminal event — surface as provider protocol error
+        if !mapper.saw_done {
+            let err = ProviderError::StreamError(
+                "stream ended without a terminal event (message_stop or error)".into(),
+            );
+            let _ = tx.send(Err(err)).await;
+        }
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming helpers
+// ---------------------------------------------------------------------------
+
+/// Wrapper to adapt `tokio::sync::mpsc::Receiver` to `futures_core::Stream`.
+struct ReceiverStream {
+    rx: tokio::sync::mpsc::Receiver<Result<AssistantStreamEvent, ProviderError>>,
+}
+
+impl futures_core::Stream for ReceiverStream {
+    type Item = Result<AssistantStreamEvent, ProviderError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.rx.poll_recv(cx)
+    }
+}
+
+/// Drain complete SSE events from a growing buffer.
+/// Returns parsed [`ParsedEvent`]s and leaves incomplete data in the buffer.
+/// Normalizes CRLF (`\r\n`) to LF (`\n`) to handle real-world HTTP SSE streams.
+fn drain_sse_events(buffer: &mut String) -> Vec<ParsedEvent> {
+    // Normalize CRLF to LF for consistent delimiter detection
+    if buffer.contains('\r') {
+        *buffer = buffer.replace("\r\n", "\n").replace('\r', "\n");
+    }
+
+    let mut events = Vec::new();
+    while let Some(idx) = buffer.find("\n\n") {
+        let end = idx + 2;
+        let chunk: String = buffer.drain(..end).collect();
+        events.extend(parse_sse_events(&chunk));
+    }
+    events
+}
+
+/// Map an HTTP status code + body to a `ProviderError`.
+fn map_http_status(status: reqwest::StatusCode, body: &str) -> ProviderError {
+    match status.as_u16() {
+        401 => ProviderError::AuthFailed(format!("authentication failed: {body}")),
+        403 => ProviderError::AuthFailed(format!("access denied: {body}")),
+        429 => ProviderError::RateLimited {
+            retry_after_ms: None,
+        },
+        408 | 504 => ProviderError::Timeout,
+        code => ProviderError::RequestFailed(format!("HTTP {code}: {body}")),
     }
 }
 
@@ -698,6 +859,8 @@ fn serialize_messages(messages: &[crate::message::Message]) -> serde_json::Value
                             AssistantContent::ToolCall { tool_call } => {
                                 let input: serde_json::Value =
                                     serde_json::from_str(&tool_call.arguments)
+                                        .ok()
+                                        .filter(|v: &serde_json::Value| v.is_object())
                                         .unwrap_or(serde_json::json!({}));
                                 serde_json::json!({
                                     "type": "tool_use",
@@ -732,8 +895,20 @@ fn serialize_messages(messages: &[crate::message::Message]) -> serde_json::Value
 
 impl Provider for AnthropicProvider {
     fn stream(&self, request: Request) -> EventStream {
-        let sse_body = String::new(); // placeholder — real HTTP flow will come later
-        self.stream_from_sse(&sse_body, request.cancel)
+        let api_key = self.api_key.clone();
+        let base_url = self.base_url.clone();
+        let body = self.build_request_body(&request);
+        let cancel = request.cancel.clone();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+
+        tokio::spawn(async move {
+            if let Err(e) = Self::stream_http(api_key, base_url, &body, cancel, &tx).await {
+                let _ = tx.send(Err(e)).await;
+            }
+        });
+
+        Box::pin(ReceiverStream { rx })
     }
 
     fn id(&self) -> &str {
@@ -796,5 +971,36 @@ mod tests {
         let input = &serialized[0]["content"][0]["input"];
         assert!(input.is_object());
         assert_eq!(input.as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn serialize_tool_call_non_object_json_defaults_to_empty_object() {
+        for (label, args) in [
+            ("null", "null"),
+            ("array", "[1,2]"),
+            ("string", r#""hello""#),
+            ("number", "42"),
+            ("boolean", "true"),
+        ] {
+            let msg = test_assistant_msg(vec![AssistantContent::ToolCall {
+                tool_call: ToolCall {
+                    id: "tc".into(),
+                    name: "test".into(),
+                    arguments: args.into(),
+                },
+            }]);
+
+            let serialized = serialize_messages(&[msg]);
+            let input = &serialized[0]["content"][0]["input"];
+            assert!(
+                input.is_object(),
+                "{label}: input must be JSON object, got: {input}"
+            );
+            assert_eq!(
+                input.as_object().unwrap().len(),
+                0,
+                "{label}: input should be empty object"
+            );
+        }
     }
 }
