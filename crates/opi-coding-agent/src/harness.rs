@@ -33,6 +33,23 @@ impl CodingHarness {
         config: OpiConfig,
         workspace_root: PathBuf,
     ) -> Self {
+        Self::new_with_hooks(
+            provider,
+            model,
+            config,
+            workspace_root,
+            Box::new(CodingAgentHooks),
+        )
+    }
+
+    /// Create a new harness with custom hooks.
+    pub fn new_with_hooks(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        hooks: Box<dyn AgentHooks>,
+    ) -> Self {
         let tools = Self::build_tools(&workspace_root);
         let tool_defs: Vec<_> = tools.iter().map(|t| t.definition()).collect();
         let system_prompt = SystemPromptBuilder::new().tools(tool_defs).build();
@@ -42,7 +59,6 @@ impl CodingHarness {
             ..Default::default()
         };
 
-        let hooks = Box::new(CodingAgentHooks);
         let agent = Agent::new(
             provider,
             tools,
@@ -87,6 +103,11 @@ impl CodingHarness {
     /// Return a reference to the config.
     pub fn config(&self) -> &OpiConfig {
         &self.config
+    }
+
+    /// Cancel the running operation.
+    pub fn cancel(&self) {
+        self.agent.abort();
     }
 
     fn build_tools(workspace_root: &Path) -> Vec<Box<dyn Tool>> {

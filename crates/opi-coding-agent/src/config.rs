@@ -29,6 +29,7 @@ pub struct DefaultsConfig {
     pub max_iterations: u32,
     pub tool_timeout_ms: u64,
     pub theme: String,
+    pub allow_mutating_tools: bool,
 }
 
 impl Default for DefaultsConfig {
@@ -38,6 +39,7 @@ impl Default for DefaultsConfig {
             max_iterations: 50,
             tool_timeout_ms: 30_000,
             theme: "default".into(),
+            allow_mutating_tools: false,
         }
     }
 }
@@ -97,6 +99,7 @@ struct TomlDefaults {
     max_iterations: Option<u32>,
     tool_timeout_ms: Option<u64>,
     theme: Option<String>,
+    allow_mutating_tools: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -131,6 +134,9 @@ impl TomlConfig {
         }
         if let Some(v) = self.defaults.theme {
             config.defaults.theme = v;
+        }
+        if let Some(v) = self.defaults.allow_mutating_tools {
+            config.defaults.allow_mutating_tools = v;
         }
         if let Some(v) = self.thinking.enabled {
             config.thinking.enabled = v;

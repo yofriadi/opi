@@ -24,6 +24,10 @@ pub struct Cli {
     #[arg(long)]
     pub non_interactive: bool,
 
+    /// Allow mutating tools (write, edit, bash) in non-interactive mode.
+    #[arg(long)]
+    pub allow_mutating: bool,
+
     /// Enable debug tracing.
     #[arg(short = 'v', long)]
     pub verbose: bool,
