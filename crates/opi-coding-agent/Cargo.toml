@@ -1,6 +1,6 @@
 [package]
 name = "opi-coding-agent"
-description = "Interactive coding agent CLI with file editing, shell execution, and session management"
+description = "Interactive coding agent CLI with file editing and shell execution"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true

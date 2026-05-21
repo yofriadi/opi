@@ -4,9 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi) — an AI agent toolkit. Currently in scaffolding phase: every crate exposes its module structure but contains stub implementations. New work fills in those stubs rather than redesigning the layout.
+`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi) — an AI agent toolkit. Phase 1 MVP shipped in v0.2.0: a functional Anthropic-based coding assistant with six tools, a ratatui TUI, TOML config, and 248 integration/unit tests. New work extends this foundation rather than redesigning the layout.
 
 Repository: https://github.com/OdradekAI/opi
+
+## Conversational style
+
+- Keep answers short and concise.
+- No emojis in commits, issues, PR comments, or code.
+- No fluff or cheerful filler text.
+- Technical prose only — be kind but direct.
+- When the user asks a question, answer it first before making edits or running commands.
+
+## Code quality
+
+- Read files in full before making wide-ranging changes, before editing files you have not already fully inspected, and when the user asks you to investigate or audit something. Do not rely only on search snippets for broad changes.
+- Always ask before removing functionality or code that appears to be intentional.
+- Do not preserve backward compatibility unless the user explicitly asks for it.
+- Avoid `unsafe` unless absolutely necessary; prefer safe abstractions.
+- Prefer `thiserror` for library error types, `anyhow` only in binary/test code.
+- Use workspace dependencies — never add a version directly to a crate's `Cargo.toml` if it can go through `[workspace.dependencies]`.
+- Trait objects (`Box<dyn T>`) are fine at crate boundaries; prefer generics within a crate when the concrete type is known at compile time.
+- Match the existing module's style: if a file uses `thiserror`, don't switch to manual `impl Display + Error`.
 
 ## Workspace layout
 
@@ -24,11 +43,34 @@ The dependency order above is also the **crates.io publish order** (see the `opi
 
 When publishing internal crates, the `path` dependencies MUST also carry a `version` field — bare path deps cannot be published to crates.io. The release skill manages this.
 
+## Architecture
+
+The `opi` binary (`opi-coding-agent`) has two modes selected at startup:
+
+- **Non-interactive** (non-empty positional `[PROMPT]...`, or `--non-interactive`): builds a provider, runs `NonInteractiveRunner::run()`, prints output, exits.
+- **Interactive** (default, no prompt args): builds a `CodingHarness` with `InteractiveCodingHooks`, launches the ratatui-based TUI via `interactive::run_interactive_tui()`.
+
+Both modes use the same core loop from `opi-agent`:
+
+```
+agent_loop() → stream provider response → detect tool calls → validate schema
+→ run before_tool_call hook → execute tools (parallel or sequential) → run
+after_tool_call hook → check should_stop_after_turn → poll steering/follow-up
+queues → repeat
+```
+
+Key abstractions in `opi-agent`:
+- **`AgentHooks`** trait — 6 hook methods: `transform_context`, `convert_to_llm`, `before_tool_call`, `after_tool_call`, `should_stop_after_turn`, `prepare_next_turn`.
+- **`Tool`** trait — `definition()` returns JSON schema, `execute()` runs the tool, `execution_mode()` controls parallel vs sequential batching.
+- **`Transport`** trait — abstraction over stdio/SSE for MCP-style tool servers.
+
+Config resolution (model): `--model` > `OPI_MODEL` (only when `--config` was not passed) > `--config` file > project `.opi/config.toml` > user config > built-in defaults. TOML layers merge user → project → `--config`. Model specs use `provider:model` format (e.g. `anthropic:claude-sonnet-4`).
+
 ## Edition
 
 Workspace is on **Rust edition 2024**, so a recent stable toolchain is required (the edition gained stable support in Rust 1.85+).
 
-## Common commands
+## Commands
 
 ```sh
 # Build everything
@@ -36,7 +78,7 @@ cargo build
 cargo build --release
 
 # Run the CLI binary
-cargo run -p opi-coding-agent             # → prints "opi - AI coding agent"
+cargo run -p opi-coding-agent             # interactive TUI
 cargo run -p opi-coding-agent -- --version
 
 # Tests
@@ -44,7 +86,7 @@ cargo test --workspace --all-targets
 cargo test -p opi-ai                      # single crate
 cargo test -p opi-ai -- some_test_name    # single test
 
-# Lint & format (these are the gates the release skill enforces)
+# Lint & format (these are the gates CI and the release skill enforce)
 cargo fmt --all
 cargo fmt --check --all
 cargo clippy --workspace --all-targets -- -D warnings
@@ -52,6 +94,85 @@ cargo clippy --workspace --all-targets -- -D warnings
 # Docs with warnings-as-errors (release gate)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
+
+After code changes (not documentation-only): run `cargo clippy --workspace --all-targets -- -D warnings` and fix all warnings before committing.
+
+If you create or modify a test file, you MUST run that test and iterate until it passes.
+
+## Testing
+
+- Tests live in `crates/<crate>/tests/` (integration) and inline `#[cfg(test)]` modules (unit).
+- Use `opi_ai::test_support::MockProvider` for agent/harness integration tests — never hit a real LLM API or require API keys in tests.
+- For tool tests that touch the filesystem, use `tempfile::tempdir()` and build fixtures in the temp directory.
+- Run the relevant test after writing it: `cargo test -p <crate> -- <test_name>`.
+
+## Git rules
+
+### Committing
+
+- **NEVER commit unless the user asks.**
+- ONLY commit files YOU changed in THIS session.
+- NEVER use `git add -A` or `git add .` — these sweep up changes from other agents or unrelated working-tree state.
+- ALWAYS use `git add <specific-file-paths>` listing only files you modified.
+- Before committing, run `git status` and verify you are only staging YOUR files.
+- Always include `fixes #<number>` or `closes #<number>` in the commit message when there is a related issue.
+
+### Forbidden git operations
+
+These commands can destroy work:
+
+- `git reset --hard` — destroys uncommitted changes
+- `git checkout .` — destroys uncommitted changes
+- `git clean -fd` — deletes untracked files
+- `git stash` — stashes ALL changes including other agents' work
+- `git add -A` / `git add .` — stages other agents' uncommitted work
+- `git commit --no-verify` — bypasses required hooks and is never allowed
+- `git push --force` — can overwrite shared history
+
+### Safe workflow
+
+```bash
+# 1. Check status
+git status
+
+# 2. Add ONLY your specific files
+git add crates/opi-ai/src/anthropic.rs
+git add crates/opi-ai/tests/anthropic_test.rs
+
+# 3. Commit (Conventional Commits format)
+git commit -m "fix(opi-ai): handle CRLF in SSE parser"
+
+# 4. Push (pull --rebase if needed, but NEVER reset/checkout)
+git pull --rebase && git push
+```
+
+### If rebase conflicts occur
+
+- Resolve conflicts in YOUR files only.
+- If conflict is in a file you didn't modify, abort and ask the user.
+- NEVER force push.
+
+## PR workflow
+
+- Analyze PRs without pulling locally first.
+- We work in feature branches until everything meets requirements, then merge into main and push.
+- You never open PRs yourself unless the user explicitly asks.
+
+## Changelog
+
+Location: `CHANGELOG.md` at the repo root (single changelog for the whole workspace).
+
+Format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with sections:
+- `### Breaking Changes`
+- `### Added`
+- `### Changed`
+- `### Fixed`
+- `### Removed`
+
+Rules:
+- New entries ALWAYS go under `## [Unreleased]` (create this section if it doesn't exist).
+- NEVER modify already-released version sections.
+- Each released version section is immutable.
 
 ## Releasing
 
@@ -77,3 +198,7 @@ Two GitHub Actions workflows in `.github/workflows/`:
 - Conventional Commits drive changelog categorization (`feat:` → Added, `fix:` → Fixed, `feat!:`/`BREAKING CHANGE` → Breaking Changes).
 - Each crate's `description`, `license`, and `repository` come from the workspace — don't duplicate them per crate.
 - The CLI binary is named `opi` (defined by `[[bin]]` in `crates/opi-coding-agent/Cargo.toml`), not `opi-coding-agent`.
+
+## User override
+
+If the user's instructions conflict with rules set out here, ask for confirmation that they want to override the rules. Only then execute their instructions.
