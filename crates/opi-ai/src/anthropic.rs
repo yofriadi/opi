@@ -696,11 +696,14 @@ fn serialize_messages(messages: &[crate::message::Message]) -> serde_json::Value
                                 serde_json::json!({"type": "text", "text": text})
                             }
                             AssistantContent::ToolCall { tool_call } => {
+                                let input: serde_json::Value =
+                                    serde_json::from_str(&tool_call.arguments)
+                                        .unwrap_or(serde_json::json!({}));
                                 serde_json::json!({
                                     "type": "tool_use",
                                     "id": tool_call.id,
                                     "name": tool_call.name,
-                                    "input": tool_call.arguments,
+                                    "input": input,
                                 })
                             }
                             AssistantContent::Thinking { thinking } => {
@@ -739,5 +742,59 @@ impl Provider for AnthropicProvider {
 
     fn models(&self) -> &[ModelInfo] {
         &self.models
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::{AssistantContent, AssistantMessage, Message, ToolCall};
+    use crate::stream::{StopReason, Usage};
+
+    fn test_assistant_msg(content: Vec<AssistantContent>) -> Message {
+        Message::Assistant(AssistantMessage {
+            content,
+            api: crate::ApiKind::Anthropic,
+            provider: String::new(),
+            model: String::new(),
+            response_model: None,
+            response_id: None,
+            usage: Usage::default(),
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            timestamp_ms: 0,
+        })
+    }
+
+    #[test]
+    fn serialize_tool_call_input_is_json_object() {
+        let msg = test_assistant_msg(vec![AssistantContent::ToolCall {
+            tool_call: ToolCall {
+                id: "tc_1".into(),
+                name: "read".into(),
+                arguments: r#"{"path":"/tmp/foo.txt"}"#.into(),
+            },
+        }]);
+
+        let serialized = serialize_messages(&[msg]);
+        let input = &serialized[0]["content"][0]["input"];
+        assert!(input.is_object(), "input must be JSON object, got: {input}");
+        assert_eq!(input["path"], "/tmp/foo.txt");
+    }
+
+    #[test]
+    fn serialize_tool_call_malformed_args_defaults_to_empty_object() {
+        let msg = test_assistant_msg(vec![AssistantContent::ToolCall {
+            tool_call: ToolCall {
+                id: "tc_2".into(),
+                name: "bash".into(),
+                arguments: "not valid json".into(),
+            },
+        }]);
+
+        let serialized = serialize_messages(&[msg]);
+        let input = &serialized[0]["content"][0]["input"];
+        assert!(input.is_object());
+        assert_eq!(input.as_object().unwrap().len(), 0);
     }
 }
