@@ -31,6 +31,7 @@ async fn policy_write_blocked_by_default() {
         OpiConfig::default(),
         std::env::current_dir().unwrap(),
         false, // allow_mutating = false
+        None,
     );
 
     let result = runner.run("Write a file").await;
@@ -67,6 +68,7 @@ async fn policy_edit_blocked_by_default() {
         OpiConfig::default(),
         std::env::current_dir().unwrap(),
         false,
+        None,
     );
 
     let result = runner.run("Edit a file").await;
@@ -99,6 +101,7 @@ async fn policy_bash_blocked_by_default() {
         OpiConfig::default(),
         std::env::current_dir().unwrap(),
         false,
+        None,
     );
 
     let result = runner.run("Run a command").await;
@@ -131,6 +134,7 @@ async fn policy_read_allowed_by_default() {
         OpiConfig::default(),
         std::env::current_dir().unwrap(),
         false,
+        None,
     );
 
     let result = runner.run("Read a file").await;
@@ -159,6 +163,7 @@ async fn policy_all_tools_allowed_when_opted_in() {
         OpiConfig::default(),
         std::env::current_dir().unwrap(),
         true, // allow_mutating = true
+        None,
     );
 
     let result = runner.run("Write a file").await;
@@ -189,6 +194,7 @@ async fn policy_readonly_tools_always_allowed() {
         OpiConfig::default(),
         std::env::current_dir().unwrap(),
         false,
+        None,
     );
 
     let result = runner.run("Find files").await;

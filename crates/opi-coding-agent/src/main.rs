@@ -71,12 +71,23 @@ async fn run_non_interactive(
 
     let allow_mutating = cli.allow_mutating || config.defaults.allow_mutating_tools;
 
+    let user_system_prompt = cli.system.as_ref().and_then(|path| {
+        match std::fs::read_to_string(path) {
+            Ok(content) => Some(content),
+            Err(e) => {
+                eprintln!("opi: warning: failed to read system prompt file {}: {e}", path.display());
+                None
+            }
+        }
+    });
+
     let mut runner = NonInteractiveRunner::new(
         provider,
         config.defaults.model.clone(),
         config.clone(),
         std::env::current_dir().unwrap_or_default(),
         allow_mutating,
+        user_system_prompt,
     );
 
     let result = runner.run(prompt_text).await;

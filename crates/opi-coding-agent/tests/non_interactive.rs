@@ -24,6 +24,7 @@ async fn runner_text_prompt_stdout_exit0() {
         OpiConfig::default(),
         std::env::current_dir().unwrap(),
         false,
+        None,
     );
 
     let result = runner.run("Hi there").await;
@@ -57,6 +58,7 @@ async fn runner_readonly_tool_succeeds() {
         OpiConfig::default(),
         std::env::current_dir().unwrap(),
         false,
+        None,
     );
 
     let result = runner.run("Read the Cargo.toml").await;
@@ -84,6 +86,7 @@ async fn runner_provider_error_stderr_exit4() {
         OpiConfig::default(),
         std::env::current_dir().unwrap(),
         false,
+        None,
     );
 
     let result = runner.run("Do something").await;

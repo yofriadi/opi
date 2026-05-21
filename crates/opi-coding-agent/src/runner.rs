@@ -67,9 +67,10 @@ impl NonInteractiveRunner {
         config: OpiConfig,
         workspace_root: PathBuf,
         allow_mutating: bool,
+        user_system_prompt: Option<String>,
     ) -> Self {
         let hooks = Box::new(NonInteractiveHooks { allow_mutating });
-        let harness = CodingHarness::new_with_hooks(provider, model, config, workspace_root, hooks);
+        let harness = CodingHarness::new_with_hooks(provider, model, config, workspace_root, hooks, user_system_prompt);
         Self { harness }
     }
 

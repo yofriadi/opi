@@ -39,6 +39,7 @@ impl CodingHarness {
             config,
             workspace_root,
             Box::new(CodingAgentHooks),
+            None,
         )
     }
 
@@ -49,10 +50,15 @@ impl CodingHarness {
         config: OpiConfig,
         workspace_root: PathBuf,
         hooks: Box<dyn AgentHooks>,
+        user_system_prompt: Option<String>,
     ) -> Self {
         let tools = Self::build_tools(&workspace_root);
         let tool_defs: Vec<_> = tools.iter().map(|t| t.definition()).collect();
-        let system_prompt = SystemPromptBuilder::new().tools(tool_defs).build();
+        let mut builder = SystemPromptBuilder::new().tools(tool_defs);
+        if let Some(content) = user_system_prompt {
+            builder = builder.user_system(content);
+        }
+        let system_prompt = builder.build();
 
         let agent_config = AgentLoopConfig {
             max_turns: config.defaults.max_iterations,
