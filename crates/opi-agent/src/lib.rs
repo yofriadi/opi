@@ -133,65 +133,115 @@ pub async fn agent_loop(
                         if !tool_calls.is_empty() {
                             has_tools_pending = true;
                             let mut tool_results = Vec::new();
-                            for tc in &tool_calls {
-                                let args: serde_json::Value =
-                                    serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
+                            let mut terminate_flags = Vec::new();
 
-                                events(AgentEvent::ToolExecutionStart {
-                                    tool_call_id: tc.id.clone(),
-                                    tool_name: tc.name.clone(),
-                                    args: args.clone(),
-                                });
+                            // Determine batch execution mode (H3):
+                            // parallel by default; any sequential tool forces serial
+                            let batch_is_sequential = tool_calls.iter().any(|tc| {
+                                tools_map
+                                    .get(tc.name.as_str())
+                                    .map(|t| t.execution_mode() == ExecutionMode::Sequential)
+                                    .unwrap_or(true)
+                            });
 
-                                let result = execute_tool(
-                                    &tc.id,
-                                    &tc.name,
-                                    &args,
-                                    &tools_map,
-                                    hooks,
-                                    &messages,
-                                    cancel.clone(),
-                                )
-                                .await;
+                            if batch_is_sequential {
+                                for tc in &tool_calls {
+                                    let args: serde_json::Value =
+                                        serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
 
-                                let is_error = result.is_error;
+                                    events(AgentEvent::ToolExecutionStart {
+                                        tool_call_id: tc.id.clone(),
+                                        tool_name: tc.name.clone(),
+                                        args: args.clone(),
+                                    });
 
-                                events(AgentEvent::ToolExecutionEnd {
-                                    tool_call_id: tc.id.clone(),
-                                    tool_name: tc.name.clone(),
-                                    result: serde_json::json!(&result.content),
-                                    is_error,
-                                });
+                                    let result = execute_tool(
+                                        &tc.id, &tc.name, &args, &tools_map, hooks, &messages, cancel.clone(),
+                                    ).await;
 
-                                let trm = ToolResultMessage {
-                                    tool_call_id: tc.id.clone(),
-                                    tool_name: tc.name.clone(),
-                                    content: result.content,
-                                    details: result.details,
-                                    is_error,
-                                    timestamp_ms: 0,
-                                };
+                                    let is_error = result.is_error;
+                                    terminate_flags.push(result.terminate);
+                                    events(AgentEvent::ToolExecutionEnd {
+                                        tool_call_id: tc.id.clone(),
+                                        tool_name: tc.name.clone(),
+                                        result: serde_json::json!(&result.content),
+                                        is_error,
+                                    });
 
-                                tool_results.push(trm.clone());
-                                messages.push(AgentMessage::Llm(Message::ToolResult(trm)));
+                                    let trm = ToolResultMessage {
+                                        tool_call_id: tc.id.clone(),
+                                        tool_name: tc.name.clone(),
+                                        content: result.content,
+                                        details: result.details,
+                                        is_error,
+                                        timestamp_ms: 0,
+                                    };
+                                    tool_results.push(trm.clone());
+                                    messages.push(AgentMessage::Llm(Message::ToolResult(trm)));
+                                }
+                            } else {
+                                // Parallel execution
+                                let futures: Vec<_> = tool_calls.iter().map(|tc| {
+                                    let args: serde_json::Value =
+                                        serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
+                                    let tools_map = &tools_map;
+                                    let messages = &messages;
+                                    let cancel = cancel.clone();
+                                    async move {
+                                        let result = execute_tool(
+                                            &tc.id, &tc.name, &args, tools_map, hooks, messages, cancel,
+                                        ).await;
+                                        (tc, args, result)
+                                    }
+                                }).collect();
+                                let results = futures_util::future::join_all(futures).await;
+                                for (tc, args, result) in results {
+                                    events(AgentEvent::ToolExecutionStart {
+                                        tool_call_id: tc.id.clone(),
+                                        tool_name: tc.name.clone(),
+                                        args,
+                                    });
+                                    let is_error = result.is_error;
+                                    terminate_flags.push(result.terminate);
+                                    events(AgentEvent::ToolExecutionEnd {
+                                        tool_call_id: tc.id.clone(),
+                                        tool_name: tc.name.clone(),
+                                        result: serde_json::json!(&result.content),
+                                        is_error,
+                                    });
+                                    let trm = ToolResultMessage {
+                                        tool_call_id: tc.id.clone(),
+                                        tool_name: tc.name.clone(),
+                                        content: result.content,
+                                        details: result.details,
+                                        is_error,
+                                        timestamp_ms: 0,
+                                    };
+                                    tool_results.push(trm.clone());
+                                    messages.push(AgentMessage::Llm(Message::ToolResult(trm)));
+                                }
                             }
+
+                            // H4: early stop if ALL results have terminate=true
+                            let all_terminate = !terminate_flags.is_empty()
+                                && terminate_flags.iter().all(|t| *t);
 
                             events(AgentEvent::TurnEnd {
                                 message: agent_msg,
-                                tool_results,
+                                tool_results: tool_results.clone(),
                             });
 
-                            // Check should_stop_after_turn
-                            let recent_trs: Vec<_> = messages
-                                .iter()
-                                .filter_map(|m| match m {
-                                    AgentMessage::Llm(Message::ToolResult(tr)) => Some(tr.clone()),
-                                    _ => None,
-                                })
-                                .collect();
+                            if all_terminate {
+                                events(AgentEvent::AgentEnd {
+                                    messages: messages.clone(),
+                                });
+                                return Ok(messages);
+                            }
+
+                            // M1: pass only current turn's tool_results
                             let stop_ctx = ShouldStopAfterTurnContext {
                                 messages: messages.clone(),
-                                tool_results: recent_trs,
+                                tool_results,
                             };
                             if hooks.should_stop_after_turn(stop_ctx).await {
                                 events(AgentEvent::AgentEnd {
@@ -210,16 +260,10 @@ pub async fn agent_loop(
                             tool_results: vec![],
                         });
 
-                        let recent_trs: Vec<_> = messages
-                            .iter()
-                            .filter_map(|m| match m {
-                                AgentMessage::Llm(Message::ToolResult(tr)) => Some(tr.clone()),
-                                _ => None,
-                            })
-                            .collect();
+                        // M1: no tool results for a text-only turn
                         let stop_ctx = ShouldStopAfterTurnContext {
                             messages: messages.clone(),
-                            tool_results: recent_trs,
+                            tool_results: vec![],
                         };
                         if hooks.should_stop_after_turn(stop_ctx).await {
                             events(AgentEvent::AgentEnd {
