@@ -9,12 +9,12 @@ use futures_util::StreamExt;
 use futures_util::stream;
 use opi_agent::agent::Agent;
 use opi_agent::event::AgentEvent;
-use opi_agent::hooks::{AgentHooks, BeforeToolCallContext, BeforeToolCallResult};
+use opi_agent::hooks::{
+    AgentHooks, BeforeToolCallContext, BeforeToolCallResult, ShouldStopAfterTurnContext,
+};
 use opi_agent::loop_types::{AgentError, AgentLoopConfig};
 use opi_agent::message::AgentMessage;
-use opi_ai::message::{
-    AssistantContent, AssistantMessage, InputContent, Message, ToolResultMessage,
-};
+use opi_ai::message::{AssistantContent, AssistantMessage, InputContent, Message};
 use opi_ai::provider::{EventStream, Provider, ProviderError, Request};
 use opi_ai::stream::{AssistantStreamEvent, StopReason, Usage};
 
@@ -70,8 +70,7 @@ impl AgentHooks for TestHooks {
 
     fn should_stop_after_turn(
         &self,
-        _messages: &[AgentMessage],
-        _tool_results: &[ToolResultMessage],
+        _ctx: ShouldStopAfterTurnContext,
     ) -> Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
         Box::pin(async { false })
     }

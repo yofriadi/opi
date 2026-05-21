@@ -30,6 +30,7 @@ pub trait Tool: Send + Sync {
 }
 
 /// Result of a tool execution.
+#[derive(Clone)]
 pub struct ToolResult {
     pub content: Vec<OutputContent>,
     pub details: Option<serde_json::Value>,

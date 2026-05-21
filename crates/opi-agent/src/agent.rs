@@ -1,8 +1,10 @@
 //! Stateful Agent wrapper around the agent loop (S8.2).
 //!
-//! Provides `prompt`, `continue_`, `abort`, and `subscribe` methods,
-//! managing conversation state, cancellation, and event subscribers.
+//! Provides `prompt`, `continue_`, `abort`, `subscribe`, `steer`, and
+//! `follow_up` methods, managing conversation state, cancellation, event
+//! subscribers, and message queues.
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -60,7 +62,7 @@ impl Tool for SharedTool {
 type EventSubscriber = Box<dyn Fn(&AgentEvent) + Send + Sync>;
 
 /// Stateful wrapper around `agent_loop` with conversation state, cancellation,
-/// and event subscription management.
+/// event subscription, and message queue management.
 pub struct Agent {
     provider: Arc<dyn Provider>,
     tools: Vec<Arc<dyn Tool>>,
@@ -71,6 +73,8 @@ pub struct Agent {
     cancel: CancellationToken,
     subscribers: Arc<Mutex<Vec<EventSubscriber>>>,
     messages: Vec<AgentMessage>,
+    steering_queue: Arc<Mutex<VecDeque<String>>>,
+    follow_up_queue: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl Agent {
@@ -93,6 +97,8 @@ impl Agent {
             cancel: CancellationToken::new(),
             subscribers: Arc::new(Mutex::new(Vec::new())),
             messages: Vec::new(),
+            steering_queue: Arc::new(Mutex::new(VecDeque::new())),
+            follow_up_queue: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -156,6 +162,22 @@ impl Agent {
         self.cancel.clone()
     }
 
+    /// Add a steering message to be delivered before the next provider request.
+    ///
+    /// Steering messages are high-priority and delivered after the current
+    /// turn's tool calls complete but before the next provider request.
+    pub fn steer(&self, message: String) {
+        self.steering_queue.lock().unwrap().push_back(message);
+    }
+
+    /// Add a follow-up message to be delivered when the agent would otherwise stop.
+    ///
+    /// Follow-up messages are only delivered when the agent has no tool calls
+    /// pending and no steering messages queued.
+    pub fn follow_up(&self, message: String) {
+        self.follow_up_queue.lock().unwrap().push_back(message);
+    }
+
     // -- Internal helpers ---------------------------------------------------
 
     fn maybe_reset_cancel(&mut self) {
@@ -188,6 +210,8 @@ impl Agent {
             messages: self.messages.clone(),
             model: self.model.clone(),
             system: self.system.clone(),
+            steering_queue: Some(self.steering_queue.clone()),
+            follow_up_queue: Some(self.follow_up_queue.clone()),
         };
 
         let sink = self.build_event_sink();

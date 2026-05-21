@@ -1,5 +1,8 @@
 //! Types for the agent loop (S6.1, S8.2).
 
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
 use crate::message::AgentMessage;
 use crate::tool::Tool;
 use opi_ai::provider::Provider;
@@ -31,6 +34,10 @@ pub struct AgentLoopContext {
     pub model: String,
     /// Optional system prompt.
     pub system: Option<String>,
+    /// Steering queue (high-priority user messages injected before next turn).
+    pub steering_queue: Option<Arc<Mutex<VecDeque<String>>>>,
+    /// Follow-up queue (messages injected when agent would otherwise stop).
+    pub follow_up_queue: Option<Arc<Mutex<VecDeque<String>>>>,
 }
 
 /// Configuration for the agent loop.
@@ -52,4 +59,9 @@ impl Default for AgentLoopConfig {
             temperature: None,
         }
     }
+}
+
+/// Update returned by `prepare_next_turn` to modify the next turn.
+pub struct AgentLoopTurnUpdate {
+    pub extra_messages: Vec<AgentMessage>,
 }

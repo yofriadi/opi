@@ -25,11 +25,15 @@ pub use transport::Transport;
 // Re-export provider-facing types needed at the agent boundary.
 pub use opi_ai::message::ToolDef;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
-use hooks::{BeforeToolCallContext, BeforeToolCallResult};
-use opi_ai::message::{AssistantContent, Message, ToolResultMessage};
+use hooks::{
+    AfterToolCallContext, AfterToolCallResult, BeforeToolCallContext, BeforeToolCallResult,
+    ShouldStopAfterTurnContext,
+};
+use opi_ai::message::{AssistantContent, InputContent, Message, ToolResultMessage, UserMessage};
 use opi_ai::provider::Request;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -58,7 +62,7 @@ pub async fn agent_loop(
     events(AgentEvent::AgentStart);
 
     let mut has_tools_pending;
-    for _turn in 0..config.max_turns {
+    for turn_idx in 0..config.max_turns {
         if cancel.is_cancelled() {
             events(AgentEvent::AgentEnd {
                 messages: messages.clone(),
@@ -185,14 +189,18 @@ pub async fn agent_loop(
                                     _ => None,
                                 })
                                 .collect();
-                            if hooks.should_stop_after_turn(&messages, &recent_trs).await {
+                            let stop_ctx = ShouldStopAfterTurnContext {
+                                messages: messages.clone(),
+                                tool_results: recent_trs,
+                            };
+                            if hooks.should_stop_after_turn(stop_ctx).await {
                                 events(AgentEvent::AgentEnd {
                                     messages: messages.clone(),
                                 });
                                 return Ok(messages);
                             }
 
-                            // Break inner loop; outer for loop continues to next turn
+                            // Break inner loop; outer for loop continues
                             break;
                         }
 
@@ -209,7 +217,11 @@ pub async fn agent_loop(
                                 _ => None,
                             })
                             .collect();
-                        if hooks.should_stop_after_turn(&messages, &recent_trs).await {
+                        let stop_ctx = ShouldStopAfterTurnContext {
+                            messages: messages.clone(),
+                            tool_results: recent_trs,
+                        };
+                        if hooks.should_stop_after_turn(stop_ctx).await {
                             events(AgentEvent::AgentEnd {
                                 messages: messages.clone(),
                             });
@@ -226,10 +238,39 @@ pub async fn agent_loop(
             }
         }
 
-        // If no tools were executed this turn, the conversation is complete
-        if !has_tools_pending {
-            break;
+        // -- Queue polling after turn completes --------------------------------
+
+        // Poll steering queue (drain all)
+        let steering = drain_queue(&context.steering_queue);
+        if !steering.is_empty() {
+            events(AgentEvent::QueueUpdate {
+                steering: steering.clone(),
+                follow_up: vec![],
+            });
+            for msg in steering {
+                messages.push(user_text_message(msg));
+            }
+            continue; // next turn
         }
+
+        // If no tools pending (agent would stop), poll follow-up (one at a time)
+        if !has_tools_pending {
+            let follow_up = pop_follow_up(&context.follow_up_queue);
+            if !follow_up.is_empty() {
+                events(AgentEvent::QueueUpdate {
+                    steering: vec![],
+                    follow_up: follow_up.clone(),
+                });
+                for msg in follow_up {
+                    messages.push(user_text_message(msg));
+                }
+                continue; // next turn
+            }
+            break; // no tools, no queues → agent stops
+        }
+
+        // Tools were executed and queues are empty → continue to next turn
+        let _ = turn_idx;
     }
 
     events(AgentEvent::AgentEnd {
@@ -325,8 +366,15 @@ async fn execute_tool(
     // Execute the tool
     match tool.execute(call_id, args.clone(), cancel, None).await {
         Ok(result) => {
-            hooks.after_tool_call(call_id, tool_name, &result).await;
-            result
+            let ctx = AfterToolCallContext {
+                tool_call_id: call_id.to_owned(),
+                tool_name: tool_name.to_owned(),
+                result: result.clone(),
+            };
+            match hooks.after_tool_call(ctx).await {
+                AfterToolCallResult::Keep => result,
+                AfterToolCallResult::Replace(replacement) => replacement,
+            }
         }
         Err(e) => ToolResult {
             content: vec![opi_ai::message::OutputContent::Text {
@@ -337,4 +385,37 @@ async fn execute_tool(
             terminate: false,
         },
     }
+}
+
+/// Drain all messages from a queue (steering mode: All).
+fn drain_queue(queue: &Option<Arc<Mutex<VecDeque<String>>>>) -> Vec<String> {
+    match queue {
+        Some(q) => {
+            let mut q = q.lock().unwrap();
+            q.drain(..).collect()
+        }
+        None => vec![],
+    }
+}
+
+/// Pop one message from a queue (follow-up mode: OneAtATime).
+fn pop_follow_up(queue: &Option<Arc<Mutex<VecDeque<String>>>>) -> Vec<String> {
+    match queue {
+        Some(q) => {
+            let mut q = q.lock().unwrap();
+            match q.pop_front() {
+                Some(msg) => vec![msg],
+                None => vec![],
+            }
+        }
+        None => vec![],
+    }
+}
+
+/// Create a user text AgentMessage.
+fn user_text_message(text: String) -> AgentMessage {
+    AgentMessage::Llm(Message::User(UserMessage {
+        content: vec![InputContent::Text { text }],
+        timestamp_ms: 0,
+    }))
 }

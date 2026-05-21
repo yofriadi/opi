@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::stream;
 use opi_agent::event::{AgentEvent, AgentEventSink};
-use opi_agent::hooks::{AgentHooks, BeforeToolCallContext, BeforeToolCallResult};
+use opi_agent::hooks::{
+    AgentHooks, BeforeToolCallContext, BeforeToolCallResult, ShouldStopAfterTurnContext,
+};
 use opi_agent::loop_types::{AgentError, AgentLoopConfig, AgentLoopContext};
 use opi_agent::message::AgentMessage;
 use opi_agent::tool::{Tool, ToolError, ToolResult};
 use opi_ai::message::{
-    AssistantContent, AssistantMessage, InputContent, Message, ToolCall, ToolResultMessage,
-    UserMessage,
+    AssistantContent, AssistantMessage, InputContent, Message, ToolCall, UserMessage,
 };
 use opi_ai::provider::{EventStream, Provider, ProviderError, Request};
 use opi_ai::stream::{AssistantStreamEvent, StopReason, Usage};
@@ -134,8 +135,7 @@ impl AgentHooks for TestHooks {
 
     fn should_stop_after_turn(
         &self,
-        _messages: &[AgentMessage],
-        _tool_results: &[ToolResultMessage],
+        _ctx: ShouldStopAfterTurnContext,
     ) -> Pin<Box<dyn std::future::Future<Output = bool> + Send>> {
         Box::pin(async { false })
     }
@@ -211,6 +211,8 @@ async fn no_tool_turn_emits_lifecycle_events() {
         }))],
         model: "mock-model".into(),
         system: None,
+        steering_queue: None,
+        follow_up_queue: None,
     };
 
     let config = AgentLoopConfig {
@@ -328,6 +330,8 @@ async fn tool_use_turn_executes_tool_and_loops() {
         }))],
         model: "mock-model".into(),
         system: None,
+        steering_queue: None,
+        follow_up_queue: None,
     };
 
     let config = AgentLoopConfig {

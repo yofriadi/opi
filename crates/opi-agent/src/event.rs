@@ -49,4 +49,9 @@ pub enum AgentEvent {
         result: serde_json::Value,
         is_error: bool,
     },
+    /// Queue messages were delivered to the conversation.
+    QueueUpdate {
+        steering: Vec<String>,
+        follow_up: Vec<String>,
+    },
 }
