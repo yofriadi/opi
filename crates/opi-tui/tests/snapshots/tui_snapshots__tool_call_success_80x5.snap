@@ -1,0 +1,10 @@
+---
+source: crates/opi-tui/tests/tui_snapshots.rs
+assertion_line: 132
+expression: "render(tc, 80, 5)"
+---
+┌ tool: read ──────────────────────────────────────────────────────────────────┐
+│args: {"path": "/src/main.rs"}                                                │
+│status: success                                                               │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

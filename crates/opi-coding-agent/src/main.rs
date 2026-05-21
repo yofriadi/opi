@@ -1,26 +1,215 @@
+use clap::Parser;
+
+use opi_coding_agent::cli::Cli;
+use opi_coding_agent::config::{ConfigSource, resolve_config};
+
 fn main() {
-    let mut args = std::env::args().skip(1);
-    match args.next().as_deref() {
-        Some("--version" | "-V") => {
-            println!("opi {}", env!("CARGO_PKG_VERSION"));
-        }
-        Some("--help" | "-h") => {
-            println!("opi {} - AI coding agent", env!("CARGO_PKG_VERSION"));
-            println!();
-            println!("Usage: opi [OPTIONS]");
-            println!();
-            println!("Options:");
-            println!("  -V, --version    Print version information");
-            println!("  -h, --help       Print help");
-        }
-        Some(arg) => {
-            eprintln!("opi: unknown argument '{arg}'");
-            eprintln!("Try 'opi --help' for more information.");
+    let cli = Cli::parse();
+
+    if cli.verbose {
+        eprintln!("opi {} - debug mode", env!("CARGO_PKG_VERSION"));
+    }
+
+    let config = match resolve_config(ConfigSource {
+        cli_model: cli.model.clone(),
+        config_path: cli.config.clone(),
+        env_model: std::env::var("OPI_MODEL").ok(),
+        project_dir: std::env::current_dir().ok(),
+        user_config_path: None,
+    }) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("opi: config error: {e}");
             std::process::exit(2);
         }
-        None => {
-            println!("opi {} - AI coding agent", env!("CARGO_PKG_VERSION"));
-            println!("(scaffolding release - interactive mode not yet implemented)");
+    };
+
+    let prompt_text = cli.prompt.join(" ");
+
+    if cli.non_interactive || !prompt_text.is_empty() {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("opi: runtime error: {e}");
+                std::process::exit(1);
+            }
+        };
+
+        let exit_code =
+            rt.block_on(async { run_non_interactive(&cli, &config, &prompt_text).await });
+        std::process::exit(exit_code);
+    } else {
+        // Interactive mode
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("opi: runtime error: {e}");
+                std::process::exit(1);
+            }
+        };
+        rt.block_on(async { run_interactive(&cli, &config).await });
+    }
+}
+
+async fn run_non_interactive(
+    cli: &Cli,
+    config: &opi_coding_agent::config::OpiConfig,
+    prompt_text: &str,
+) -> i32 {
+    use opi_coding_agent::runner::{ExitCode, NonInteractiveRunner};
+
+    if prompt_text.is_empty() {
+        eprintln!("opi: no prompt provided");
+        return ExitCode::ConfigError as i32;
+    }
+
+    let provider = match build_provider(config) {
+        Ok(p) => p,
+        Err(ProviderBuildError::Auth(msg)) => {
+            eprintln!("opi: {msg}");
+            return ExitCode::AuthFailure as i32;
         }
+        Err(ProviderBuildError::Config(msg)) => {
+            eprintln!("opi: {msg}");
+            return ExitCode::ConfigError as i32;
+        }
+    };
+
+    let allow_mutating = cli.allow_mutating || config.defaults.allow_mutating_tools;
+
+    let user_system_prompt =
+        cli.system
+            .as_ref()
+            .and_then(|path| match std::fs::read_to_string(path) {
+                Ok(content) => Some(content),
+                Err(e) => {
+                    eprintln!(
+                        "opi: warning: failed to read system prompt file {}: {e}",
+                        path.display()
+                    );
+                    None
+                }
+            });
+
+    let mut runner = NonInteractiveRunner::new(
+        provider,
+        config.defaults.model.clone(),
+        config.clone(),
+        std::env::current_dir().unwrap_or_default(),
+        allow_mutating,
+        user_system_prompt,
+    );
+
+    let result = runner.run(prompt_text).await;
+
+    if !result.stdout.is_empty() {
+        print!("{}", result.stdout);
+    }
+    if !result.stderr.is_empty() {
+        eprintln!("{}", result.stderr);
+    }
+
+    result.exit_code
+}
+
+async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig) {
+    use opi_agent::message::AgentMessage;
+    use opi_ai::message::{AssistantContent, Message};
+    use opi_coding_agent::harness::{CodingHarness, InteractiveCodingHooks};
+
+    let provider = match build_provider(config) {
+        Ok(p) => p,
+        Err(ProviderBuildError::Auth(msg)) => {
+            eprintln!("opi: {msg}");
+            std::process::exit(3);
+        }
+        Err(ProviderBuildError::Config(msg)) => {
+            eprintln!("opi: {msg}");
+            std::process::exit(2);
+        }
+    };
+
+    let allow_mutating = cli.allow_mutating || config.defaults.allow_mutating_tools;
+    let user_system_prompt = cli
+        .system
+        .as_ref()
+        .and_then(|path| std::fs::read_to_string(path).ok());
+
+    let hooks = Box::new(InteractiveCodingHooks::new(allow_mutating));
+    let mut harness = CodingHarness::new_with_hooks(
+        provider,
+        config.defaults.model.clone(),
+        config.clone(),
+        std::env::current_dir().unwrap_or_default(),
+        hooks,
+        user_system_prompt,
+    );
+
+    println!(
+        "opi {} - AI coding agent (type 'exit' to quit)",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let stdin = std::io::stdin();
+    loop {
+        eprint!("> ");
+        let mut input = String::new();
+        if stdin.read_line(&mut input).is_err() || input.trim() == "exit" {
+            break;
+        }
+        let prompt = input.trim().to_string();
+        if prompt.is_empty() {
+            continue;
+        }
+
+        match harness.prompt(&prompt).await {
+            Ok(messages) => {
+                for msg in &messages {
+                    if let AgentMessage::Llm(Message::Assistant(a)) = msg {
+                        for content in &a.content {
+                            if let AssistantContent::Text { text } = content {
+                                println!("{text}");
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => eprintln!("error: {e}"),
+        }
+    }
+}
+
+enum ProviderBuildError {
+    Auth(String),
+    Config(String),
+}
+
+fn build_provider(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<Box<dyn opi_ai::provider::Provider>, ProviderBuildError> {
+    use opi_ai::anthropic::AnthropicProvider;
+    use opi_ai::provider::Provider;
+
+    let spec = &config.defaults.model;
+    let (provider_id, _) = spec.split_once(':').ok_or_else(|| {
+        ProviderBuildError::Config(format!(
+            "invalid model spec: {spec:?} (expected provider:model)"
+        ))
+    })?;
+
+    match provider_id {
+        "anthropic" => {
+            let api_key_env = &config.providers.anthropic.api_key_env;
+            let api_key = std::env::var(api_key_env).map_err(|_| {
+                ProviderBuildError::Auth(format!(
+                    "missing API key: set {api_key_env} environment variable"
+                ))
+            })?;
+            let provider = AnthropicProvider::new(api_key, None);
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
+        other => Err(ProviderBuildError::Config(format!(
+            "unknown provider: {other}"
+        ))),
     }
 }

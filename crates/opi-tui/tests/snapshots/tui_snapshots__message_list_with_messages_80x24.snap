@@ -1,0 +1,29 @@
+---
+source: crates/opi-tui/tests/tui_snapshots.rs
+assertion_line: 46
+expression: "render(widget, 80, 24)"
+---
+┌ Messages ────────────────────────────────────────────────────────────────────┐
+│You: Hello, how are you?                                                      │
+│Asst: I'm doing well, thanks!                                                 │
+│You: Can you help me with Rust?                                               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

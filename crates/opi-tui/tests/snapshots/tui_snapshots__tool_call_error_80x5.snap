@@ -1,0 +1,10 @@
+---
+source: crates/opi-tui/tests/tui_snapshots.rs
+assertion_line: 142
+expression: "render(tc, 80, 5)"
+---
+┌ tool: bash ──────────────────────────────────────────────────────────────────┐
+│args: {"command": "rm -rf /"}                                                 │
+│status: error: permission denied                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

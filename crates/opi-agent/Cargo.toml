@@ -11,7 +11,17 @@ authors.workspace = true
 [dependencies]
 opi-ai = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+schemars = { workspace = true }
+jsonschema = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+futures-util = { workspace = true }

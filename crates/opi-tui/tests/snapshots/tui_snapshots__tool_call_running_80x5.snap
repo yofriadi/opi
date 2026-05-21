@@ -1,0 +1,10 @@
+---
+source: crates/opi-tui/tests/tui_snapshots.rs
+assertion_line: 122
+expression: "render(tc, 80, 5)"
+---
+┌ tool: grep ──────────────────────────────────────────────────────────────────┐
+│args: {"pattern": "TODO"}                                                     │
+│status: running                                                               │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

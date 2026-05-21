@@ -1,0 +1,29 @@
+---
+source: crates/opi-tui/tests/tui_snapshots.rs
+assertion_line: 168
+expression: "render(shell, 80, 24)"
+---
+┌ Messages ────────────────────────────────────────────────────────────────────┐
+│You: What is the capital of France?                                           │
+│Asst: The capital of France is Paris.                                         │
+│You: And Germany?                                                             │
+│Asst: The capital of Germany is Berlin.                                       │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ claude-sonnet-4-5-20250514 [idle]
+┌ Input ───────────────────────────────────────────────────────────────────────┐
+│Tell me more about Berlin.                                                    │
+└──────────────────────────────────────────────────────────────────────────────┘
