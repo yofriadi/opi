@@ -1,0 +1,157 @@
+//! Shared test utilities for mock-provider testing (task 1.17).
+//!
+//! Provides `MockProvider` for deterministic, fixture-based provider simulation
+//! across all workspace crates. No live API calls.
+
+use std::sync::{Arc, Mutex};
+
+use crate::message::AssistantMessage;
+use crate::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
+use crate::stream::{AssistantStreamEvent, StopReason, Usage};
+
+/// A mock provider that returns pre-programmed response sequences.
+///
+/// Each call to `stream()` pops the next batch of events from the queue.
+/// Tracks call history for assertions.
+#[doc(hidden)]
+pub struct MockProvider {
+    id: String,
+    models: Vec<ModelInfo>,
+    responses: Arc<Mutex<Vec<Vec<AssistantStreamEvent>>>>,
+    call_log: Arc<Mutex<Vec<Request>>>,
+}
+
+impl MockProvider {
+    /// Create a new mock provider with the given response sequences.
+    ///
+    /// Each element of `responses` is a complete batch of stream events
+    /// returned by one `stream()` call. Batches are consumed in order.
+    pub fn new(id: &str, responses: Vec<Vec<AssistantStreamEvent>>) -> Self {
+        Self {
+            id: id.to_owned(),
+            models: vec![ModelInfo {
+                id: "mock-model".into(),
+                display_name: "Mock Model".into(),
+                context_window: 100_000,
+                max_output_tokens: 4_096,
+                supports_streaming: true,
+                supports_thinking: false,
+            }],
+            responses: Arc::new(Mutex::new(responses)),
+            call_log: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Number of times `stream()` has been called.
+    pub fn stream_call_count(&self) -> usize {
+        self.call_log.lock().unwrap().len()
+    }
+}
+
+/// Helper: build a base `AssistantMessage` for fixture construction.
+pub fn base_assistant() -> AssistantMessage {
+    AssistantMessage {
+        content: vec![],
+        api: crate::ApiKind::Anthropic,
+        provider: "mock".into(),
+        model: "mock-model".into(),
+        response_model: None,
+        response_id: None,
+        usage: Usage::default(),
+        stop_reason: StopReason::Stop,
+        error_message: None,
+        timestamp_ms: 0,
+    }
+}
+
+/// Helper: build a text-only response (Start → TextDelta → Done).
+pub fn text_response(text: &str) -> Vec<AssistantStreamEvent> {
+    let mut partial = base_assistant();
+    partial
+        .content
+        .push(crate::message::AssistantContent::Text { text: text.into() });
+    vec![
+        AssistantStreamEvent::Start {
+            partial: base_assistant(),
+        },
+        AssistantStreamEvent::TextDelta {
+            content_index: 0,
+            delta: text.into(),
+            partial: partial.clone(),
+        },
+        AssistantStreamEvent::Done {
+            reason: StopReason::Stop,
+            message: partial,
+        },
+    ]
+}
+
+/// Helper: build a tool-call response (Start → ToolCallEnd → Done).
+pub fn tool_call_response(
+    tool_call_id: &str,
+    tool_name: &str,
+    arguments: &str,
+) -> Vec<AssistantStreamEvent> {
+    let tool_call = crate::message::ToolCall {
+        id: tool_call_id.into(),
+        name: tool_name.into(),
+        arguments: arguments.into(),
+    };
+    let mut partial = base_assistant();
+    partial
+        .content
+        .push(crate::message::AssistantContent::ToolCall {
+            tool_call: tool_call.clone(),
+        });
+    vec![
+        AssistantStreamEvent::Start {
+            partial: base_assistant(),
+        },
+        AssistantStreamEvent::ToolCallEnd {
+            content_index: 0,
+            tool_call,
+            partial: partial.clone(),
+        },
+        AssistantStreamEvent::Done {
+            reason: StopReason::ToolUse,
+            message: partial,
+        },
+    ]
+}
+
+/// Helper: build an error response (Start → Error).
+pub fn error_response(error_message: &str) -> Vec<AssistantStreamEvent> {
+    let mut partial = base_assistant();
+    partial.error_message = Some(error_message.into());
+    vec![
+        AssistantStreamEvent::Start {
+            partial: base_assistant(),
+        },
+        AssistantStreamEvent::Error {
+            reason: StopReason::Error,
+            message: partial,
+        },
+    ]
+}
+
+impl Provider for MockProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn models(&self) -> &[ModelInfo] {
+        &self.models
+    }
+
+    fn stream(&self, request: Request) -> EventStream {
+        self.call_log.lock().unwrap().push(request);
+        let mut responses = self.responses.lock().unwrap();
+        assert!(
+            !responses.is_empty(),
+            "MockProvider: stream() called more times than responses were configured"
+        );
+        let events = responses.remove(0);
+        let stream = futures_util::stream::iter(events.into_iter().map(Ok::<_, ProviderError>));
+        Box::pin(stream)
+    }
+}
