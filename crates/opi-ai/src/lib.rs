@@ -8,6 +8,7 @@ pub mod config;
 pub mod message;
 pub mod model;
 pub mod provider;
+pub mod registry;
 pub mod stream;
 
 pub use config::{Config, Error};
