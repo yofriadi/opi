@@ -3,6 +3,7 @@
 //! Provides the foundation for building specialized agents with pluggable
 //! tool systems and communication transports.
 
+pub mod agent;
 pub mod event;
 pub mod hooks;
 pub mod loop_types;
@@ -12,6 +13,7 @@ pub mod tool;
 pub mod transport;
 pub mod validation;
 
+pub use agent::Agent;
 pub use event::{AgentEvent, AgentEventSink};
 pub use hooks::AgentHooks;
 pub use loop_types::{AgentError, AgentLoopConfig, AgentLoopContext};
@@ -88,14 +90,18 @@ pub async fn agent_loop(
         let mut assistant_content: Vec<AssistantContent> = Vec::new();
         has_tools_pending = false;
 
-        while let Some(item) = stream.next().await {
-            if cancel.is_cancelled() {
-                events(AgentEvent::AgentEnd {
-                    messages: messages.clone(),
-                });
-                return Err(AgentError::Cancelled);
+        while let Some(item) = {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    events(AgentEvent::AgentEnd {
+                        messages: messages.clone(),
+                    });
+                    return Err(AgentError::Cancelled);
+                }
+                item = stream.next() => item,
             }
-
+        } {
             match item {
                 Ok(event) => {
                     if let Some(msg) = process_stream_event(&event, &mut assistant_content, &events)

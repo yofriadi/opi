@@ -34,7 +34,7 @@ pub struct AgentLoopContext {
 }
 
 /// Configuration for the agent loop.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AgentLoopConfig {
     /// Maximum number of turns before stopping.
     pub max_turns: u32,
