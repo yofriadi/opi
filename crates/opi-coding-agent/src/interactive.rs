@@ -249,10 +249,8 @@ async fn tui_event_loop(
                 KeyCode::Char(c) if pending.is_none() => {
                     state.lock().unwrap().input_text.push(c);
                 }
-                KeyCode::Backspace => {
-                    if pending.is_none() {
-                        state.lock().unwrap().input_text.pop();
-                    }
+                KeyCode::Backspace if pending.is_none() => {
+                    state.lock().unwrap().input_text.pop();
                 }
                 KeyCode::Esc => {
                     if pending.is_some() {
