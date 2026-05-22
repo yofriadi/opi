@@ -24,10 +24,7 @@ struct SseFrame {
 /// Parsed result for a single SSE frame.
 pub enum ParsedEvent {
     Valid(Vec<OpenAiChatEvent>),
-    Malformed {
-        data: String,
-        error: String,
-    },
+    Malformed { data: String, error: String },
 }
 
 /// Parse SSE text into frames, then deserialize each frame as an OpenAI chunk.
@@ -114,7 +111,7 @@ struct OpenAiRawChunk {
 struct RawChoice {
     #[allow(dead_code)]
     index: Option<usize>,
-    delta: RawDelta,
+    delta: Option<RawDelta>,
     finish_reason: Option<String>,
 }
 
@@ -168,9 +165,7 @@ pub enum OpenAiChatEvent {
         model: Option<String>,
     },
     /// Text content delta.
-    ContentDelta {
-        content: String,
-    },
+    ContentDelta { content: String },
     /// Tool call started (first appearance of a tool_calls entry with id+name).
     ToolCallStart {
         index: usize,
@@ -178,19 +173,14 @@ pub enum OpenAiChatEvent {
         name: String,
     },
     /// Tool call argument delta.
-    ToolCallDelta {
-        index: usize,
-        arguments: String,
-    },
+    ToolCallDelta { index: usize, arguments: String },
     /// Finish reason received (stop, tool_calls, length).
     Finish {
         finish_reason: String,
         usage: Option<Usage>,
     },
     /// Error from the API.
-    Error {
-        message: Option<String>,
-    },
+    Error { message: Option<String> },
 }
 
 impl OpenAiChatEvent {
@@ -230,7 +220,10 @@ impl OpenAiChatEvent {
                 }];
             }
 
-            let delta = choice.delta;
+            let delta = match choice.delta {
+                Some(d) => d,
+                None => return events,
+            };
 
             // Check for tool calls first (they take priority over content)
             if let Some(tool_calls) = delta.tool_calls {
@@ -582,6 +575,8 @@ pub struct OpenAiChatProvider {
     base_url: String,
     models: Vec<ModelInfo>,
     compat: CompatConfig,
+    provider_id: String,
+    extra_headers: Vec<(String, String)>,
 }
 
 impl OpenAiChatProvider {
@@ -634,6 +629,27 @@ impl OpenAiChatProvider {
             base_url,
             models,
             compat,
+            provider_id: "openai".into(),
+            extra_headers: Vec::new(),
+        }
+    }
+
+    /// Create a provider for an OpenAI-compatible profile (OpenRouter, Mistral, etc.).
+    pub fn new_for_profile(
+        api_key: String,
+        base_url: String,
+        provider_id: String,
+        compat: CompatConfig,
+        extra_headers: Vec<(String, String)>,
+        models: Vec<ModelInfo>,
+    ) -> Self {
+        Self {
+            api_key,
+            base_url,
+            models,
+            compat,
+            provider_id,
+            extra_headers,
         }
     }
 
@@ -691,8 +707,7 @@ impl OpenAiChatProvider {
 
     /// Stream events from a raw SSE response body.
     pub fn stream_from_sse(&self, sse_body: &str, cancel: CancellationToken) -> EventStream {
-        let mut mapper =
-            OpenAiChatMapper::new(crate::ApiKind::OpenAi, self.id());
+        let mut mapper = OpenAiChatMapper::new(crate::ApiKind::OpenAi, &self.provider_id);
         let mut stream_events: Vec<Result<AssistantStreamEvent, ProviderError>> = Vec::new();
         for parsed in parse_sse_events(sse_body) {
             match parsed {
@@ -717,15 +732,21 @@ impl OpenAiChatProvider {
     async fn stream_http(
         api_key: String,
         base_url: String,
+        provider_id: String,
+        extra_headers: Vec<(String, String)>,
         body: &serde_json::Value,
         cancel: CancellationToken,
         tx: &tokio::sync::mpsc::Sender<Result<AssistantStreamEvent, ProviderError>>,
     ) -> Result<(), ProviderError> {
         let client = reqwest::Client::new();
-        let response = client
+        let mut req = client
             .post(format!("{base_url}/v1/chat/completions"))
             .header("authorization", format!("Bearer {api_key}"))
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        for (name, value) in &extra_headers {
+            req = req.header(name.as_str(), value.as_str());
+        }
+        let response = req
             .body(serde_json::to_string(body).unwrap_or_default())
             .send()
             .await
@@ -739,7 +760,7 @@ impl OpenAiChatProvider {
 
         let mut byte_stream = response.bytes_stream();
         let mut buffer = String::new();
-        let mut mapper = OpenAiChatMapper::new(crate::ApiKind::OpenAi, "openai");
+        let mut mapper = OpenAiChatMapper::new(crate::ApiKind::OpenAi, &provider_id);
 
         loop {
             let chunk = tokio::select! {
@@ -781,9 +802,7 @@ impl OpenAiChatProvider {
         }
 
         if !mapper.saw_done {
-            let err = ProviderError::StreamError(
-                "stream ended without a terminal event".into(),
-            );
+            let err = ProviderError::StreamError("stream ended without a terminal event".into());
             let _ = tx.send(Err(err)).await;
         }
 
@@ -845,10 +864,7 @@ fn serialize_messages(
 
     // System message first
     if let Some(sys) = system {
-        let role = compat
-            .system_role_override
-            .as_deref()
-            .unwrap_or("system");
+        let role = compat.system_role_override.as_deref().unwrap_or("system");
         result.push(serde_json::json!({
             "role": role,
             "content": sys,
@@ -914,12 +930,10 @@ fn serialize_messages(
                     "role": "assistant",
                 });
                 if !tool_calls_json.is_empty() {
-                    assistant_msg["tool_calls"] =
-                        serde_json::Value::Array(tool_calls_json);
+                    assistant_msg["tool_calls"] = serde_json::Value::Array(tool_calls_json);
                     assistant_msg["content"] = serde_json::Value::Null;
                 } else {
-                    assistant_msg["content"] =
-                        serde_json::Value::String(text_parts.join(""));
+                    assistant_msg["content"] = serde_json::Value::String(text_parts.join(""));
                 }
                 result.push(assistant_msg);
             }
@@ -951,13 +965,25 @@ impl Provider for OpenAiChatProvider {
     fn stream(&self, request: Request) -> EventStream {
         let api_key = self.api_key.clone();
         let base_url = self.base_url.clone();
+        let provider_id = self.provider_id.clone();
+        let extra_headers = self.extra_headers.clone();
         let body = self.build_request_body(&request);
         let cancel = request.cancel.clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
 
         tokio::spawn(async move {
-            if let Err(e) = Self::stream_http(api_key, base_url, &body, cancel, &tx).await {
+            if let Err(e) = Self::stream_http(
+                api_key,
+                base_url,
+                provider_id,
+                extra_headers,
+                &body,
+                cancel,
+                &tx,
+            )
+            .await
+            {
                 let _ = tx.send(Err(e)).await;
             }
         });
@@ -966,7 +992,7 @@ impl Provider for OpenAiChatProvider {
     }
 
     fn id(&self) -> &str {
-        "openai"
+        &self.provider_id
     }
 
     fn models(&self) -> &[ModelInfo] {

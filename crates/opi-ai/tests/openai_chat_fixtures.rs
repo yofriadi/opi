@@ -25,10 +25,7 @@ fn map_fixture(input: &str) -> Vec<AssistantStreamEvent> {
         })
         .collect();
     let mut mapper = OpenAiChatMapper::new(opi_ai::ApiKind::OpenAi, "openai");
-    events
-        .into_iter()
-        .flat_map(|e| mapper.process(e))
-        .collect()
+    events.into_iter().flat_map(|e| mapper.process(e)).collect()
 }
 
 /// Helper: map with a custom provider label (for OpenRouter/Mistral profiles).
@@ -41,10 +38,7 @@ fn map_fixture_as(input: &str, api: opi_ai::ApiKind, provider: &str) -> Vec<Assi
         })
         .collect();
     let mut mapper = OpenAiChatMapper::new(api, provider);
-    events
-        .into_iter()
-        .flat_map(|e| mapper.process(e))
-        .collect()
+    events.into_iter().flat_map(|e| mapper.process(e)).collect()
 }
 
 /// Helper: collect valid OpenAiChatEvents from parsed output.
@@ -264,9 +258,18 @@ fn error_event_maps_to_stream_error() {
     let stream_events = map_fixture(error_fixture());
 
     assert_eq!(stream_events.len(), 1);
-    if let AssistantStreamEvent::Error { reason, message, .. } = &stream_events[0] {
+    if let AssistantStreamEvent::Error {
+        reason, message, ..
+    } = &stream_events[0]
+    {
         assert_eq!(*reason, StopReason::Error);
-        assert!(message.error_message.as_ref().unwrap().contains("Rate limit"));
+        assert!(
+            message
+                .error_message
+                .as_ref()
+                .unwrap()
+                .contains("Rate limit")
+        );
     } else {
         panic!("expected Error stream event");
     }
@@ -335,7 +338,10 @@ data: [DONE]
         .iter()
         .filter(|e| matches!(e, AssistantStreamEvent::TextDelta { delta, .. } if delta.is_empty()))
         .collect();
-    assert!(empty_deltas.is_empty(), "should not emit empty TextDelta events");
+    assert!(
+        empty_deltas.is_empty(),
+        "should not emit empty TextDelta events"
+    );
 }
 
 #[test]
@@ -511,8 +517,8 @@ fn compat_config_defaults() {
 
 // --- Build Request Body Tests ---
 
-use opi_ai::provider::Request;
 use opi_ai::message::{InputContent, Message, UserMessage};
+use opi_ai::provider::Request;
 use opi_ai::provider::ThinkingConfig;
 use tokio_util::sync::CancellationToken;
 
@@ -521,7 +527,9 @@ fn make_test_request() -> Request {
         model: "openai:gpt-4o".into(),
         system: Some("You are helpful.".into()),
         messages: vec![Message::User(UserMessage {
-            content: vec![InputContent::Text { text: "Hello".into() }],
+            content: vec![InputContent::Text {
+                text: "Hello".into(),
+            }],
             timestamp_ms: 0,
         })],
         tools: vec![],
