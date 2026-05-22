@@ -7,6 +7,7 @@ pub mod anthropic;
 pub mod config;
 pub mod gemini;
 pub mod message;
+pub mod mistral;
 pub mod model;
 pub mod openai_chat;
 pub mod openai_responses;

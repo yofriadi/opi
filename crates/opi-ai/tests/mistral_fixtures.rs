@@ -1,0 +1,288 @@
+//! Mistral provider profile fixture tests (task 2.5).
+//!
+//! Verifies: model resolution, routing through OpenAI-compatible adapter,
+//! request body construction, SSE text/tool-call streaming, error handling,
+//! usage tracking, and Mistral-specific model list.
+
+use futures_util::StreamExt;
+use opi_ai::message::{InputContent, Message, UserMessage};
+use opi_ai::openai_chat::OpenAiChatProvider;
+use opi_ai::provider::{EventStream, Provider, Request, ThinkingConfig};
+use opi_ai::registry::ProviderRegistry;
+use opi_ai::stream::AssistantStreamEvent;
+use tokio_util::sync::CancellationToken;
+
+/// Helper: create a Mistral-configured provider.
+fn mistral_provider(api_key: &str) -> OpenAiChatProvider {
+    opi_ai::mistral::mistral_provider(api_key.into(), None)
+}
+
+/// Helper: collect stream events asynchronously.
+async fn collect_stream(stream: EventStream) -> Vec<AssistantStreamEvent> {
+    stream.filter_map(|r| async move { r.ok() }).collect().await
+}
+
+// ---------------------------------------------------------------------------
+// Provider identity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mistral_provider_id_is_mistral() {
+    let provider = mistral_provider("test-key");
+    assert_eq!(provider.id(), "mistral");
+}
+
+// ---------------------------------------------------------------------------
+// Model resolution via registry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mistral_resolves_model_in_registry() {
+    let mut registry = ProviderRegistry::new();
+    registry.register(Box::new(mistral_provider("key")));
+    let (provider, model) = registry.resolve("mistral:mistral-large-latest").unwrap();
+    assert_eq!(provider.id(), "mistral");
+    assert_eq!(model.id, "mistral-large-latest");
+}
+
+#[test]
+fn mistral_registry_lists_provider_id() {
+    let mut registry = ProviderRegistry::new();
+    registry.register(Box::new(mistral_provider("key")));
+    let ids = registry.provider_ids();
+    assert!(ids.contains(&"mistral"));
+}
+
+#[test]
+fn mistral_unknown_model_returns_error() {
+    let mut registry = ProviderRegistry::new();
+    registry.register(Box::new(mistral_provider("key")));
+    let result = registry.resolve("mistral:nonexistent-model");
+    assert!(result.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Request body — prefix stripping
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mistral_request_body_strips_provider_prefix() {
+    let provider = mistral_provider("key");
+    let request = Request {
+        model: "mistral:mistral-small-latest".into(),
+        system: Some("You are helpful.".into()),
+        messages: vec![Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "Hello".into(),
+            }],
+            timestamp_ms: 0,
+        })],
+        tools: vec![],
+        max_tokens: Some(1024),
+        temperature: None,
+        thinking: ThinkingConfig::default(),
+        stop_sequences: vec![],
+        metadata: None,
+        cancel: CancellationToken::new(),
+    };
+    let body = provider.build_request_body(&request);
+    assert_eq!(body["model"], "mistral-small-latest");
+}
+
+// ---------------------------------------------------------------------------
+// SSE text streaming through OpenAI adapter
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mistral_text_streaming_produces_start_delta_done() {
+    let provider = mistral_provider("key");
+    let sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}],\"model\":\"mistral-large-latest\"}\n\n\
+               data: {\"choices\":[{\"delta\":{\"content\":\"Hi there\"}}]}\n\n\
+               data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n\
+               data: [DONE]\n\n";
+    let events = collect_stream(provider.stream_from_sse(sse, CancellationToken::new())).await;
+
+    let starts = events
+        .iter()
+        .filter(|e| matches!(e, AssistantStreamEvent::Start { .. }))
+        .count();
+    let deltas = events
+        .iter()
+        .filter(|e| matches!(e, AssistantStreamEvent::TextDelta { .. }))
+        .count();
+    let dones = events
+        .iter()
+        .filter(|e| matches!(e, AssistantStreamEvent::Done { .. }))
+        .count();
+
+    assert_eq!(starts, 1, "should have exactly one Start");
+    assert_eq!(deltas, 1, "should have exactly one TextDelta");
+    assert_eq!(dones, 1, "should have exactly one Done");
+}
+
+#[tokio::test]
+async fn mistral_done_event_has_mistral_provider() {
+    let provider = mistral_provider("key");
+    let sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\n\
+               data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n\
+               data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n\
+               data: [DONE]\n\n";
+    let events = collect_stream(provider.stream_from_sse(sse, CancellationToken::new())).await;
+
+    let done = events
+        .iter()
+        .find_map(|e| match e {
+            AssistantStreamEvent::Done { message, .. } => Some(message.provider.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(done, "mistral");
+}
+
+// ---------------------------------------------------------------------------
+// SSE tool call streaming
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mistral_tool_call_streaming_works() {
+    let provider = mistral_provider("key");
+    let sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\n\
+               data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"\"}}]}}]}\n\n\
+               data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"foo.rs\\\"}\"}}]}}]}\n\n\
+               data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":10}}\n\n\
+               data: [DONE]\n\n";
+    let events = collect_stream(provider.stream_from_sse(sse, CancellationToken::new())).await;
+
+    let tool_starts = events
+        .iter()
+        .filter(|e| matches!(e, AssistantStreamEvent::ToolCallStart { .. }))
+        .count();
+    let tool_ends = events
+        .iter()
+        .filter(|e| matches!(e, AssistantStreamEvent::ToolCallEnd { .. }))
+        .count();
+
+    assert_eq!(tool_starts, 1, "should have one ToolCallStart");
+    assert_eq!(tool_ends, 1, "should have one ToolCallEnd");
+}
+
+// ---------------------------------------------------------------------------
+// Error handling
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mistral_error_event_routing() {
+    let provider = mistral_provider("key");
+    let sse = "data: {\"error\":{\"message\":\"Model not found\"}}\n\n\
+               data: [DONE]\n\n";
+    let events = collect_stream(provider.stream_from_sse(sse, CancellationToken::new())).await;
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::Error { .. })),
+        "should have an Error event"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Usage tracking
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mistral_usage_in_done_event() {
+    let provider = mistral_provider("key");
+    let sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\n\
+               data: {\"choices\":[{\"delta\":{\"content\":\"test\"}}]}\n\n\
+               data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":13}}\n\n\
+               data: [DONE]\n\n";
+    let events = collect_stream(provider.stream_from_sse(sse, CancellationToken::new())).await;
+
+    let usage = events
+        .iter()
+        .find_map(|e| match e {
+            AssistantStreamEvent::Done { message, .. } => Some(message.usage.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(usage.input_tokens, 42);
+    assert_eq!(usage.output_tokens, 13);
+}
+
+// ---------------------------------------------------------------------------
+// Model list
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mistral_has_model_list() {
+    let provider = mistral_provider("key");
+    let models = provider.models();
+    assert!(
+        !models.is_empty(),
+        "Mistral provider should have at least one model"
+    );
+    assert!(
+        models.iter().any(|m| m.id == "mistral-large-latest"),
+        "should have mistral-large-latest model"
+    );
+    assert!(
+        models.iter().any(|m| m.id == "mistral-small-latest"),
+        "should have mistral-small-latest model"
+    );
+    assert!(
+        models.iter().any(|m| m.id == "codestral-latest"),
+        "should have codestral-latest model"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Custom base URL
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mistral_custom_base_url() {
+    let provider =
+        opi_ai::mistral::mistral_provider("key".into(), Some("https://custom.proxy".into()));
+    assert_eq!(provider.id(), "mistral");
+}
+
+// ---------------------------------------------------------------------------
+// Multiple text deltas
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mistral_multiple_text_deltas() {
+    let provider = mistral_provider("key");
+    let sse = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\n\
+               data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n\
+               data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n\
+               data: {\"choices\":[{\"delta\":{\"content\":\"!\"}}]}\n\n\
+               data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n\
+               data: [DONE]\n\n";
+    let events = collect_stream(provider.stream_from_sse(sse, CancellationToken::new())).await;
+
+    let deltas: Vec<&AssistantStreamEvent> = events
+        .iter()
+        .filter(|e| matches!(e, AssistantStreamEvent::TextDelta { .. }))
+        .collect();
+    assert_eq!(deltas.len(), 3, "should have three TextDelta events");
+
+    let done_text = events
+        .iter()
+        .find_map(|e| match e {
+            AssistantStreamEvent::Done { message, .. } => {
+                let text: String = message
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        opi_ai::message::AssistantContent::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                Some(text)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(done_text, "Hello world!");
+}
