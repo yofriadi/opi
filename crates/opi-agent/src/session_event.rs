@@ -1,0 +1,103 @@
+//! Session-level event protocol (S7.5).
+//!
+//! Events emitted during a session's lifetime that are not tied to a single
+//! agent loop invocation. These are the events serialized in JSON mode and
+//! persisted in session JSONL storage.
+
+use serde::{Deserialize, Serialize};
+
+use crate::event::AgentEvent;
+
+/// Reasons why compaction was triggered (S9.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionReason {
+    Manual,
+    Threshold,
+    Overflow,
+}
+
+/// Result of a successful compaction (S9.5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionResult {
+    pub summary: String,
+    pub first_kept_entry_id: String,
+    pub tokens_before: u64,
+    pub tokens_after: u64,
+}
+
+/// Thinking/reasoning level configuration (S9.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingLevel {
+    None,
+    Low,
+    Medium,
+    High,
+}
+
+/// Events emitted during a session's lifetime (S7.5).
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AgentSessionEvent {
+    Agent {
+        #[serde(with = "agent_event_serde")]
+        event: AgentEvent,
+    },
+    QueueUpdate {
+        steering: Vec<String>,
+        follow_up: Vec<String>,
+    },
+    CompactionStart {
+        reason: CompactionReason,
+    },
+    CompactionEnd {
+        reason: CompactionReason,
+        result: Option<CompactionResult>,
+        aborted: bool,
+        will_retry: bool,
+        error_message: Option<String>,
+    },
+    AutoRetryStart {
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        error_message: String,
+    },
+    AutoRetryEnd {
+        success: bool,
+        attempt: u32,
+        final_error: Option<String>,
+    },
+    SessionInfoChanged {
+        session_id: String,
+        name: Option<String>,
+    },
+    ThinkingLevelChanged {
+        level: ThinkingLevel,
+    },
+}
+
+/// Serde bridge for `AgentEvent` (no derives on the source type).
+mod agent_event_serde {
+    use crate::event::AgentEvent;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(event: &AgentEvent, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serde_json::to_value(event)
+            .map_err(serde::ser::Error::custom)
+            .and_then(|v| v.serialize(serializer))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<AgentEvent, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let v = serde_json::Value::deserialize(deserializer)?;
+        serde_json::from_value(v).map_err(serde::de::Error::custom)
+    }
+}

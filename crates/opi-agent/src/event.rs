@@ -1,5 +1,7 @@
 //! Agent event protocol (S7.4).
 
+use serde::{Deserialize, Serialize};
+
 use crate::message::AgentMessage;
 
 /// Callback type for emitting agent events to subscribers.
@@ -7,7 +9,8 @@ pub type AgentEventSink = Box<dyn Fn(AgentEvent) + Send + Sync>;
 
 /// Events emitted during the agent loop lifecycle.
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum AgentEvent {
     /// The agent loop has started.
     AgentStart,
@@ -25,6 +28,10 @@ pub enum AgentEvent {
     /// An assistant message has been updated with a stream event.
     MessageUpdate {
         message: AgentMessage,
+        #[serde(
+            serialize_with = "serde_json_bridge::serialize",
+            deserialize_with = "deserialize_boxed_stream_event"
+        )]
         assistant_event: Box<opi_ai::stream::AssistantStreamEvent>,
     },
     /// An assistant message has finished streaming.
@@ -54,4 +61,30 @@ pub enum AgentEvent {
         steering: Vec<String>,
         follow_up: Vec<String>,
     },
+}
+
+fn deserialize_boxed_stream_event<'de, D>(
+    deserializer: D,
+) -> Result<Box<opi_ai::stream::AssistantStreamEvent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(deserializer)?;
+    let event: opi_ai::stream::AssistantStreamEvent =
+        serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+    Ok(Box::new(event))
+}
+
+mod serde_json_bridge {
+    use serde::{Serialize as _, Serializer};
+
+    pub fn serialize<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        T: serde::Serialize,
+        S: Serializer,
+    {
+        serde_json::to_value(value)
+            .map_err(serde::ser::Error::custom)
+            .and_then(|v| v.serialize(serializer))
+    }
 }

@@ -1,0 +1,545 @@
+//! Session v1 JSONL storage fixture tests (task 2.6).
+//!
+//! Verifies: AgentMessage serde with new variants, AgentSessionEvent serde,
+//! session header parsing, tree entry round-trip, crash recovery,
+//! JSONL append-only writer/reader, and versioned envelope.
+
+use std::io::Write;
+
+use opi_agent::message::AgentMessage;
+use opi_agent::session::{
+    CrashRecovery, CompactionEntry, LeafEntry, MessageEntry, SessionEntry, SessionHeader,
+    SessionReader, SessionWriter,
+};
+use opi_agent::session_event::{
+    AgentSessionEvent, CompactionReason, CompactionResult, ThinkingLevel,
+};
+use opi_agent::AgentEvent;
+use opi_ai::message::{InputContent, Message, UserMessage};
+
+// ---------------------------------------------------------------------------
+// AgentMessage serde — new variants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn agent_message_llm_round_trip() {
+    let msg = AgentMessage::Llm(Message::User(UserMessage {
+        content: vec![InputContent::Text {
+            text: "Hello".into(),
+        }],
+        timestamp_ms: 1000,
+    }));
+    let json = serde_json::to_string(&msg).unwrap();
+    let back: AgentMessage = serde_json::from_str(&json).unwrap();
+    assert!(matches!(back, AgentMessage::Llm(Message::User(_))));
+}
+
+#[test]
+fn agent_message_compaction_summary_round_trip() {
+    let msg = AgentMessage::CompactionSummary(opi_agent::message::CompactionSummaryMessage {
+        summary: "Session discussed CLI scaffolding.".into(),
+        first_kept_entry_id: "entry-42".into(),
+        tokens_before: 45000,
+        tokens_after: 8000,
+    });
+    let json = serde_json::to_string(&msg).unwrap();
+    let back: AgentMessage = serde_json::from_str(&json).unwrap();
+    if let AgentMessage::CompactionSummary(c) = &back {
+        assert_eq!(c.summary, "Session discussed CLI scaffolding.");
+        assert_eq!(c.first_kept_entry_id, "entry-42");
+        assert_eq!(c.tokens_before, 45000);
+        assert_eq!(c.tokens_after, 8000);
+    } else {
+        panic!("expected CompactionSummary variant, got {back:?}");
+    }
+}
+
+#[test]
+fn agent_message_branch_summary_round_trip() {
+    let msg = AgentMessage::BranchSummary(opi_agent::message::BranchSummaryMessage {
+        parent_session_id: "parent-123".into(),
+        summary: "Branch explored error handling.".into(),
+        entry_count: 15,
+    });
+    let json = serde_json::to_string(&msg).unwrap();
+    let back: AgentMessage = serde_json::from_str(&json).unwrap();
+    if let AgentMessage::BranchSummary(b) = &back {
+        assert_eq!(b.parent_session_id, "parent-123");
+        assert_eq!(b.summary, "Branch explored error handling.");
+        assert_eq!(b.entry_count, 15);
+    } else {
+        panic!("expected BranchSummary variant, got {back:?}");
+    }
+}
+
+#[test]
+fn agent_message_custom_round_trip() {
+    let msg = AgentMessage::Custom(opi_agent::message::CustomAgentMessage {
+        kind: "my_extension".into(),
+        data: serde_json::json!({"key": "value"}),
+        include_in_llm_context: true,
+    });
+    let json = serde_json::to_string(&msg).unwrap();
+    let back: AgentMessage = serde_json::from_str(&json).unwrap();
+    if let AgentMessage::Custom(c) = &back {
+        assert_eq!(c.kind, "my_extension");
+        assert_eq!(c.data["key"], "value");
+        assert!(c.include_in_llm_context);
+    } else {
+        panic!("expected Custom variant, got {back:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AgentSessionEvent serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn session_event_agent_round_trip() {
+    let event = AgentSessionEvent::Agent {
+        event: AgentEvent::AgentStart,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: AgentSessionEvent = serde_json::from_str(&json).unwrap();
+    assert!(matches!(
+        back,
+        AgentSessionEvent::Agent {
+            event: AgentEvent::AgentStart
+        }
+    ));
+}
+
+#[test]
+fn session_event_queue_update_round_trip() {
+    let event = AgentSessionEvent::QueueUpdate {
+        steering: vec!["steer1".into()],
+        follow_up: vec!["follow1".into()],
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: AgentSessionEvent = serde_json::from_str(&json).unwrap();
+    if let AgentSessionEvent::QueueUpdate { steering, follow_up } = &back {
+        assert_eq!(steering.len(), 1);
+        assert_eq!(follow_up.len(), 1);
+    } else {
+        panic!("expected QueueUpdate variant");
+    }
+}
+
+#[test]
+fn session_event_compaction_start_round_trip() {
+    let event = AgentSessionEvent::CompactionStart {
+        reason: CompactionReason::Threshold,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: AgentSessionEvent = serde_json::from_str(&json).unwrap();
+    if let AgentSessionEvent::CompactionStart { reason } = &back {
+        assert_eq!(*reason, CompactionReason::Threshold);
+    } else {
+        panic!("expected CompactionStart variant");
+    }
+}
+
+#[test]
+fn session_event_compaction_end_round_trip() {
+    let event = AgentSessionEvent::CompactionEnd {
+        reason: CompactionReason::Overflow,
+        result: Some(CompactionResult {
+            summary: "Compacted.".into(),
+            first_kept_entry_id: "e10".into(),
+            tokens_before: 50000,
+            tokens_after: 10000,
+        }),
+        aborted: false,
+        will_retry: false,
+        error_message: None,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: AgentSessionEvent = serde_json::from_str(&json).unwrap();
+    if let AgentSessionEvent::CompactionEnd {
+        reason, result, ..
+    } = &back
+    {
+        assert_eq!(*reason, CompactionReason::Overflow);
+        assert!(result.is_some());
+        assert_eq!(result.as_ref().unwrap().tokens_before, 50000);
+    } else {
+        panic!("expected CompactionEnd variant");
+    }
+}
+
+#[test]
+fn session_event_auto_retry_round_trip() {
+    let start = AgentSessionEvent::AutoRetryStart {
+        attempt: 2,
+        max_attempts: 3,
+        delay_ms: 1000,
+        error_message: "rate limited".into(),
+    };
+    let json = serde_json::to_string(&start).unwrap();
+    let back: AgentSessionEvent = serde_json::from_str(&json).unwrap();
+    if let AgentSessionEvent::AutoRetryStart {
+        attempt,
+        max_attempts,
+        ..
+    } = &back
+    {
+        assert_eq!(*attempt, 2);
+        assert_eq!(*max_attempts, 3);
+    } else {
+        panic!("expected AutoRetryStart variant");
+    }
+
+    let end = AgentSessionEvent::AutoRetryEnd {
+        success: true,
+        attempt: 3,
+        final_error: None,
+    };
+    let json2 = serde_json::to_string(&end).unwrap();
+    let back2: AgentSessionEvent = serde_json::from_str(&json2).unwrap();
+    assert!(matches!(back2, AgentSessionEvent::AutoRetryEnd { success: true, .. }));
+}
+
+#[test]
+fn session_event_session_info_changed_round_trip() {
+    let event = AgentSessionEvent::SessionInfoChanged {
+        session_id: "sess-1".into(),
+        name: Some("my session".into()),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: AgentSessionEvent = serde_json::from_str(&json).unwrap();
+    if let AgentSessionEvent::SessionInfoChanged { session_id, name } = &back {
+        assert_eq!(session_id, "sess-1");
+        assert_eq!(name.as_deref(), Some("my session"));
+    } else {
+        panic!("expected SessionInfoChanged variant");
+    }
+}
+
+#[test]
+fn session_event_thinking_level_changed_round_trip() {
+    for level in [
+        ThinkingLevel::None,
+        ThinkingLevel::Low,
+        ThinkingLevel::Medium,
+        ThinkingLevel::High,
+    ] {
+        let event = AgentSessionEvent::ThinkingLevelChanged { level };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: AgentSessionEvent = serde_json::from_str(&json).unwrap();
+        if let AgentSessionEvent::ThinkingLevelChanged { level: l } = &back {
+            assert_eq!(*l, level);
+        } else {
+            panic!("expected ThinkingLevelChanged variant");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CompactionReason and ThinkingLevel exhaustive serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compaction_reason_all_variants_round_trip() {
+    for reason in [
+        CompactionReason::Manual,
+        CompactionReason::Threshold,
+        CompactionReason::Overflow,
+    ] {
+        let json = serde_json::to_string(&reason).unwrap();
+        let back: CompactionReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, reason);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SessionHeader
+// ---------------------------------------------------------------------------
+
+fn make_header(id: &str) -> SessionHeader {
+    SessionHeader::new(
+        id.into(),
+        "2026-05-22T12:00:00Z".into(),
+        "/repo".into(),
+        None,
+    )
+}
+
+fn make_header_with_parent(id: &str, parent: &str) -> SessionHeader {
+    SessionHeader::new(
+        id.into(),
+        "2026-05-22T12:00:00Z".into(),
+        "/repo".into(),
+        Some(parent.into()),
+    )
+}
+
+#[test]
+fn session_header_round_trip() {
+    let header = make_header("018f-abc");
+    let json = serde_json::to_string(&header).unwrap();
+    let back: SessionHeader = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.version, 1);
+    assert_eq!(back.id, "018f-abc");
+    assert_eq!(back.cwd, "/repo");
+    assert!(back.parent_session.is_none());
+}
+
+#[test]
+fn session_header_serializes_with_type_field() {
+    let header = make_header_with_parent("018f-abc", "parent-sess");
+    let val: serde_json::Value = serde_json::to_value(&header).unwrap();
+    assert_eq!(val["type"], "session");
+    assert_eq!(val["version"], 1);
+    assert_eq!(val["parent_session"], "parent-sess");
+}
+
+// ---------------------------------------------------------------------------
+// SessionEntry tree entries
+// ---------------------------------------------------------------------------
+
+#[test]
+fn message_entry_round_trip() {
+    let entry = SessionEntry::Message(MessageEntry {
+        id: "a1b2".into(),
+        parent_id: None,
+        timestamp: "2026-05-22T12:00:01Z".into(),
+        message: Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "Read src/main.rs".into(),
+            }],
+            timestamp_ms: 1000,
+        }),
+    });
+    let json = serde_json::to_string(&entry).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(val["type"], "message");
+    let back: SessionEntry = serde_json::from_str(&json).unwrap();
+    assert!(matches!(back, SessionEntry::Message(_)));
+}
+
+#[test]
+fn compaction_entry_round_trip() {
+    let entry = SessionEntry::Compaction(CompactionEntry {
+        id: "c3d4".into(),
+        parent_id: Some("b2c3".into()),
+        timestamp: "2026-05-22T13:00:00Z".into(),
+        summary: "The session inspected CLI scaffolding.".into(),
+        first_kept_entry_id: "b2c3".into(),
+        tokens_before: 45000,
+        tokens_after: 8000,
+    });
+    let json = serde_json::to_string(&entry).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(val["type"], "compaction");
+    let back: SessionEntry = serde_json::from_str(&json).unwrap();
+    if let SessionEntry::Compaction(c) = &back {
+        assert_eq!(c.summary, "The session inspected CLI scaffolding.");
+        assert_eq!(c.tokens_before, 45000);
+    } else {
+        panic!("expected Compaction entry");
+    }
+}
+
+#[test]
+fn leaf_entry_round_trip() {
+    let entry = SessionEntry::Leaf(LeafEntry {
+        id: "leaf-1".into(),
+        parent_id: Some("entry-5".into()),
+        timestamp: "2026-05-22T14:00:00Z".into(),
+        entry_id: "entry-5".into(),
+    });
+    let json = serde_json::to_string(&entry).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(val["type"], "leaf");
+    let back: SessionEntry = serde_json::from_str(&json).unwrap();
+    if let SessionEntry::Leaf(l) = &back {
+        assert_eq!(l.entry_id, "entry-5");
+    } else {
+        panic!("expected Leaf entry");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JSONL Writer + Reader round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn jsonl_write_and_read_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+
+    let header = make_header("sess-001");
+
+    {
+        let mut writer = SessionWriter::create(&path, header.clone()).unwrap();
+        writer
+            .append(&SessionEntry::Message(MessageEntry {
+                id: "e1".into(),
+                parent_id: None,
+                timestamp: "2026-05-22T12:00:01Z".into(),
+                message: Message::User(UserMessage {
+                    content: vec![InputContent::Text {
+                        text: "Hello".into(),
+                    }],
+                    timestamp_ms: 1000,
+                }),
+            }))
+            .unwrap();
+        writer
+            .append(&SessionEntry::Message(MessageEntry {
+                id: "e2".into(),
+                parent_id: Some("e1".into()),
+                timestamp: "2026-05-22T12:00:02Z".into(),
+                message: Message::User(UserMessage {
+                    content: vec![InputContent::Text {
+                        text: "World".into(),
+                    }],
+                    timestamp_ms: 2000,
+                }),
+            }))
+            .unwrap();
+    }
+
+    let (read_header, entries) = SessionReader::read_all(&path).unwrap();
+    assert_eq!(read_header.version, 1);
+    assert_eq!(read_header.id, "sess-001");
+    assert_eq!(entries.len(), 2);
+
+    if let SessionEntry::Message(m) = &entries[0] {
+        assert_eq!(m.id, "e1");
+        assert!(m.parent_id.is_none());
+    } else {
+        panic!("first entry should be a Message");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Crash recovery — incomplete final line
+// ---------------------------------------------------------------------------
+
+/// Helper: create a minimal message entry for use in crash recovery tests.
+fn test_message_entry(id: &str, text: &str) -> SessionEntry {
+    SessionEntry::Message(MessageEntry {
+        id: id.into(),
+        parent_id: None,
+        timestamp: "2026-05-22T12:00:01Z".into(),
+        message: Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: text.into(),
+            }],
+            timestamp_ms: 0,
+        }),
+    })
+}
+
+#[test]
+fn crash_recovery_skips_incomplete_final_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("crash.jsonl");
+
+    // Write valid session using the writer, then append an incomplete line.
+    {
+        let mut writer =
+            SessionWriter::create(&path, make_header("crash-1")).unwrap();
+        writer.append(&test_message_entry("e1", "Hi")).unwrap();
+    }
+    // Append incomplete line simulating a crash.
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        write!(f, "{{\"type\":\"message\",\"id\":\"e2").unwrap(); // no newline, incomplete
+    }
+
+    let (_read_header, entries, recovery) = SessionReader::read_with_recovery(&path).unwrap();
+    assert_eq!(entries.len(), 1, "should have one valid entry");
+    assert_eq!(
+        recovery,
+        CrashRecovery::TruncatedLine,
+        "should report truncated final line"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Crash recovery — corrupt middle entry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn crash_recovery_reports_corrupt_middle_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("corrupt.jsonl");
+
+    // Write a valid session, then inject corrupt lines by rewriting.
+    let header = make_header("corrupt-1");
+    let entry1 = test_message_entry("e1", "Hi");
+    let entry3 = test_message_entry("e3", "Bye");
+    let entry1_json = serde_json::to_string(&entry1).unwrap();
+    let entry3_json = serde_json::to_string(&entry3).unwrap();
+    let header_json = serde_json::to_string(&header).unwrap();
+
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "{header_json}").unwrap();
+        writeln!(f, "{entry1_json}").unwrap();
+        writeln!(f, "NOT VALID JSON").unwrap();
+        writeln!(f, "{entry3_json}").unwrap();
+    }
+
+    let (_read_header, entries, recovery) = SessionReader::read_with_recovery(&path).unwrap();
+    assert_eq!(entries.len(), 2, "should have 2 valid entries");
+    assert_eq!(
+        recovery,
+        CrashRecovery::CorruptEntries { count: 1 },
+        "should report 1 corrupt entry"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Writer appends to existing session
+// ---------------------------------------------------------------------------
+
+#[test]
+fn writer_appends_to_existing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("append.jsonl");
+
+    let header = make_header("append-1");
+
+    // First write
+    {
+        let mut writer = SessionWriter::create(&path, header.clone()).unwrap();
+        writer
+            .append(&SessionEntry::Message(MessageEntry {
+                id: "e1".into(),
+                parent_id: None,
+                timestamp: "2026-05-22T12:00:01Z".into(),
+                message: Message::User(UserMessage {
+                    content: vec![InputContent::Text {
+                        text: "First".into(),
+                    }],
+                    timestamp_ms: 0,
+                }),
+            }))
+            .unwrap();
+    }
+
+    // Append more
+    {
+        let mut writer = SessionWriter::open(&path).unwrap();
+        writer
+            .append(&SessionEntry::Message(MessageEntry {
+                id: "e2".into(),
+                parent_id: Some("e1".into()),
+                timestamp: "2026-05-22T12:00:02Z".into(),
+                message: Message::User(UserMessage {
+                    content: vec![InputContent::Text {
+                        text: "Second".into(),
+                    }],
+                    timestamp_ms: 0,
+                }),
+            }))
+            .unwrap();
+    }
+
+    let (_, entries) = SessionReader::read_all(&path).unwrap();
+    assert_eq!(entries.len(), 2);
+}

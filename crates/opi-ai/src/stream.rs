@@ -53,7 +53,7 @@ pub struct Usage {
 }
 
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AssistantStreamEvent {
     #[serde(rename = "start")]
