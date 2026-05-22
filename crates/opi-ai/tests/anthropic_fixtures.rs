@@ -3,10 +3,13 @@
 //! DoD: "fixtures cover text, tool call, usage, error"
 //! All tests use fixture strings — no live provider calls (red flag #10).
 
-use opi_ai::anthropic::{AnthropicEvent, AnthropicMapper, ParsedEvent, parse_sse_events};
-use opi_ai::message::AssistantContent;
-use opi_ai::provider::Provider;
+use opi_ai::anthropic::{
+    AnthropicEvent, AnthropicMapper, AnthropicProvider, ParsedEvent, parse_sse_events,
+};
+use opi_ai::message::{AssistantContent, InputContent, Message, UserMessage};
+use opi_ai::provider::{Provider, Request, ThinkingConfig};
 use opi_ai::stream::{AssistantStreamEvent, StopReason};
+use tokio_util::sync::CancellationToken;
 
 /// Helper: parse fixture, extract valid events, and map through a stateful mapper.
 fn map_fixture(input: &str) -> Vec<AssistantStreamEvent> {
@@ -438,11 +441,505 @@ async fn drain_sse_events_handles_crlf_stream() {
     let lf_input = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_crlf\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-5-20250514\",\"stop_reason\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n";
     let crlf_input = lf_input.replace('\n', "\r\n");
 
-    let provider = opi_ai::anthropic::AnthropicProvider::new("test-key".into(), None);
-    let cancel = tokio_util::sync::CancellationToken::new();
+    let provider = AnthropicProvider::new("test-key".into(), None);
+    let cancel = CancellationToken::new();
     let mut stream = provider.stream_from_sse(&crlf_input, cancel);
 
     use futures_util::StreamExt;
     let first = stream.next().await.expect("should have an event");
     assert!(first.is_ok(), "CRLF SSE should produce valid stream events");
+}
+
+// --- Thinking Fixture (task 2.9) ---
+
+fn thinking_fixture() -> &'static str {
+    r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_think","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250514","stop_reason":null,"usage":{"input_tokens":30,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me analyze this problem."}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" Step 1: identify the key constraint."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"The answer is 42."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":120}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#
+}
+
+#[test]
+fn thinking_fixture_yields_thinking_start_delta_end() {
+    let stream_events = map_fixture(thinking_fixture());
+
+    // Start, ThinkingStart, ThinkingDelta("Let me..."), ThinkingDelta(" Step 1..."),
+    // ThinkingEnd, TextStart, TextDelta, TextEnd, Done
+    assert!(matches!(
+        stream_events[0],
+        AssistantStreamEvent::Start { .. }
+    ));
+
+    assert!(
+        matches!(
+            &stream_events[1],
+            AssistantStreamEvent::ThinkingStart { content_index, .. } if *content_index == 0
+        ),
+        "expected ThinkingStart at index 1"
+    );
+
+    if let AssistantStreamEvent::ThinkingDelta {
+        delta,
+        content_index,
+        ..
+    } = &stream_events[2]
+    {
+        assert_eq!(delta, "Let me analyze this problem.");
+        assert_eq!(*content_index, 0);
+    } else {
+        panic!("expected ThinkingDelta at index 2");
+    }
+
+    if let AssistantStreamEvent::ThinkingDelta { delta, .. } = &stream_events[3] {
+        assert_eq!(delta, " Step 1: identify the key constraint.");
+    } else {
+        panic!("expected ThinkingDelta at index 3");
+    }
+
+    if let AssistantStreamEvent::ThinkingEnd {
+        content,
+        content_index,
+        ..
+    } = &stream_events[4]
+    {
+        assert_eq!(
+            content,
+            "Let me analyze this problem. Step 1: identify the key constraint."
+        );
+        assert_eq!(*content_index, 0);
+    } else {
+        panic!("expected ThinkingEnd at index 4");
+    }
+}
+
+#[test]
+fn thinking_fixture_text_after_thinking() {
+    let stream_events = map_fixture(thinking_fixture());
+
+    // After thinking events, text events follow at content_index 1
+    assert!(matches!(
+        &stream_events[5],
+        AssistantStreamEvent::TextStart { content_index, .. } if *content_index == 1
+    ));
+
+    if let AssistantStreamEvent::TextDelta { delta, .. } = &stream_events[6] {
+        assert_eq!(delta, "The answer is 42.");
+    } else {
+        panic!("expected TextDelta at index 6");
+    }
+
+    if let AssistantStreamEvent::TextEnd {
+        content,
+        content_index,
+        ..
+    } = &stream_events[7]
+    {
+        assert_eq!(content, "The answer is 42.");
+        assert_eq!(*content_index, 1);
+    } else {
+        panic!("expected TextEnd at index 7");
+    }
+}
+
+#[test]
+fn thinking_fixture_done_has_both_thinking_and_text() {
+    let stream_events = map_fixture(thinking_fixture());
+
+    if let AssistantStreamEvent::Done { message, reason } = &stream_events[8] {
+        assert_eq!(*reason, StopReason::Stop);
+        assert_eq!(
+            message.content.len(),
+            2,
+            "should have thinking + text content"
+        );
+
+        // First content block is thinking
+        if let AssistantContent::Thinking { thinking } = &message.content[0] {
+            assert_eq!(
+                thinking,
+                "Let me analyze this problem. Step 1: identify the key constraint."
+            );
+        } else {
+            panic!("expected Thinking content at index 0");
+        }
+
+        // Second content block is text
+        if let AssistantContent::Text { text } = &message.content[1] {
+            assert_eq!(text, "The answer is 42.");
+        } else {
+            panic!("expected Text content at index 1");
+        }
+    } else {
+        panic!("expected Done event at index 8");
+    }
+}
+
+#[test]
+fn thinking_fixture_usage_tracked() {
+    let stream_events = map_fixture(thinking_fixture());
+
+    if let AssistantStreamEvent::Done { message, .. } = &stream_events[8] {
+        assert_eq!(message.usage.input_tokens, 30);
+        assert_eq!(message.usage.output_tokens, 120);
+    } else {
+        panic!("expected Done event");
+    }
+}
+
+// --- budget_tokens request body test ---
+
+#[test]
+fn build_request_body_includes_thinking_when_enabled() {
+    let provider = AnthropicProvider::new("test-key".into(), None);
+    let request = Request {
+        model: "anthropic:claude-sonnet-4-5-20250514".into(),
+        system: None,
+        messages: vec![Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "Hello".into(),
+            }],
+            timestamp_ms: 0,
+        })],
+        tools: vec![],
+        max_tokens: Some(4096),
+        temperature: None,
+        thinking: ThinkingConfig {
+            enabled: true,
+            budget_tokens: Some(5000),
+        },
+        stop_sequences: vec![],
+        metadata: None,
+        cancel: CancellationToken::new(),
+    };
+
+    let body = provider.build_request_body(&request);
+
+    let thinking = body
+        .get("thinking")
+        .expect("thinking field should be present");
+    assert_eq!(thinking["type"], "enabled");
+    assert_eq!(thinking["budget_tokens"], 5000);
+}
+
+#[test]
+fn build_request_body_uses_default_budget_when_none() {
+    let provider = AnthropicProvider::new("test-key".into(), None);
+    let request = Request {
+        model: "anthropic:claude-sonnet-4-5-20250514".into(),
+        system: None,
+        messages: vec![Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "Hello".into(),
+            }],
+            timestamp_ms: 0,
+        })],
+        tools: vec![],
+        max_tokens: Some(4096),
+        temperature: None,
+        thinking: ThinkingConfig {
+            enabled: true,
+            budget_tokens: None,
+        },
+        stop_sequences: vec![],
+        metadata: None,
+        cancel: CancellationToken::new(),
+    };
+
+    let body = provider.build_request_body(&request);
+
+    let thinking = body
+        .get("thinking")
+        .expect("thinking field should be present");
+    assert_eq!(
+        thinking["budget_tokens"], 10000,
+        "default budget should be 10000"
+    );
+}
+
+#[test]
+fn build_request_body_omits_thinking_when_disabled() {
+    let provider = AnthropicProvider::new("test-key".into(), None);
+    let request = Request {
+        model: "anthropic:claude-sonnet-4-5-20250514".into(),
+        system: None,
+        messages: vec![Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "Hello".into(),
+            }],
+            timestamp_ms: 0,
+        })],
+        tools: vec![],
+        max_tokens: Some(4096),
+        temperature: None,
+        thinking: ThinkingConfig::default(),
+        stop_sequences: vec![],
+        metadata: None,
+        cancel: CancellationToken::new(),
+    };
+
+    let body = provider.build_request_body(&request);
+
+    assert!(
+        body.get("thinking").is_none(),
+        "thinking should be absent when disabled"
+    );
+}
+
+// --- Thinking-only fixture (no text after thinking) ---
+
+fn thinking_only_fixture() -> &'static str {
+    r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_think_only","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250514","stop_reason":null,"usage":{"input_tokens":15,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Reasoning only"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":50}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#
+}
+
+#[test]
+fn thinking_only_fixture_produces_correct_events() {
+    let stream_events = map_fixture(thinking_only_fixture());
+
+    // Start, ThinkingStart, ThinkingDelta, ThinkingEnd, Done
+    assert_eq!(stream_events.len(), 5);
+
+    assert!(matches!(
+        &stream_events[1],
+        AssistantStreamEvent::ThinkingStart { content_index, .. } if *content_index == 0
+    ));
+    assert!(matches!(
+        &stream_events[2],
+        AssistantStreamEvent::ThinkingDelta { .. }
+    ));
+    assert!(matches!(
+        &stream_events[3],
+        AssistantStreamEvent::ThinkingEnd { .. }
+    ));
+
+    if let AssistantStreamEvent::Done { message, reason } = &stream_events[4] {
+        assert_eq!(*reason, StopReason::Stop);
+        assert_eq!(message.content.len(), 1);
+        if let AssistantContent::Thinking { thinking } = &message.content[0] {
+            assert_eq!(thinking, "Reasoning only");
+        } else {
+            panic!("expected Thinking content");
+        }
+    } else {
+        panic!("expected Done event");
+    }
+}
+
+// --- Empty thinking block (zero deltas) ---
+
+fn empty_thinking_fixture() -> &'static str {
+    r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_empty_think","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250514","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Short answer."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#
+}
+
+#[test]
+fn empty_thinking_block_emits_empty_thinking_end() {
+    let stream_events = map_fixture(empty_thinking_fixture());
+
+    // Start, ThinkingStart, ThinkingEnd, TextStart, TextDelta, TextEnd, Done
+    assert_eq!(stream_events.len(), 7);
+
+    // ThinkingStart at index 1
+    assert!(matches!(
+        &stream_events[1],
+        AssistantStreamEvent::ThinkingStart { content_index, .. } if *content_index == 0
+    ));
+
+    // ThinkingEnd with empty content at index 2 (no deltas between start and end)
+    if let AssistantStreamEvent::ThinkingEnd {
+        content,
+        content_index,
+        ..
+    } = &stream_events[2]
+    {
+        assert_eq!(
+            content, "",
+            "empty thinking block should produce empty content"
+        );
+        assert_eq!(*content_index, 0);
+    } else {
+        panic!("expected ThinkingEnd at index 2");
+    }
+
+    // Done message should have Thinking with empty string
+    if let AssistantStreamEvent::Done { message, .. } = &stream_events[6] {
+        if let AssistantContent::Thinking { thinking } = &message.content[0] {
+            assert_eq!(thinking, "");
+        } else {
+            panic!("expected Thinking content in Done");
+        }
+    } else {
+        panic!("expected Done event");
+    }
+}
+
+// --- Thinking + tool call interleave ---
+
+fn thinking_then_tool_fixture() -> &'static str {
+    r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_think_tool","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-5-20250514","stop_reason":null,"usage":{"input_tokens":40,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"I need to read the file."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_rt","name":"read_file","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"/etc/hosts\"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":80}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#
+}
+
+#[test]
+fn thinking_then_tool_call_tracks_content_indices() {
+    let stream_events = map_fixture(thinking_then_tool_fixture());
+
+    // Start, ThinkingStart(0), ThinkingDelta(0), ThinkingEnd(0),
+    // ToolCallStart(1), ToolCallDelta(1), ToolCallEnd(1), Done
+    assert_eq!(stream_events.len(), 8);
+
+    // Thinking at content_index 0
+    assert!(matches!(
+        &stream_events[1],
+        AssistantStreamEvent::ThinkingStart { content_index, .. } if *content_index == 0
+    ));
+    assert!(matches!(
+        &stream_events[2],
+        AssistantStreamEvent::ThinkingDelta { content_index, .. } if *content_index == 0
+    ));
+    if let AssistantStreamEvent::ThinkingEnd {
+        content,
+        content_index,
+        ..
+    } = &stream_events[3]
+    {
+        assert_eq!(content, "I need to read the file.");
+        assert_eq!(*content_index, 0);
+    } else {
+        panic!("expected ThinkingEnd at index 3");
+    }
+
+    // Tool call at content_index 1
+    assert!(matches!(
+        &stream_events[4],
+        AssistantStreamEvent::ToolCallStart { content_index, .. } if *content_index == 1
+    ));
+    assert!(matches!(
+        &stream_events[5],
+        AssistantStreamEvent::ToolCallDelta { content_index, .. } if *content_index == 1
+    ));
+    if let AssistantStreamEvent::ToolCallEnd {
+        tool_call,
+        content_index,
+        ..
+    } = &stream_events[6]
+    {
+        assert_eq!(tool_call.name, "read_file");
+        assert_eq!(*content_index, 1);
+    } else {
+        panic!("expected ToolCallEnd at index 6");
+    }
+
+    // Done with tool_use reason and both content blocks
+    if let AssistantStreamEvent::Done { message, reason } = &stream_events[7] {
+        assert_eq!(*reason, StopReason::ToolUse);
+        assert_eq!(
+            message.content.len(),
+            2,
+            "should have thinking + tool_call content"
+        );
+        assert!(matches!(
+            &message.content[0],
+            AssistantContent::Thinking { .. }
+        ));
+        assert!(matches!(
+            &message.content[1],
+            AssistantContent::ToolCall { .. }
+        ));
+    } else {
+        panic!("expected Done event");
+    }
 }
