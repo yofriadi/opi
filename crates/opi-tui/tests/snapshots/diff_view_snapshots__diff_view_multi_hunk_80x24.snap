@@ -1,0 +1,29 @@
+---
+source: crates/opi-tui/tests/diff_view_snapshots.rs
+assertion_line: 95
+expression: "render(dv, 80, 24)"
+---
+┌ diff: src/lib.rs ────────────────────────────────────────────────────────────┐
+│@@ -1,9 +1,10 @@                                                              │
+│  1  1 │ use std::io;                                                         │
+│     2 │ +use std::fs;                                                        │
+│  2  3 │                                                                      │
+│  3  4 │ fn main() {                                                          │
+│  4    │ -    println!("hello");                                              │
+│     5 │ +    println!("hello, world");                                       │
+│  5  6 │ }                                                                    │
+│  6  7 │                                                                      │
+│  7  8 │ fn helper() {                                                        │
+│  8    │ -    println!("help");                                               │
+│     9 │ +    println!("helper");                                             │
+│  9 10 │ }                                                                    │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
