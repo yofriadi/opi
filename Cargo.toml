@@ -76,6 +76,7 @@ pulldown-cmark = "0.13"
 tempfile = "3"
 insta = "1"
 wiremock = "0.6"
+proptest = "1"
 
 # env loading
 dotenvy = "0.15"
