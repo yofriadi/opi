@@ -22,6 +22,7 @@ pub use config::{Config, Error};
 pub use model::Model;
 pub use provider::Provider;
 pub use stream::AssistantStreamEvent;
+pub use stream::{CostBreakdown, CumulativeUsage, Pricing, calculate_cost};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ApiKind {

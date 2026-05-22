@@ -152,6 +152,8 @@ struct RawMessage {
 struct RawUsage {
     input_tokens: Option<u32>,
     output_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
+    cache_creation_input_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -259,6 +261,8 @@ impl AnthropicEvent {
                     .map(|u| Usage {
                         input_tokens: u.input_tokens.unwrap_or(0),
                         output_tokens: u.output_tokens.unwrap_or(0),
+                        cache_read_tokens: u.cache_read_input_tokens.unwrap_or(0),
+                        cache_write_tokens: u.cache_creation_input_tokens.unwrap_or(0),
                     })
                     .unwrap_or_default();
                 AnthropicEvent::MessageStart {
@@ -301,6 +305,8 @@ impl AnthropicEvent {
                 usage: Usage {
                     input_tokens: usage.input_tokens.unwrap_or(0),
                     output_tokens: usage.output_tokens.unwrap_or(0),
+                    cache_read_tokens: usage.cache_read_input_tokens.unwrap_or(0),
+                    cache_write_tokens: usage.cache_creation_input_tokens.unwrap_or(0),
                 },
             },
             AnthropicRawEvent::MessageStop => AnthropicEvent::MessageStop,

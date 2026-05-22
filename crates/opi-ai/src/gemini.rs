@@ -88,6 +88,8 @@ struct UsageMetadata {
     #[allow(dead_code)]
     #[serde(rename = "totalTokenCount")]
     total_token_count: Option<u32>,
+    #[serde(rename = "cachedContentTokenCount")]
+    cached_content_token_count: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +153,8 @@ impl ParsedEvent {
         let usage = resp.usage_metadata.map(|u| Usage {
             input_tokens: u.prompt_token_count.unwrap_or(0),
             output_tokens: u.candidates_token_count.unwrap_or(0),
+            cache_read_tokens: u.cached_content_token_count.unwrap_or(0),
+            cache_write_tokens: 0,
         });
 
         if let Some(candidates) = &resp.candidates

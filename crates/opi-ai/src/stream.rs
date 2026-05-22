@@ -50,6 +50,104 @@ impl StopReason {
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    #[serde(default)]
+    pub cache_read_tokens: u32,
+    #[serde(default)]
+    pub cache_write_tokens: u32,
+}
+
+impl Usage {
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens as u64
+            + self.output_tokens as u64
+            + self.cache_read_tokens as u64
+            + self.cache_write_tokens as u64
+    }
+}
+
+/// Accumulated usage across multiple turns.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CumulativeUsage {
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
+    turns: u32,
+}
+
+impl CumulativeUsage {
+    pub fn total_input_tokens(&self) -> u64 {
+        self.input_tokens
+    }
+
+    pub fn total_output_tokens(&self) -> u64 {
+        self.output_tokens
+    }
+
+    pub fn total_cache_read_tokens(&self) -> u64 {
+        self.cache_read_tokens
+    }
+
+    pub fn total_cache_write_tokens(&self) -> u64 {
+        self.cache_write_tokens
+    }
+
+    pub fn turn_count(&self) -> u32 {
+        self.turns
+    }
+
+    pub fn accumulate(&mut self, turn: &Usage) {
+        self.input_tokens += turn.input_tokens as u64;
+        self.output_tokens += turn.output_tokens as u64;
+        self.cache_read_tokens += turn.cache_read_tokens as u64;
+        self.cache_write_tokens += turn.cache_write_tokens as u64;
+        self.turns += 1;
+    }
+
+    pub fn as_usage(&self) -> Usage {
+        Usage {
+            input_tokens: self.input_tokens as u32,
+            output_tokens: self.output_tokens as u32,
+            cache_read_tokens: self.cache_read_tokens as u32,
+            cache_write_tokens: self.cache_write_tokens as u32,
+        }
+    }
+}
+
+/// Per-million-token pricing for a model (USD).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Pricing {
+    pub input_cost_per_mtok: f64,
+    pub output_cost_per_mtok: f64,
+    pub cache_read_cost_per_mtok: f64,
+    pub cache_write_cost_per_mtok: f64,
+}
+
+/// Cost breakdown from a usage + pricing calculation.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CostBreakdown {
+    pub input_cost: f64,
+    pub output_cost: f64,
+    pub cache_read_cost: f64,
+    pub cache_write_cost: f64,
+}
+
+impl CostBreakdown {
+    pub fn total_cost(&self) -> f64 {
+        self.input_cost + self.output_cost + self.cache_read_cost + self.cache_write_cost
+    }
+}
+
+/// Calculate cost from usage and pricing.
+pub fn calculate_cost(usage: &Usage, pricing: &Pricing) -> CostBreakdown {
+    let per_tok = |cost_per_mtok: f64| cost_per_mtok / 1_000_000.0;
+    CostBreakdown {
+        input_cost: usage.input_tokens as f64 * per_tok(pricing.input_cost_per_mtok),
+        output_cost: usage.output_tokens as f64 * per_tok(pricing.output_cost_per_mtok),
+        cache_read_cost: usage.cache_read_tokens as f64 * per_tok(pricing.cache_read_cost_per_mtok),
+        cache_write_cost: usage.cache_write_tokens as f64
+            * per_tok(pricing.cache_write_cost_per_mtok),
+    }
 }
 
 #[non_exhaustive]

@@ -143,6 +143,12 @@ struct RawUsage {
     completion_tokens: Option<u32>,
     #[allow(dead_code)]
     total_tokens: Option<u32>,
+    prompt_tokens_details: Option<RawPromptTokenDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawPromptTokenDetails {
+    cached_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,9 +198,18 @@ impl OpenAiChatEvent {
             }];
         }
 
-        let usage = raw.usage.map(|u| Usage {
-            input_tokens: u.prompt_tokens.unwrap_or(0),
-            output_tokens: u.completion_tokens.unwrap_or(0),
+        let usage = raw.usage.map(|u| {
+            let cached = u
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens)
+                .unwrap_or(0);
+            Usage {
+                input_tokens: u.prompt_tokens.unwrap_or(0),
+                output_tokens: u.completion_tokens.unwrap_or(0),
+                cache_read_tokens: cached,
+                cache_write_tokens: 0,
+            }
         });
 
         let choices = match raw.choices {

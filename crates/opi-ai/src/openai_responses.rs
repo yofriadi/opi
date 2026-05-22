@@ -146,6 +146,12 @@ struct RawContentPart {
 struct RawUsage {
     input_tokens: Option<u32>,
     output_tokens: Option<u32>,
+    input_tokens_details: Option<RawInputTokenDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawInputTokenDetails {
+    cached_tokens: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -263,9 +269,18 @@ impl ResponsesEvent {
             "response.output_item.done" => ParsedEvent::Valid(ResponsesEvent::OutputItemDone),
             "response.completed" => {
                 let usage = data.response.as_ref().and_then(|r| {
-                    r.usage.as_ref().map(|u| Usage {
-                        input_tokens: u.input_tokens.unwrap_or(0),
-                        output_tokens: u.output_tokens.unwrap_or(0),
+                    r.usage.as_ref().map(|u| {
+                        let cached = u
+                            .input_tokens_details
+                            .as_ref()
+                            .and_then(|d| d.cached_tokens)
+                            .unwrap_or(0);
+                        Usage {
+                            input_tokens: u.input_tokens.unwrap_or(0),
+                            output_tokens: u.output_tokens.unwrap_or(0),
+                            cache_read_tokens: cached,
+                            cache_write_tokens: 0,
+                        }
                     })
                 });
                 let model = data.response.as_ref().and_then(|r| r.model.clone());
