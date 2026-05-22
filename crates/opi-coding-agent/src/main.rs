@@ -13,6 +13,17 @@ fn main() {
         eprintln!("opi {} - debug mode", env!("CARGO_PKG_VERSION"));
     }
 
+    // Handle session CLI commands first — they don't need config or a provider.
+    match opi_coding_agent::session_cli::handle_session_cli(
+        cli.list_sessions,
+        cli.resume.as_deref(),
+        cli.delete_session.as_deref(),
+    ) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(code) => std::process::exit(code),
+    }
+
     let config = match resolve_config(ConfigSource {
         cli_model: cli.model.clone(),
         config_path: cli.config.clone(),

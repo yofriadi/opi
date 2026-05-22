@@ -28,6 +28,18 @@ pub struct Cli {
     #[arg(long)]
     pub allow_mutating: bool,
 
+    /// List all sessions.
+    #[arg(long)]
+    pub list_sessions: bool,
+
+    /// Resume a session by ID.
+    #[arg(long)]
+    pub resume: Option<String>,
+
+    /// Delete a session by ID.
+    #[arg(long)]
+    pub delete_session: Option<String>,
+
     /// Enable debug tracing.
     #[arg(short = 'v', long)]
     pub verbose: bool,

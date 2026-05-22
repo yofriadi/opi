@@ -5,4 +5,5 @@ pub mod interactive;
 pub mod policy;
 pub mod prompt;
 pub mod runner;
+pub mod session_cli;
 pub mod tool;

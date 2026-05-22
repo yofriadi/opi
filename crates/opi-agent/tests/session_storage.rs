@@ -6,15 +6,15 @@
 
 use std::io::Write;
 
+use opi_agent::AgentEvent;
 use opi_agent::message::AgentMessage;
 use opi_agent::session::{
-    CrashRecovery, CompactionEntry, LeafEntry, MessageEntry, SessionEntry, SessionHeader,
+    CompactionEntry, CrashRecovery, LeafEntry, MessageEntry, SessionEntry, SessionHeader,
     SessionReader, SessionWriter,
 };
 use opi_agent::session_event::{
     AgentSessionEvent, CompactionReason, CompactionResult, ThinkingLevel,
 };
-use opi_agent::AgentEvent;
 use opi_ai::message::{InputContent, Message, UserMessage};
 
 // ---------------------------------------------------------------------------
@@ -117,7 +117,11 @@ fn session_event_queue_update_round_trip() {
     };
     let json = serde_json::to_string(&event).unwrap();
     let back: AgentSessionEvent = serde_json::from_str(&json).unwrap();
-    if let AgentSessionEvent::QueueUpdate { steering, follow_up } = &back {
+    if let AgentSessionEvent::QueueUpdate {
+        steering,
+        follow_up,
+    } = &back
+    {
         assert_eq!(steering.len(), 1);
         assert_eq!(follow_up.len(), 1);
     } else {
@@ -155,10 +159,7 @@ fn session_event_compaction_end_round_trip() {
     };
     let json = serde_json::to_string(&event).unwrap();
     let back: AgentSessionEvent = serde_json::from_str(&json).unwrap();
-    if let AgentSessionEvent::CompactionEnd {
-        reason, result, ..
-    } = &back
-    {
+    if let AgentSessionEvent::CompactionEnd { reason, result, .. } = &back {
         assert_eq!(*reason, CompactionReason::Overflow);
         assert!(result.is_some());
         assert_eq!(result.as_ref().unwrap().tokens_before, 50000);
@@ -196,7 +197,10 @@ fn session_event_auto_retry_round_trip() {
     };
     let json2 = serde_json::to_string(&end).unwrap();
     let back2: AgentSessionEvent = serde_json::from_str(&json2).unwrap();
-    assert!(matches!(back2, AgentSessionEvent::AutoRetryEnd { success: true, .. }));
+    assert!(matches!(
+        back2,
+        AgentSessionEvent::AutoRetryEnd { success: true, .. }
+    ));
 }
 
 #[test]
@@ -424,9 +428,7 @@ fn test_message_entry(id: &str, text: &str) -> SessionEntry {
         parent_id: None,
         timestamp: "2026-05-22T12:00:01Z".into(),
         message: Message::User(UserMessage {
-            content: vec![InputContent::Text {
-                text: text.into(),
-            }],
+            content: vec![InputContent::Text { text: text.into() }],
             timestamp_ms: 0,
         }),
     })
@@ -439,14 +441,16 @@ fn crash_recovery_skips_incomplete_final_line() {
 
     // Write valid session using the writer, then append an incomplete line.
     {
-        let mut writer =
-            SessionWriter::create(&path, make_header("crash-1")).unwrap();
+        let mut writer = SessionWriter::create(&path, make_header("crash-1")).unwrap();
         writer.append(&test_message_entry("e1", "Hi")).unwrap();
     }
     // Append incomplete line simulating a crash.
     {
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         write!(f, "{{\"type\":\"message\",\"id\":\"e2").unwrap(); // no newline, incomplete
     }
 

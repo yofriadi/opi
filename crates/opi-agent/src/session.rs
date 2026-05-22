@@ -84,9 +84,13 @@ pub enum SessionEntry {
 pub enum CrashRecovery {
     Clean,
     TruncatedLine,
-    CorruptEntries { count: usize },
+    CorruptEntries {
+        count: usize,
+    },
     /// Both corruption and truncation detected.
-    CorruptEntriesWithTruncation { count: usize },
+    CorruptEntriesWithTruncation {
+        count: usize,
+    },
 }
 
 /// Append-only JSONL writer with crash-safe flush.
@@ -197,8 +201,12 @@ impl SessionReader {
         }
 
         let recovery = match (corrupt_count > 0, last_line_incomplete) {
-            (true, true) => CrashRecovery::CorruptEntriesWithTruncation { count: corrupt_count },
-            (true, false) => CrashRecovery::CorruptEntries { count: corrupt_count },
+            (true, true) => CrashRecovery::CorruptEntriesWithTruncation {
+                count: corrupt_count,
+            },
+            (true, false) => CrashRecovery::CorruptEntries {
+                count: corrupt_count,
+            },
             (false, true) => CrashRecovery::TruncatedLine,
             (false, false) => CrashRecovery::Clean,
         };
