@@ -3,10 +3,12 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Widget},
 };
+
+use crate::theme::Theme;
 
 /// A single line in a unified diff.
 #[derive(Debug, Clone)]
@@ -39,6 +41,7 @@ pub struct DiffView {
     path: String,
     old: String,
     new: String,
+    theme: Theme,
 }
 
 impl DiffView {
@@ -47,7 +50,13 @@ impl DiffView {
             path: path.into(),
             old: old.into(),
             new: new.into(),
+            theme: Theme::default(),
         }
+    }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
     }
 }
 
@@ -183,6 +192,7 @@ fn compute_diff(old_lines: &[&str], new_lines: &[&str]) -> Vec<Hunk> {
 
 impl Widget for DiffView {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let t = &self.theme;
         let old_lines: Vec<&str> = if self.old.is_empty() {
             Vec::new()
         } else {
@@ -198,7 +208,7 @@ impl Widget for DiffView {
 
         let block = Block::bordered()
             .title(format!(" diff: {} ", self.path))
-            .style(Style::default().fg(Color::Cyan));
+            .style(Style::default().fg(t.diff_border));
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -210,7 +220,7 @@ impl Widget for DiffView {
             if y < max_y {
                 Line::from(Span::styled(
                     "(no changes)",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.diff_no_changes),
                 ))
                 .render(Rect { y, ..inner }, buf);
             }
@@ -240,7 +250,7 @@ impl Widget for DiffView {
             Line::from(Span::styled(
                 header,
                 Style::default()
-                    .fg(Color::Blue)
+                    .fg(t.diff_header)
                     .add_modifier(Modifier::BOLD),
             ))
             .render(Rect { y, ..inner }, buf);
@@ -289,7 +299,7 @@ impl Widget for DiffView {
                         );
                         Line::from(Span::styled(
                             format!("{prefix}{text}"),
-                            Style::default().fg(Color::Gray),
+                            Style::default().fg(t.diff_context),
                         ))
                         .render(Rect { y, ..inner }, buf);
                     }
@@ -297,8 +307,8 @@ impl Widget for DiffView {
                         let prefix =
                             format!(" {:>width$} {:>width$} │ ", old_num, "", width = num_width);
                         Line::from(vec![
-                            Span::styled(prefix, Style::default().fg(Color::Red)),
-                            Span::styled(format!("-{text}"), Style::default().fg(Color::Red)),
+                            Span::styled(prefix, Style::default().fg(t.diff_removed)),
+                            Span::styled(format!("-{text}"), Style::default().fg(t.diff_removed)),
                         ])
                         .render(Rect { y, ..inner }, buf);
                     }
@@ -306,8 +316,8 @@ impl Widget for DiffView {
                         let prefix =
                             format!(" {:>width$} {:>width$} │ ", "", new_num, width = num_width);
                         Line::from(vec![
-                            Span::styled(prefix, Style::default().fg(Color::Green)),
-                            Span::styled(format!("+{text}"), Style::default().fg(Color::Green)),
+                            Span::styled(prefix, Style::default().fg(t.diff_added)),
+                            Span::styled(format!("+{text}"), Style::default().fg(t.diff_added)),
                         ])
                         .render(Rect { y, ..inner }, buf);
                     }

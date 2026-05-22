@@ -3,18 +3,19 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Widget},
 };
 
-use crate::AppState;
+use crate::{AppState, theme::Theme};
 
 /// Single-line status bar.
 pub struct StatusBar {
     model: String,
     state: AppState,
     token_count: Option<u64>,
+    theme: Theme,
 }
 
 impl StatusBar {
@@ -23,27 +24,34 @@ impl StatusBar {
             model,
             state,
             token_count,
+            theme: Theme::default(),
         }
+    }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
     }
 }
 
 impl Widget for StatusBar {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let t = &self.theme;
         Block::default()
-            .style(Style::default().bg(Color::DarkGray))
+            .style(Style::default().bg(t.status_bg))
             .render(area, buf);
 
         let state_style = match self.state {
-            AppState::Idle => Style::default().fg(Color::White),
-            AppState::Thinking => Style::default().fg(Color::Yellow),
-            AppState::Streaming => Style::default().fg(Color::Green),
-            AppState::ToolExecuting => Style::default().fg(Color::Magenta),
+            AppState::Idle => Style::default().fg(t.status_idle),
+            AppState::Thinking => Style::default().fg(t.status_thinking),
+            AppState::Streaming => Style::default().fg(t.status_streaming),
+            AppState::ToolExecuting => Style::default().fg(t.status_tool),
         };
 
         let mut spans = vec![
             Span::styled(
                 format!(" {} ", self.model),
-                Style::default().fg(Color::White),
+                Style::default().fg(t.status_idle),
             ),
             Span::styled(format!("[{}]", self.state), state_style),
         ];
@@ -51,7 +59,7 @@ impl Widget for StatusBar {
         if let Some(count) = self.token_count {
             spans.push(Span::styled(
                 format!(" | {count} tokens"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.status_tokens),
             ));
         }
 

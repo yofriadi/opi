@@ -18,7 +18,9 @@ use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
 use opi_ai::message::{AssistantContent, Message};
 use opi_ai::stream::AssistantStreamEvent;
-use opi_tui::{AppState, Message as TuiMessage, Role as TuiRole, Shell, ToolCallStatus};
+use opi_tui::{
+    AppState, Message as TuiMessage, Role as TuiRole, Shell, Theme, ToolCallStatus, resolve_theme,
+};
 
 use crate::harness::CodingHarness;
 
@@ -32,12 +34,18 @@ struct TuiState {
     /// True when a TextDelta has been received for the current streaming cycle.
     /// Prevents MessageEnd from pushing a duplicate text message.
     streaming_started: bool,
+    theme: Theme,
 }
 
 pub async fn run_interactive_tui(
     harness: CodingHarness,
     model: String,
+    theme_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let theme = resolve_theme(theme_name);
+    if theme.name != theme_name {
+        eprintln!("opi: warning: unknown theme {theme_name:?}, using default");
+    }
     let state = Arc::new(Mutex::new(TuiState {
         messages: Vec::new(),
         input_text: String::new(),
@@ -45,6 +53,7 @@ pub async fn run_interactive_tui(
         model: model.clone(),
         active_tool: None,
         streaming_started: false,
+        theme,
     }));
 
     // Wire agent events into shared state before wrapping harness
@@ -268,7 +277,8 @@ async fn tui_event_loop(
 fn build_shell(s: &TuiState) -> Shell {
     let mut shell = Shell::new(s.model.clone())
         .input_text(s.input_text.clone())
-        .state(s.app_state);
+        .state(s.app_state)
+        .theme(s.theme.clone());
 
     if !s.messages.is_empty() {
         shell = shell.messages(s.messages.clone());

@@ -3,15 +3,18 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Widget},
 };
+
+use crate::theme::Theme;
 
 /// Renders a fenced code block with optional language label.
 pub struct CodeBlock {
     language: String,
     code: String,
+    theme: Theme,
 }
 
 impl CodeBlock {
@@ -19,12 +22,19 @@ impl CodeBlock {
         Self {
             language: language.into(),
             code: code.into(),
+            theme: Theme::default(),
         }
+    }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
     }
 }
 
 impl Widget for CodeBlock {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let t = &self.theme;
         let title = if self.language.is_empty() {
             " code ".to_owned()
         } else {
@@ -32,7 +42,7 @@ impl Widget for CodeBlock {
         };
         let block = Block::bordered()
             .title(title)
-            .style(Style::default().fg(Color::Yellow));
+            .style(Style::default().fg(t.code_title));
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -43,7 +53,7 @@ impl Widget for CodeBlock {
             }
             Line::from(Span::styled(
                 line.to_owned(),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(t.code_content),
             ))
             .render(Rect { y, ..inner }, buf);
         }
@@ -55,7 +65,7 @@ impl Widget for CodeBlock {
 // ---------------------------------------------------------------------------
 
 /// Parse a single line of markdown inline content into styled spans.
-fn parse_inline(line: &str) -> Vec<Span<'static>> {
+fn parse_inline(line: &str, theme: &Theme) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut chars = line.char_indices().peekable();
     let mut plain_start = 0;
@@ -103,7 +113,7 @@ fn parse_inline(line: &str) -> Vec<Span<'static>> {
                         }
                         spans.push(Span::styled(
                             line[italic_start..k].to_owned(),
-                            Style::default().fg(Color::Cyan),
+                            Style::default().fg(theme.italic),
                         ));
                         plain_start = k + 1;
                         closed = true;
@@ -138,13 +148,20 @@ fn parse_inline(line: &str) -> Vec<Span<'static>> {
 /// and fenced code blocks (``` ``` ```). No syntax highlighting in Phase 1.
 pub struct MarkdownView {
     markdown: String,
+    theme: Theme,
 }
 
 impl MarkdownView {
     pub fn new(markdown: impl Into<String>) -> Self {
         Self {
             markdown: markdown.into(),
+            theme: Theme::default(),
         }
+    }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
     }
 }
 
@@ -212,6 +229,7 @@ fn parse_markdown(input: &str) -> Vec<MdElement> {
 
 impl Widget for MarkdownView {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let theme = &self.theme;
         let elements = parse_markdown(&self.markdown);
         let mut y = area.y;
 
@@ -223,13 +241,13 @@ impl Widget for MarkdownView {
                     }
                     let style = match level {
                         1 => Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme.heading_h1)
                             .add_modifier(Modifier::BOLD),
                         2 => Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme.heading_h2)
                             .add_modifier(Modifier::BOLD),
                         _ => Style::default()
-                            .fg(Color::White)
+                            .fg(theme.heading_h3)
                             .add_modifier(Modifier::BOLD),
                     };
                     Line::from(Span::styled(text.clone(), style)).render(Rect { y, ..area }, buf);
@@ -251,14 +269,15 @@ impl Widget for MarkdownView {
                             current.push_str(word);
                         } else {
                             if y < area.y + area.height {
-                                Line::from(parse_inline(&current)).render(Rect { y, ..area }, buf);
+                                Line::from(parse_inline(&current, theme))
+                                    .render(Rect { y, ..area }, buf);
                                 y += 1;
                             }
                             current = word.to_owned();
                         }
                     }
                     if !current.is_empty() && y < area.y + area.height {
-                        Line::from(parse_inline(&current)).render(Rect { y, ..area }, buf);
+                        Line::from(parse_inline(&current, theme)).render(Rect { y, ..area }, buf);
                         y += 1;
                     }
                     // blank line after paragraph
@@ -275,7 +294,9 @@ impl Widget for MarkdownView {
                         height: needed,
                         ..area
                     };
-                    CodeBlock::new(language.clone(), code.clone()).render(cb_area, buf);
+                    CodeBlock::new(language.clone(), code.clone())
+                        .theme(theme.clone())
+                        .render(cb_area, buf);
                     y += needed;
                     // blank line after code block
                     y += 1;

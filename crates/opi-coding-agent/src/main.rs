@@ -159,7 +159,8 @@ async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig
     );
 
     let model_display = config.defaults.model.clone();
-    if let Err(e) = interactive::run_interactive_tui(harness, model_display).await {
+    let theme_name = config.defaults.theme.clone();
+    if let Err(e) = interactive::run_interactive_tui(harness, model_display, &theme_name).await {
         eprintln!("opi: TUI error: {e}");
         std::process::exit(1);
     }

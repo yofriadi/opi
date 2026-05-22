@@ -9,6 +9,7 @@ pub mod markdown;
 pub mod message_list;
 pub mod render;
 pub mod status_bar;
+pub mod theme;
 pub mod tool_call;
 
 pub use diff_view::DiffView;
@@ -17,6 +18,7 @@ pub use markdown::{CodeBlock, MarkdownView};
 pub use message_list::MessageList;
 pub use render::Shell;
 pub use status_bar::StatusBar;
+pub use theme::{Theme, resolve_theme};
 pub use tool_call::ToolCallView;
 
 use std::fmt;

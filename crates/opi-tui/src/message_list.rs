@@ -3,35 +3,47 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Widget},
 };
 
-use crate::{Message, Role};
+use crate::{Message, Role, theme::Theme};
 
 /// Displays a scrollable list of conversation messages.
 pub struct MessageList {
     messages: Vec<Message>,
+    theme: Theme,
 }
 
 impl MessageList {
     pub fn new(messages: Vec<Message>) -> Self {
-        Self { messages }
+        Self {
+            messages,
+            theme: Theme::default(),
+        }
+    }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
     }
 }
 
-fn role_label(role: &Role) -> (&'static str, Style) {
-    match role {
-        Role::User => ("You", Style::default().fg(Color::Green)),
-        Role::Assistant => (
-            "Asst",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Role::System => ("Sys", Style::default().fg(Color::Yellow)),
-        Role::Tool => ("Tool", Style::default().fg(Color::Magenta)),
+impl MessageList {
+    fn role_label(&self, role: &Role) -> (&'static str, Style) {
+        let t = &self.theme;
+        match role {
+            Role::User => ("You", Style::default().fg(t.role_user)),
+            Role::Assistant => (
+                "Asst",
+                Style::default()
+                    .fg(t.role_assistant)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Role::System => ("Sys", Style::default().fg(t.role_system)),
+            Role::Tool => ("Tool", Style::default().fg(t.role_tool)),
+        }
     }
 }
 
@@ -46,7 +58,7 @@ impl Widget for MessageList {
             if y >= inner.height {
                 break;
             }
-            let (label, style) = role_label(&msg.role);
+            let (label, style) = self.role_label(&msg.role);
             let line = Line::from(vec![
                 Span::styled(format!("{label}: "), style),
                 Span::raw(&msg.content),

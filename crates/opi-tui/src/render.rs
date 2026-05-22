@@ -6,7 +6,10 @@ use ratatui::{
     widgets::Widget,
 };
 
-use crate::{AppState, InputEditor, Message, MessageList, StatusBar, ToolCallStatus, ToolCallView};
+use crate::{
+    AppState, InputEditor, Message, MessageList, StatusBar, ToolCallStatus, ToolCallView,
+    theme::Theme,
+};
 
 /// Top-level TUI shell composing all Phase 1 components.
 pub struct Shell {
@@ -16,6 +19,7 @@ pub struct Shell {
     state: AppState,
     token_count: Option<u64>,
     active_tool: Option<ToolCallViewData>,
+    theme: Theme,
 }
 
 struct ToolCallViewData {
@@ -33,6 +37,7 @@ impl Shell {
             state: AppState::Idle,
             token_count: None,
             active_tool: None,
+            theme: Theme::default(),
         }
     }
 
@@ -64,6 +69,11 @@ impl Shell {
         });
         self
     }
+
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
+    }
 }
 
 impl Widget for Shell {
@@ -81,18 +91,27 @@ impl Widget for Shell {
 
         let chunks = Layout::vertical(constraints).split(area);
         let mut ci = 0;
+        let theme = &self.theme;
 
-        MessageList::new(self.messages).render(chunks[ci], buf);
+        MessageList::new(self.messages)
+            .theme(theme.clone())
+            .render(chunks[ci], buf);
         ci += 1;
 
         if let Some(tool) = self.active_tool {
-            ToolCallView::new(tool.name, tool.arguments, tool.status).render(chunks[ci], buf);
+            ToolCallView::new(tool.name, tool.arguments, tool.status)
+                .theme(theme.clone())
+                .render(chunks[ci], buf);
             ci += 1;
         }
 
-        StatusBar::new(self.model, self.state, self.token_count).render(chunks[ci], buf);
+        StatusBar::new(self.model, self.state, self.token_count)
+            .theme(theme.clone())
+            .render(chunks[ci], buf);
         ci += 1;
 
-        InputEditor::new(self.input_text).render(chunks[ci], buf);
+        InputEditor::new(self.input_text)
+            .theme(theme.clone())
+            .render(chunks[ci], buf);
     }
 }
