@@ -5,6 +5,7 @@
 
 pub mod diff_view;
 pub mod editor;
+pub mod keybindings;
 pub mod markdown;
 pub mod message_list;
 pub mod render;
@@ -14,6 +15,7 @@ pub mod tool_call;
 
 pub use diff_view::DiffView;
 pub use editor::InputEditor;
+pub use keybindings::{Key, KeyCombo, KeyComboParseError, Keybindings, Modifiers};
 pub use markdown::{CodeBlock, MarkdownView};
 pub use message_list::MessageList;
 pub use render::Shell;

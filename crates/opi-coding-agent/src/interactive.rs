@@ -8,7 +8,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
@@ -19,7 +19,8 @@ use opi_agent::message::AgentMessage;
 use opi_ai::message::{AssistantContent, Message};
 use opi_ai::stream::AssistantStreamEvent;
 use opi_tui::{
-    AppState, Message as TuiMessage, Role as TuiRole, Shell, Theme, ToolCallStatus, resolve_theme,
+    AppState, Key, KeyCombo, Keybindings, Message as TuiMessage, Role as TuiRole, Shell, Theme,
+    ToolCallStatus, resolve_theme,
 };
 
 use crate::harness::CodingHarness;
@@ -35,12 +36,14 @@ struct TuiState {
     /// Prevents MessageEnd from pushing a duplicate text message.
     streaming_started: bool,
     theme: Theme,
+    keybindings: Keybindings,
 }
 
 pub async fn run_interactive_tui(
     harness: CodingHarness,
     model: String,
     theme_name: &str,
+    keybindings: Keybindings,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let theme = resolve_theme(theme_name);
     if theme.name != theme_name {
@@ -54,6 +57,7 @@ pub async fn run_interactive_tui(
         active_tool: None,
         streaming_started: false,
         theme,
+        keybindings,
     }));
 
     // Wire agent events into shared state before wrapping harness
@@ -213,62 +217,67 @@ async fn tui_event_loop(
             if key.kind != KeyEventKind::Press {
                 continue;
             }
-            match key.code {
-                KeyCode::Enter => {
-                    // Ignore Enter while agent is running
-                    if pending.is_some() {
-                        continue;
-                    }
-
-                    let input = {
-                        let mut s = state.lock().unwrap();
-                        let text = s.input_text.trim().to_string();
-                        s.input_text.clear();
-                        text
-                    };
-
-                    if input == "exit" || input == "quit" {
-                        // Cancel any pending task on exit
-                        if let Some(handle) = pending.take() {
-                            cancel_token.cancel();
-                            let _ = handle.await;
-                        }
-                        return Ok(());
-                    }
-                    if input.is_empty() {
-                        continue;
-                    }
-
-                    // Add user message to display
-                    {
-                        let mut s = state.lock().unwrap();
-                        s.messages
-                            .push(TuiMessage::new(TuiRole::User, input.clone()));
-                        s.app_state = AppState::Thinking;
-                    }
-
-                    // Spawn agent prompt in background task
-                    let h = harness.clone();
-                    let handle = tokio::spawn(async move {
-                        let mut h = h.lock().await;
-                        h.prompt(&input).await
-                    });
-                    pending = Some(handle);
+            let kb = state.lock().unwrap().keybindings.clone();
+            if matches_key_combo(key.code, key.modifiers, &kb.submit) {
+                // Ignore submit while agent is running
+                if pending.is_some() {
+                    continue;
                 }
-                KeyCode::Char(c) if pending.is_none() => {
-                    state.lock().unwrap().input_text.push(c);
-                }
-                KeyCode::Backspace if pending.is_none() => {
-                    state.lock().unwrap().input_text.pop();
-                }
-                KeyCode::Esc => {
-                    if pending.is_some() {
+
+                let input = {
+                    let mut s = state.lock().unwrap();
+                    let text = s.input_text.trim().to_string();
+                    s.input_text.clear();
+                    text
+                };
+
+                if input == "exit" || input == "quit" {
+                    // Cancel any pending task on exit
+                    if let Some(handle) = pending.take() {
                         cancel_token.cancel();
-                    } else {
-                        return Ok(());
+                        let _ = handle.await;
                     }
+                    return Ok(());
                 }
-                _ => {}
+                if input.is_empty() {
+                    continue;
+                }
+
+                // Add user message to display
+                {
+                    let mut s = state.lock().unwrap();
+                    s.messages
+                        .push(TuiMessage::new(TuiRole::User, input.clone()));
+                    s.app_state = AppState::Thinking;
+                }
+
+                // Spawn agent prompt in background task
+                let h = harness.clone();
+                let handle = tokio::spawn(async move {
+                    let mut h = h.lock().await;
+                    h.prompt(&input).await
+                });
+                pending = Some(handle);
+            } else if matches_key_combo(key.code, key.modifiers, &kb.abort) {
+                if pending.is_some() {
+                    cancel_token.cancel();
+                } else {
+                    return Ok(());
+                }
+            } else if matches_key_combo(key.code, key.modifiers, &kb.new_line) {
+                if pending.is_none() {
+                    state.lock().unwrap().input_text.push('\n');
+                }
+            } else {
+                match key.code {
+                    KeyCode::Char(c) if pending.is_none() => {
+                        state.lock().unwrap().input_text.push(c);
+                    }
+                    KeyCode::Backspace if pending.is_none() => {
+                        state.lock().unwrap().input_text.pop();
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -289,4 +298,21 @@ fn build_shell(s: &TuiState) -> Shell {
     }
 
     shell
+}
+
+fn matches_key_combo(code: KeyCode, modifiers: KeyModifiers, combo: &KeyCombo) -> bool {
+    let key_matches = match (code, &combo.key) {
+        (KeyCode::Enter, Key::Enter) => true,
+        (KeyCode::Esc, Key::Escape) => true,
+        (KeyCode::Tab, Key::Tab) => true,
+        (KeyCode::Backspace, Key::Backspace) => true,
+        (KeyCode::Char(c), Key::Char(expected)) => c == *expected,
+        _ => false,
+    };
+    if !key_matches {
+        return false;
+    }
+    combo.modifiers.alt == modifiers.contains(KeyModifiers::ALT)
+        && combo.modifiers.ctrl == modifiers.contains(KeyModifiers::CONTROL)
+        && combo.modifiers.shift == modifiers.contains(KeyModifiers::SHIFT)
 }

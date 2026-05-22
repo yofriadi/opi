@@ -20,6 +20,7 @@ pub struct OpiConfig {
     pub defaults: DefaultsConfig,
     pub thinking: ThinkingConfig,
     pub providers: ProvidersConfig,
+    pub keybindings: KeybindingsConfig,
 }
 
 /// `[defaults]` section.
@@ -82,6 +83,24 @@ impl Default for AnthropicProviderConfig {
     }
 }
 
+/// `[keybindings]` section.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeybindingsConfig {
+    pub submit: String,
+    pub abort: String,
+    pub new_line: String,
+}
+
+impl Default for KeybindingsConfig {
+    fn default() -> Self {
+        Self {
+            submit: "enter".into(),
+            abort: "escape".into(),
+            new_line: "alt+enter".into(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TOML deserialization structs (Option fields detect presence)
 // ---------------------------------------------------------------------------
@@ -92,6 +111,7 @@ struct TomlConfig {
     defaults: TomlDefaults,
     thinking: TomlThinking,
     providers: TomlProviders,
+    keybindings: TomlKeybindings,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -124,6 +144,14 @@ struct TomlAnthropic {
     base_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlKeybindings {
+    submit: Option<String>,
+    abort: Option<String>,
+    new_line: Option<String>,
+}
+
 impl TomlConfig {
     fn merge_into(self, config: &mut OpiConfig) {
         if let Some(v) = self.defaults.model {
@@ -152,6 +180,15 @@ impl TomlConfig {
         }
         if let Some(v) = self.providers.anthropic.base_url {
             config.providers.anthropic.base_url = Some(v);
+        }
+        if let Some(v) = self.keybindings.submit {
+            config.keybindings.submit = v;
+        }
+        if let Some(v) = self.keybindings.abort {
+            config.keybindings.abort = v;
+        }
+        if let Some(v) = self.keybindings.new_line {
+            config.keybindings.new_line = v;
         }
     }
 }

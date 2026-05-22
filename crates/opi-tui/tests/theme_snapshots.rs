@@ -250,10 +250,7 @@ fn status_bar_applies_monokai_theme_colors() {
     let bar = StatusBar::new("model".into(), AppState::Idle, None).theme(monokai);
     let buf = render_buf(bar, 80, 1);
     // Status bar background should be the monokai dark bg color
-    assert_eq!(
-        buf.cell((0, 0)).unwrap().bg,
-        Color::Rgb(39, 40, 34)
-    );
+    assert_eq!(buf.cell((0, 0)).unwrap().bg, Color::Rgb(39, 40, 34));
 }
 
 #[test]

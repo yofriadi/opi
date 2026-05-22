@@ -160,7 +160,10 @@ async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig
 
     let model_display = config.defaults.model.clone();
     let theme_name = config.defaults.theme.clone();
-    if let Err(e) = interactive::run_interactive_tui(harness, model_display, &theme_name).await {
+    let keybindings = parse_keybindings(&config.keybindings);
+    if let Err(e) =
+        interactive::run_interactive_tui(harness, model_display, &theme_name, keybindings).await
+    {
         eprintln!("opi: TUI error: {e}");
         std::process::exit(1);
     }
@@ -199,5 +202,22 @@ fn build_provider(
         other => Err(ProviderBuildError::Config(format!(
             "unknown provider: {other}"
         ))),
+    }
+}
+
+fn parse_keybindings(config: &opi_coding_agent::config::KeybindingsConfig) -> opi_tui::Keybindings {
+    use std::collections::HashMap;
+
+    let map = HashMap::from([
+        ("submit".to_string(), config.submit.clone()),
+        ("abort".to_string(), config.abort.clone()),
+        ("new_line".to_string(), config.new_line.clone()),
+    ]);
+    match opi_tui::Keybindings::from_config_map(&map) {
+        Ok(kb) => kb,
+        Err(e) => {
+            eprintln!("opi: warning: invalid keybindings config ({e}), using defaults");
+            opi_tui::Keybindings::default()
+        }
     }
 }
