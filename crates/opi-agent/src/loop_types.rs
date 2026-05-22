@@ -51,6 +51,8 @@ pub struct AgentLoopConfig {
     pub max_tokens: Option<u64>,
     /// Sampling temperature.
     pub temperature: Option<f64>,
+    /// Retry configuration for retryable provider errors.
+    pub retry: Option<opi_ai::retry::RetryConfig>,
 }
 
 impl Default for AgentLoopConfig {
@@ -59,6 +61,7 @@ impl Default for AgentLoopConfig {
             max_turns: 50,
             max_tokens: None,
             temperature: None,
+            retry: None,
         }
     }
 }

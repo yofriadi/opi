@@ -769,8 +769,9 @@ impl OpenAiChatProvider {
 
         let status = response.status();
         if !status.is_success() {
+            let headers = response.headers().clone();
             let error_body = response.text().await.unwrap_or_default();
-            return Err(map_http_status(status, &error_body));
+            return Err(map_http_status(status, &error_body, &headers));
         }
 
         let mut byte_stream = response.bytes_stream();
@@ -858,12 +859,16 @@ fn drain_sse_events(buffer: &mut String) -> Vec<ParsedEvent> {
     events
 }
 
-fn map_http_status(status: reqwest::StatusCode, body: &str) -> ProviderError {
+fn map_http_status(
+    status: reqwest::StatusCode,
+    body: &str,
+    headers: &reqwest::header::HeaderMap,
+) -> ProviderError {
     match status.as_u16() {
         401 => ProviderError::AuthFailed(format!("authentication failed: {body}")),
         403 => ProviderError::AuthFailed(format!("access denied: {body}")),
         429 => ProviderError::RateLimited {
-            retry_after_ms: None,
+            retry_after_ms: crate::retry::parse_retry_after(headers),
         },
         408 | 504 => ProviderError::Timeout,
         code => ProviderError::RequestFailed(format!("HTTP {code}: {body}")),

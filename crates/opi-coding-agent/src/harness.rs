@@ -62,6 +62,7 @@ impl CodingHarness {
 
         let agent_config = AgentLoopConfig {
             max_turns: config.defaults.max_iterations,
+            retry: Some(config.retry.clone()),
             ..Default::default()
         };
 

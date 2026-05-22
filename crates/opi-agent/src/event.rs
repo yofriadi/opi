@@ -61,6 +61,19 @@ pub enum AgentEvent {
         steering: Vec<String>,
         follow_up: Vec<String>,
     },
+    /// A retryable provider error occurred; a retry attempt is starting.
+    AutoRetryStart {
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        error_message: String,
+    },
+    /// A retry attempt concluded (either successfully or after exhausting attempts).
+    AutoRetryEnd {
+        success: bool,
+        attempt: u32,
+        final_error: Option<String>,
+    },
 }
 
 fn deserialize_boxed_stream_event<'de, D>(

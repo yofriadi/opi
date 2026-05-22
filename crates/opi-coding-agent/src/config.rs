@@ -21,6 +21,7 @@ pub struct OpiConfig {
     pub thinking: ThinkingConfig,
     pub providers: ProvidersConfig,
     pub keybindings: KeybindingsConfig,
+    pub retry: opi_ai::retry::RetryConfig,
 }
 
 /// `[defaults]` section.
@@ -112,6 +113,7 @@ struct TomlConfig {
     thinking: TomlThinking,
     providers: TomlProviders,
     keybindings: TomlKeybindings,
+    retry: TomlRetry,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -152,6 +154,14 @@ struct TomlKeybindings {
     new_line: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlRetry {
+    max_attempts: Option<u32>,
+    initial_delay_ms: Option<u64>,
+    max_delay_ms: Option<u64>,
+}
+
 impl TomlConfig {
     fn merge_into(self, config: &mut OpiConfig) {
         if let Some(v) = self.defaults.model {
@@ -189,6 +199,15 @@ impl TomlConfig {
         }
         if let Some(v) = self.keybindings.new_line {
             config.keybindings.new_line = v;
+        }
+        if let Some(v) = self.retry.max_attempts {
+            config.retry.max_attempts = v;
+        }
+        if let Some(v) = self.retry.initial_delay_ms {
+            config.retry.initial_delay_ms = v;
+        }
+        if let Some(v) = self.retry.max_delay_ms {
+            config.retry.max_delay_ms = v;
         }
     }
 }

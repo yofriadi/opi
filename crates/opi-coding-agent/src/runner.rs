@@ -102,8 +102,30 @@ impl NonInteractiveRunner {
 
         let out = output.clone();
         self.harness.subscribe(Box::new(move |event| {
-            let session_event = AgentSessionEvent::Agent {
-                event: event.clone(),
+            let session_event = match event {
+                AgentEvent::AutoRetryStart {
+                    attempt,
+                    max_attempts,
+                    delay_ms,
+                    error_message,
+                } => AgentSessionEvent::AutoRetryStart {
+                    attempt: *attempt,
+                    max_attempts: *max_attempts,
+                    delay_ms: *delay_ms,
+                    error_message: error_message.clone(),
+                },
+                AgentEvent::AutoRetryEnd {
+                    success,
+                    attempt,
+                    final_error,
+                } => AgentSessionEvent::AutoRetryEnd {
+                    success: *success,
+                    attempt: *attempt,
+                    final_error: final_error.clone(),
+                },
+                _ => AgentSessionEvent::Agent {
+                    event: event.clone(),
+                },
             };
             if let Ok(json) = serde_json::to_string(&session_event)
                 && let Ok(mut guard) = out.lock()

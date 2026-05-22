@@ -14,6 +14,7 @@ pub mod openai_responses;
 pub mod openrouter;
 pub mod provider;
 pub mod registry;
+pub mod retry;
 pub mod stream;
 #[doc(hidden)]
 pub mod test_support;

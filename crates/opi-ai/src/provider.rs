@@ -73,6 +73,16 @@ pub enum ProviderError {
     AuthFailed(String),
 }
 
+impl ProviderError {
+    /// Whether this error is retryable (rate-limited or timeout).
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            ProviderError::RateLimited { .. } | ProviderError::Timeout
+        )
+    }
+}
+
 /// Discriminant for the kind of provider backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {

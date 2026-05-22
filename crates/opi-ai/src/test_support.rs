@@ -9,15 +9,24 @@ use crate::message::AssistantMessage;
 use crate::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
 use crate::stream::{AssistantStreamEvent, StopReason, Usage};
 
+/// A response that a mock provider can return per `stream()` call.
+#[doc(hidden)]
+pub enum MockResponse {
+    /// Successful stream of assistant events.
+    Events(Vec<AssistantStreamEvent>),
+    /// Provider error (e.g. rate-limited, timeout).
+    Error(ProviderError),
+}
+
 /// A mock provider that returns pre-programmed response sequences.
 ///
-/// Each call to `stream()` pops the next batch of events from the queue.
+/// Each call to `stream()` pops the next response from the queue.
 /// Tracks call history for assertions.
 #[doc(hidden)]
 pub struct MockProvider {
     id: String,
     models: Vec<ModelInfo>,
-    responses: Arc<Mutex<Vec<Vec<AssistantStreamEvent>>>>,
+    responses: Arc<Mutex<Vec<MockResponse>>>,
     call_log: Arc<Mutex<Vec<Request>>>,
 }
 
@@ -27,6 +36,14 @@ impl MockProvider {
     /// Each element of `responses` is a complete batch of stream events
     /// returned by one `stream()` call. Batches are consumed in order.
     pub fn new(id: &str, responses: Vec<Vec<AssistantStreamEvent>>) -> Self {
+        Self::new_with_errors(
+            id,
+            responses.into_iter().map(MockResponse::Events).collect(),
+        )
+    }
+
+    /// Create a mock provider that can return errors between successful responses.
+    pub fn new_with_errors(id: &str, responses: Vec<MockResponse>) -> Self {
         Self {
             id: id.to_owned(),
             models: vec![ModelInfo {
@@ -150,8 +167,17 @@ impl Provider for MockProvider {
             !responses.is_empty(),
             "MockProvider: stream() called more times than responses were configured"
         );
-        let events = responses.remove(0);
-        let stream = futures_util::stream::iter(events.into_iter().map(Ok::<_, ProviderError>));
-        Box::pin(stream)
+        let response = responses.remove(0);
+        match response {
+            MockResponse::Events(events) => {
+                let stream =
+                    futures_util::stream::iter(events.into_iter().map(Ok::<_, ProviderError>));
+                Box::pin(stream)
+            }
+            MockResponse::Error(e) => {
+                let stream = futures_util::stream::iter(vec![Err(e)]);
+                Box::pin(stream)
+            }
+        }
     }
 }
