@@ -40,7 +40,7 @@ fn main() {
 
     let prompt_text = cli.prompt.join(" ");
 
-    if cli.non_interactive || !prompt_text.is_empty() {
+    if cli.non_interactive || cli.json || !prompt_text.is_empty() {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
@@ -114,7 +114,11 @@ async fn run_non_interactive(
         user_system_prompt,
     );
 
-    let result = runner.run(prompt_text).await;
+    let result = if cli.json {
+        runner.run_json(prompt_text).await
+    } else {
+        runner.run(prompt_text).await
+    };
 
     if !result.stdout.is_empty() {
         print!("{}", result.stdout);

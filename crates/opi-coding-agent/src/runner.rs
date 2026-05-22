@@ -13,6 +13,7 @@ use opi_agent::hooks::{
 };
 use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
+use opi_agent::session_event::AgentSessionEvent;
 use opi_ai::message::Message;
 use opi_ai::provider::Provider;
 use opi_ai::stream::AssistantStreamEvent;
@@ -20,6 +21,9 @@ use opi_ai::stream::AssistantStreamEvent;
 use crate::config::OpiConfig;
 use crate::harness::CodingHarness;
 use crate::policy::is_mutating_tool;
+
+/// NDJSON output schema version.
+pub const NDJSON_SCHEMA_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
 // Exit codes (S10)
@@ -79,6 +83,82 @@ impl NonInteractiveRunner {
             user_system_prompt,
         );
         Self { harness }
+    }
+
+    /// Run a single prompt in JSON mode, returning NDJSON output in stdout.
+    pub async fn run_json(&mut self, prompt: &str) -> NonInteractiveResult {
+        let output: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+
+        // Schema version header line
+        {
+            let header = serde_json::json!({
+                "type": "session_header",
+                "schema_version": NDJSON_SCHEMA_VERSION,
+            });
+            let mut out = output.lock().unwrap();
+            out.push_str(&header.to_string());
+            out.push('\n');
+        }
+
+        let out = output.clone();
+        self.harness.subscribe(Box::new(move |event| {
+            let session_event = AgentSessionEvent::Agent {
+                event: event.clone(),
+            };
+            if let Ok(json) = serde_json::to_string(&session_event)
+                && let Ok(mut guard) = out.lock()
+            {
+                guard.push_str(&json);
+                guard.push('\n');
+            }
+        }));
+
+        match self.harness.prompt(prompt).await {
+            Ok(messages) => {
+                if let Some(error) = find_error_message(&messages) {
+                    return NonInteractiveResult {
+                        stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                        stderr: error,
+                        exit_code: ExitCode::ProviderFailure as i32,
+                    };
+                }
+                NonInteractiveResult {
+                    stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                    stderr: String::new(),
+                    exit_code: ExitCode::Success as i32,
+                }
+            }
+            Err(AgentError::Cancelled) => NonInteractiveResult {
+                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                stderr: "cancelled".into(),
+                exit_code: ExitCode::Interrupted as i32,
+            },
+            Err(AgentError::AuthFailed(e)) => NonInteractiveResult {
+                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                stderr: format!("authentication error: {e}"),
+                exit_code: ExitCode::AuthFailure as i32,
+            },
+            Err(AgentError::Provider(e)) => NonInteractiveResult {
+                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                stderr: format!("provider error: {e}"),
+                exit_code: ExitCode::ProviderFailure as i32,
+            },
+            Err(AgentError::Tool(e)) => NonInteractiveResult {
+                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                stderr: format!("tool error: {e}"),
+                exit_code: ExitCode::ToolFailure as i32,
+            },
+            Err(AgentError::Hook(e)) => NonInteractiveResult {
+                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                stderr: format!("hook error: {e}"),
+                exit_code: ExitCode::RuntimeFailure as i32,
+            },
+            Err(AgentError::MaxTurnsExceeded(n)) => NonInteractiveResult {
+                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                stderr: format!("max turns exceeded ({n})"),
+                exit_code: ExitCode::RuntimeFailure as i32,
+            },
+        }
     }
 
     /// Cancel the running operation.

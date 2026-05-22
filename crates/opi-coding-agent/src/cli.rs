@@ -28,6 +28,10 @@ pub struct Cli {
     #[arg(long)]
     pub allow_mutating: bool,
 
+    /// Output NDJSON events to stdout (non-interactive mode).
+    #[arg(long)]
+    pub json: bool,
+
     /// List all sessions.
     #[arg(long)]
     pub list_sessions: bool,
