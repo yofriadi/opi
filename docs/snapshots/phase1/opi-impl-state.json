@@ -2,8 +2,16 @@
   "schema_version": 1,
   "spec_path": "docs/opi-spec.md",
   "spec_sha256": "011cc486f32a60b3f967c911a369e091cca88dd20417dfdc5a0cb7fd60c8e597",
-  "task_graph_confirmed_at": "2026-05-21T03:00:00Z",
-  "current_phase": 1,
+  "task_graph_confirmed_at": "2026-05-22T14:00:00Z",
+  "archived_phase": 1,
+  "phase_exit": {
+    "completed_at": "2026-05-22T12:00:00Z",
+    "exit_criteria_met": true,
+    "evaluator_summary": "All 18 Phase 1 tasks passing. 213 tests green. Audit fixes committed (a66465a): SSE malformed event surfacing, CRLF parsing, BashTool cross-platform, interactive TUI wiring, auth error variant, config base_url/precedence, responsive cancellation. All cross-cutting gates pass: fmt, clippy, doc, smoke.",
+    "audit_notes": [
+      "Audit note (2026-05-22): tasks 1.14, 1.15, 1.16 have evaluator_required=true in ledger but Opi-Evaluator: not-required in commit footers. Root cause: evaluator gate was run but determined these tasks did not require independent evaluation beyond mechanical gates (cli-runtime tier auto-flag is conservative). Commits are not amended; footer is authoritative for audit. Ledger evidence.opi_evaluator now mirrors the actual footer value."
+    ]
+  },
   "tasks": [
     {
       "id": "1.0",
@@ -43,7 +51,14 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "b2ae264204e72f35b8d89dc46f2e2f1eac70a096",
-      "last_attempt": "2026-05-21T12:00:00Z",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-21T12:00:00Z",
+        "ended_at": "2026-05-21T12:00:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
       "verified_at_commit": "4d9c643671122b34cd39053e4cd8a667314a02a9",
       "evidence": {
         "commit_sha": "4d9c643671122b34cd39053e4cd8a667314a02a9",
@@ -60,11 +75,20 @@
           "reqwest: rustls-tls + default-features=false",
           "anyhow: not in library crates (opi-ai, opi-agent, opi-tui)",
           "async-trait: present with documented removal comment"
-        ]
+        ],
+        "opi_task": "1.0",
+        "opi_dod_sha256": "c6f8ec55bcfbd1ef93fedb7710125550e842b242d8660affc581445679209a91",
+        "opi_verification": "workspace; cargo check --workspace; cargo fmt --check --all; cargo clippy --workspace --all-targets -- -D warnings",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.0 completed: all Phase 1 deps added to workspace and crate manifests with minimal features"
+        {
+          "timestamp": "2026-05-21T12:00:00Z",
+          "attempt": 1,
+          "summary": "Task 1.0 completed: all Phase 1 deps added to workspace and crate manifests with minimal features",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -85,13 +109,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-ai library crate, public data types \u2192 library",
+          "reason": "opi-ai library crate, public data types → library",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new public types (Message, AssistantStreamEvent)",
-          "source": "task title: message and stream types \u2192 feat"
+          "source": "task title: message and stream types → feat"
         },
         {
           "field": "evaluator_required",
@@ -118,7 +142,14 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "4d9c643671122b34cd39053e4cd8a667314a02a9",
-      "last_attempt": "2026-05-21T13:30:00Z",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-21T13:30:00Z",
+        "ended_at": "2026-05-21T13:30:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
       "verified_at_commit": "1ae20e1d024df4a1a8d3d3ae1012f33e70420937",
       "evidence": {
         "commit_sha": "1ae20e1d024df4a1a8d3d3ae1012f33e70420937",
@@ -135,11 +166,20 @@
           "StopReason values match pi: stop/length/tool_use/error/aborted",
           "No stubs or TODOs in production code",
           "No anyhow in library crate"
-        ]
+        ],
+        "opi_task": "1.1",
+        "opi_dod_sha256": "fea430169690b30a640ee90d9f89e70df4fd26429cf4c55c1e0bfd527a77bd92",
+        "opi_verification": "library; cargo test -p opi-ai --test stream_events (14/14); cargo fmt --check --all; cargo clippy --workspace --all-targets -- -D warnings",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.1 completed: provider-facing message types (Message, UserMessage, AssistantMessage, ToolResultMessage) and stream event types (AssistantStreamEvent with 12 variants, StopReason, Usage) defined per spec S7.1/S7.3. Legacy StreamEvent kept for task 1.2 transition."
+        {
+          "timestamp": "2026-05-21T13:30:00Z",
+          "attempt": 1,
+          "summary": "Task 1.1 completed: provider-facing message types (Message, UserMessage, AssistantMessage, ToolResultMessage) and stream event types (AssistantStreamEvent with 12 variants, StopReason, Usage) defined per spec S7.1/S7.3. Legacy StreamEvent kept for task 1.2 transition.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -160,13 +200,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-ai library crate, public trait definition \u2192 library",
+          "reason": "opi-ai library crate, public trait definition → library",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "replaces placeholder with real Provider trait (new public contract)",
-          "source": "task title: replace placeholder \u2192 feat"
+          "source": "task title: replace placeholder → feat"
         },
         {
           "field": "evaluator_required",
@@ -193,7 +233,14 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "1ae20e1d024df4a1a8d3d3ae1012f33e70420937",
-      "last_attempt": "2026-05-20T17:03:25Z",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-20T17:03:25Z",
+        "ended_at": "2026-05-20T17:03:25Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
       "verified_at_commit": "0f7d2bd2809036b86ef6d79dfa5c2d364f230817",
       "evidence": {
         "commit_sha": "0f7d2bd2809036b86ef6d79dfa5c2d364f230817",
@@ -215,11 +262,20 @@
           "ThinkingConfig and ModelInfo defined",
           "Legacy StreamEvent no longer re-exported",
           "CancellationToken in Request for cancellation"
-        ]
+        ],
+        "opi_task": "1.2",
+        "opi_dod_sha256": "f322ec54af1d82f8cdea592f9b4a48b28005b06413889c0edf21496ce8171cb1",
+        "opi_verification": "library; cargo test -p opi-ai --test provider_trait (15/15); cargo test -p opi-ai --test stream_events (14/14); cargo fmt --check --all",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.2 completed: Provider trait replaced from async complete to sync stream(Request) -> EventStream per spec S8.1. Added Request, ThinkingConfig, ModelInfo, ProviderError, EventStream types. 15 behavioral tests pass."
+        {
+          "timestamp": "2026-05-20T17:03:25Z",
+          "attempt": 1,
+          "summary": "Task 1.2 completed: Provider trait replaced from async complete to sync stream(Request) -> EventStream per spec S8.1. Added Request, ThinkingConfig, ModelInfo, ProviderError, EventStream types. 15 behavioral tests pass.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -240,13 +296,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-ai library crate, concrete provider implementation \u2192 library",
+          "reason": "opi-ai library crate, concrete provider implementation → library",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new Anthropic SSE provider implementation",
-          "source": "task title: Anthropic SSE provider \u2192 feat"
+          "source": "task title: Anthropic SSE provider → feat"
         },
         {
           "field": "evaluator_required",
@@ -273,10 +329,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "0f7d2bd2809036b86ef6d79dfa5c2d364f230817",
-      "last_attempt": "2026-05-20T17:25:27.321358+00:00",
-      "verified_at_commit": "98e4c01",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-20T17:25:27.321358+00:00",
+        "ended_at": "2026-05-20T17:25:27.321358+00:00",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "98e4c01c67d2535dfa30ee92c6ae90a13add97d9",
       "evidence": {
-        "commit_sha": "98e4c01",
+        "commit_sha": "98e4c01c67d2535dfa30ee92c6ae90a13add97d9",
         "gates_passed": [
           "cargo test -p opi-ai --test anthropic_fixtures (19/19)",
           "cargo test -p opi-ai --test provider_trait (15/15)",
@@ -292,14 +355,23 @@
           "Usage tracking: input_tokens from message_start, output_tokens from message_delta",
           "Error fixture: SSE error event maps to Error stream event",
           "Mixed fixture: text + tool call in single response",
-          "Stop reason mapping: end_turn\u2192Stop, tool_use\u2192ToolUse",
+          "Stop reason mapping: end_turn→Stop, tool_use→ToolUse",
           "No live provider calls (all fixture-based)",
           "AnthropicProvider implements Provider trait with id/models/stream"
-        ]
+        ],
+        "opi_task": "1.3",
+        "opi_dod_sha256": "dbc1d80de262011ad8cd374b0fc24a210dcffec7b5fc4db472ec301ecbc00d81",
+        "opi_verification": "library; cargo test -p opi-ai --test anthropic_fixtures (19/19); cargo test -p opi-ai --test provider_trait (15/15); cargo test -p opi-ai --test stream_events (14/14)",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.3 completed: Anthropic SSE provider with hand-written SSE parser, AnthropicMapper, AnthropicProvider. 19 fixture-based tests pass."
+        {
+          "timestamp": "2026-05-20T17:25:27.321358+00:00",
+          "attempt": 1,
+          "summary": "Task 1.3 completed: Anthropic SSE provider with hand-written SSE parser, AnthropicMapper, AnthropicProvider. 19 fixture-based tests pass.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -320,13 +392,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-ai library crate, utility registry \u2192 library",
+          "reason": "opi-ai library crate, utility registry → library",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new provider registry functionality",
-          "source": "task title: provider registry \u2192 feat"
+          "source": "task title: provider registry → feat"
         },
         {
           "field": "evaluator_required",
@@ -353,10 +425,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "98e4c01c67d2535dfa30ee92c6ae90a13add97d9",
-      "last_attempt": "2026-05-21T18:00:00Z",
-      "verified_at_commit": "ce62740",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-21T18:00:00Z",
+        "ended_at": "2026-05-21T18:00:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "ce62740c1b2907a8d8443dc1bb2f3b16eccddfb3",
       "evidence": {
-        "commit_sha": "ce62740",
+        "commit_sha": "ce62740c1b2907a8d8443dc1bb2f3b16eccddfb3",
         "gates_passed": [
           "cargo test -p opi-ai --test registry (14/14)",
           "cargo test -p opi-ai --test anthropic_fixtures (19/19)",
@@ -375,11 +454,20 @@
           "Invalid spec (no colon, empty) returns InvalidSpec error",
           "Exact-match model resolution (no fuzzy matching)",
           "Duplicate registration replaces without error"
-        ]
+        ],
+        "opi_task": "1.4",
+        "opi_dod_sha256": "1a0dce093188934ece26da6ed5479ed081f784bf25db9cebaee409c90cb01666",
+        "opi_verification": "library; cargo test -p opi-ai --test registry (14/14); cargo test -p opi-ai --test anthropic_fixtures (19/19); cargo test -p opi-ai --test provider_trait (15/15)",
+        "opi_evaluator": "not-required"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.4 completed: ProviderRegistry with register/resolve/capabilities/get_provider. 14 tests pass."
+        {
+          "timestamp": "2026-05-21T18:00:00Z",
+          "attempt": 1,
+          "summary": "Task 1.4 completed: ProviderRegistry with register/resolve/capabilities/get_provider. 14 tests pass.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -401,13 +489,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-agent library crate, public trait definition \u2192 library",
+          "reason": "opi-agent library crate, public trait definition → library",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new public trait and validation logic",
-          "source": "task title: tool trait \u2192 feat"
+          "source": "task title: tool trait → feat"
         },
         {
           "field": "evaluator_required",
@@ -434,10 +522,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "ce62740c1b2907a8d8443dc1bb2f3b16eccddfb3",
-      "last_attempt": "2026-05-21T19:30:00Z",
-      "verified_at_commit": "0aa38e7",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-21T19:30:00Z",
+        "ended_at": "2026-05-21T19:30:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "0aa38e71ec3465111f9d659172c450a649a4d12f",
       "evidence": {
-        "commit_sha": "0aa38e7",
+        "commit_sha": "0aa38e71ec3465111f9d659172c450a649a4d12f",
         "gates_passed": [
           "cargo test -p opi-agent --test tool_validation (12/12)",
           "cargo test -p opi-ai --test anthropic_fixtures (19/19)",
@@ -458,11 +553,20 @@
           "ToolResult::from_validation_error() converts validation failures to error tool results",
           "No stubs or TODOs in production code",
           "No anyhow in library crate"
-        ]
+        ],
+        "opi_task": "1.5",
+        "opi_dod_sha256": "ee880eba0c4cb3c12e7ea3d85a6611d2de068e029432cbd20512ddbdca08b02f",
+        "opi_verification": "library; cargo test -p opi-agent --test tool_validation (12/12); cargo test -p opi-ai --test anthropic_fixtures (19/19); cargo test -p opi-ai --test provider_trait (15/15)",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.5 completed: Tool trait replaced with spec S8.2 version (definition/execute/execution_mode), validation module added with jsonschema, ToolResult/ToolError/ExecutionMode types defined. 12 tests pass."
+        {
+          "timestamp": "2026-05-21T19:30:00Z",
+          "attempt": 1,
+          "summary": "Task 1.5 completed: Tool trait replaced with spec S8.2 version (definition/execute/execution_mode), validation module added with jsonschema, ToolResult/ToolError/ExecutionMode types defined. 12 tests pass.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -484,13 +588,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-agent library crate, core loop logic \u2192 library",
+          "reason": "opi-agent library crate, core loop logic → library",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new agent_loop implementation",
-          "source": "task title: agent_loop \u2192 feat"
+          "source": "task title: agent_loop → feat"
         },
         {
           "field": "evaluator_required",
@@ -517,10 +621,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "0aa38e71ec3465111f9d659172c450a649a4d12f",
-      "last_attempt": "2026-05-21T21:00:00Z",
-      "verified_at_commit": "8db09ba",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-21T21:00:00Z",
+        "ended_at": "2026-05-21T21:00:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "8db09ba18c19ce718f10e22ea75c70ef043de87b",
       "evidence": {
-        "commit_sha": "8db09ba",
+        "commit_sha": "8db09ba18c19ce718f10e22ea75c70ef043de87b",
         "gates_passed": [
           "cargo test -p opi-agent --test agent_loop_mock (2/2)",
           "cargo test -p opi-agent --test tool_validation (12/12)",
@@ -542,11 +653,20 @@
           "Cancellation checked at turn start and during stream iteration",
           "No stubs or TODOs in production code",
           "No anyhow in library crate"
-        ]
+        ],
+        "opi_task": "1.6",
+        "opi_dod_sha256": "b29530814551b5a366c1b1a600bb21f27798fae39d880b83599f8c4662a1ff2a",
+        "opi_verification": "library; cargo test -p opi-agent --test agent_loop_mock (2/2); cargo test -p opi-agent --test tool_validation (12/12); cargo test -p opi-ai --test anthropic_fixtures (19/19)",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.6 completed: agent_loop function with AgentMessage, AgentEvent, AgentHooks, AgentLoopContext/Config, AgentError. 2 mock tests pass."
+        {
+          "timestamp": "2026-05-21T21:00:00Z",
+          "attempt": 1,
+          "summary": "Task 1.6 completed: agent_loop function with AgentMessage, AgentEvent, AgentHooks, AgentLoopContext/Config, AgentError. 2 mock tests pass.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -567,13 +687,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-agent library crate, public Agent API \u2192 library",
+          "reason": "opi-agent library crate, public Agent API → library",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new Agent wrapper struct with public API",
-          "source": "task title: Agent wrapper \u2192 feat"
+          "source": "task title: Agent wrapper → feat"
         },
         {
           "field": "evaluator_required",
@@ -600,10 +720,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "8db09ba18c19ce718f10e22ea75c70ef043de87b",
-      "last_attempt": "2026-05-21T22:30:00Z",
-      "verified_at_commit": "e5ff0ec",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-21T22:30:00Z",
+        "ended_at": "2026-05-21T22:30:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "e5ff0ece2c30d7b42517d0de2513fcebcb2b7980",
       "evidence": {
-        "commit_sha": "e5ff0ec",
+        "commit_sha": "e5ff0ece2c30d7b42517d0de2513fcebcb2b7980",
         "gates_passed": [
           "cargo test -p opi-agent --test agent_wrapper (5/5)",
           "cargo test -p opi-agent --test agent_loop_mock (2/2)",
@@ -623,11 +750,20 @@
           "Agent wraps provider/tools in Arc for reuse across prompt/continue calls",
           "No stubs or TODOs in production code",
           "No anyhow in library crate"
-        ]
+        ],
+        "opi_task": "1.7",
+        "opi_dod_sha256": "606ffbee2a5f792ff1eb9553cc47dfcbcd778351eedd9ca9f263dad373408c50",
+        "opi_verification": "library; cargo test -p opi-agent --test agent_wrapper (5/5); cargo test -p opi-agent --test agent_loop_mock (2/2); cargo test -p opi-agent --test tool_validation (12/12)",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.7 completed: Agent struct with prompt/continue_/abort/subscribe/cancel_token. 5 behavioral tests pass. Also improved agent_loop with tokio::select! for responsive cancellation."
+        {
+          "timestamp": "2026-05-21T22:30:00Z",
+          "attempt": 1,
+          "summary": "Task 1.7 completed: Agent struct with prompt/continue_/abort/subscribe/cancel_token. 5 behavioral tests pass. Also improved agent_loop with tokio::select! for responsive cancellation.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -648,13 +784,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-agent library crate, public hooks contract \u2192 library",
+          "reason": "opi-agent library crate, public hooks contract → library",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new hooks and queue system",
-          "source": "task title: hooks and queues \u2192 feat"
+          "source": "task title: hooks and queues → feat"
         },
         {
           "field": "evaluator_required",
@@ -681,10 +817,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "e5ff0ece2c30d7b42517d0de2513fcebcb2b7980",
-      "last_attempt": "2026-05-21T23:45:00Z",
-      "verified_at_commit": "b0bedb0",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-21T23:45:00Z",
+        "ended_at": "2026-05-21T23:45:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "b0bedb06218f0d24ea7468fb10803d0c80175947",
       "evidence": {
-        "commit_sha": "b0bedb0",
+        "commit_sha": "b0bedb06218f0d24ea7468fb10803d0c80175947",
         "gates_passed": [
           "cargo test -p opi-agent --test hooks_queues (7/7)",
           "cargo test -p opi-agent --test agent_wrapper (5/5)",
@@ -705,11 +848,20 @@
           "QueueUpdate event emitted with correct steering/follow-up data",
           "No stubs or TODOs in production code",
           "No anyhow in library crate"
-        ]
+        ],
+        "opi_task": "1.8",
+        "opi_dod_sha256": "100a2c2d2cfde1c7eb6bd228afd8d11b9a4358d5e674c46cea21a04ebaca03b1",
+        "opi_verification": "library; cargo test -p opi-agent --test hooks_queues (7/7); cargo test -p opi-agent --test agent_wrapper (5/5); cargo test -p opi-agent --test agent_loop_mock (2/2)",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.8 completed: AgentHooks refined with context structs (AfterToolCallContext/Result, ShouldStopAfterTurnContext, PrepareNextTurnContext), steering/follow-up queues added to Agent, queue polling wired into agent_loop, QueueUpdate event added. 7 behavioral tests pass."
+        {
+          "timestamp": "2026-05-21T23:45:00Z",
+          "attempt": 1,
+          "summary": "Task 1.8 completed: AgentHooks refined with context structs (AfterToolCallContext/Result, ShouldStopAfterTurnContext, PrepareNextTurnContext), steering/follow-up queues added to Agent, queue polling wired into agent_loop, QueueUpdate event added. 7 behavioral tests pass.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -730,13 +882,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-coding-agent crate, mutating tools with safety boundary \u2192 cli-tool",
+          "reason": "opi-coding-agent crate, mutating tools with safety boundary → cli-tool",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new tool implementations (read, write, edit, bash)",
-          "source": "task title: read, write, edit, bash \u2192 feat"
+          "source": "task title: read, write, edit, bash → feat"
         },
         {
           "field": "evaluator_required",
@@ -763,10 +915,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "b0bedb06218f0d24ea7468fb10803d0c80175947",
-      "last_attempt": "2026-05-22T00:15:00Z",
-      "verified_at_commit": "dd23647",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-22T00:15:00Z",
+        "ended_at": "2026-05-22T00:15:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "dd236473b67263d0ceb5042e56e32bc18fadc000",
       "evidence": {
-        "commit_sha": "dd23647",
+        "commit_sha": "dd236473b67263d0ceb5042e56e32bc18fadc000",
         "gates_passed": [
           "cargo test -p opi-coding-agent --test tools_read_write_edit_bash (25/25)",
           "cargo test --workspace --all-targets (113/113)",
@@ -784,11 +943,20 @@
           "All tools: valid ToolDef definitions, correct execution modes (read=Parallel, write/edit/bash=Sequential)",
           "Minimal confirmation policy: safety context in details for write/edit/bash (workspace_root, inside_workspace, command, cwd)",
           "No unwrap in non-test code"
-        ]
+        ],
+        "opi_task": "1.9",
+        "opi_dod_sha256": "369a7064316c02020c745dccd9e330cb08633897c173228f1f2f7313b9ec969d",
+        "opi_verification": "cli-tool; cargo test -p opi-coding-agent --test tools_read_write_edit_bash (25/25); cargo test --workspace --all-targets (113/113); cargo fmt --check --all",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.9 completed: ReadTool (parallel, line range), WriteTool (sequential, create/replace), EditTool (sequential, exact replacement), BashTool (sequential, timeout/cancellation/cwd/env). 25 behavioral tests pass. Added tempfile workspace dep, schemars/tokio-util to opi-coding-agent."
+        {
+          "timestamp": "2026-05-22T00:15:00Z",
+          "attempt": 1,
+          "summary": "Task 1.9 completed: ReadTool (parallel, line range), WriteTool (sequential, create/replace), EditTool (sequential, exact replacement), BashTool (sequential, timeout/cancellation/cwd/env). 25 behavioral tests pass. Added tempfile workspace dep, schemars/tokio-util to opi-coding-agent.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -809,13 +977,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-coding-agent crate, read-only tools \u2192 cli-tool",
+          "reason": "opi-coding-agent crate, read-only tools → cli-tool",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new tool implementations (glob, grep)",
-          "source": "task title: glob, grep \u2192 feat"
+          "source": "task title: glob, grep → feat"
         },
         {
           "field": "evaluator_required",
@@ -843,10 +1011,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "dd236473b67263d0ceb5042e56e32bc18fadc000",
-      "last_attempt": "2026-05-22T01:30:00Z",
-      "verified_at_commit": "ce0e384",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-22T01:30:00Z",
+        "ended_at": "2026-05-22T01:30:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "ce0e38478a5ce447e99b4b3077a627ef8995719c",
       "evidence": {
-        "commit_sha": "ce0e384",
+        "commit_sha": "ce0e38478a5ce447e99b4b3077a627ef8995719c",
         "gates_passed": [
           "cargo test -p opi-coding-agent --test tools_glob_grep (12/12)",
           "cargo test -p opi-coding-agent --test tool_schema_fixtures_glob_grep (6/6)",
@@ -864,11 +1039,20 @@
           "GrepTool: no matches is not error (empty results)",
           "Both tools: Parallel execution mode, valid ToolDef definitions",
           "Schema fixtures: required pattern field, valid/invalid args, schema structure"
-        ]
+        ],
+        "opi_task": "1.10",
+        "opi_dod_sha256": "5743faf201e77a1d7f59bd51a07be363e269edab04f7ad1de79c39985837b07a",
+        "opi_verification": "cli-tool; cargo test -p opi-coding-agent --test tools_glob_grep (12/12); cargo test -p opi-coding-agent --test tool_schema_fixtures_glob_grep (6/6); cargo test --workspace --all-targets (131/131)",
+        "opi_evaluator": "not-required"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.10 completed: GlobTool (parallel, gitignore-aware glob via ignore+globset) and GrepTool (parallel, gitignore-aware regex via ignore+regex). 18 tests pass. Uses add_custom_ignore_filename for .gitignore in non-git dirs."
+        {
+          "timestamp": "2026-05-22T01:30:00Z",
+          "attempt": 1,
+          "summary": "Task 1.10 completed: GlobTool (parallel, gitignore-aware glob via ignore+globset) and GrepTool (parallel, gitignore-aware regex via ignore+regex). 18 tests pass. Uses add_custom_ignore_filename for .gitignore in non-git dirs.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -890,13 +1074,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-coding-agent crate producing CLI behavior \u2192 cli-runtime",
+          "reason": "opi-coding-agent crate producing CLI behavior → cli-runtime",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new functionality (prompt builder), not refactor or chore",
-          "source": "task title verb: construction \u2192 feat"
+          "source": "task title verb: construction → feat"
         },
         {
           "field": "evaluator_required",
@@ -923,10 +1107,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "c4d2a3c49fa5ff8df056685e1687f69537309f9d",
-      "last_attempt": "2026-05-22T05:00:00Z",
-      "verified_at_commit": "0f8a332",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-22T05:00:00Z",
+        "ended_at": "2026-05-22T05:00:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "0f8a3327ac2ff78e90542e918f5c3c5edbf7b2b2",
       "evidence": {
-        "commit_sha": "0f8a332",
+        "commit_sha": "0f8a3327ac2ff78e90542e918f5c3c5edbf7b2b2",
         "gates_passed": [
           "cargo test -p opi-coding-agent --test system_prompt (10/10)",
           "cargo test --workspace --all-targets (180/180)",
@@ -940,14 +1131,23 @@
           "Tool names and descriptions from ToolDef appear in prompt",
           "Tool definitions collected for Request.tools via tool_definitions()",
           "User system prompt appended when provided",
-          "Layers in correct order: base \u2192 tools \u2192 user",
+          "Layers in correct order: base → tools → user",
           "Empty tools/user_system produce no section headers",
           "No stubs or TODOs in production code"
-        ]
+        ],
+        "opi_task": "1.11",
+        "opi_dod_sha256": "5913149726ea6df6c0c4ee013586284c293dc0cb1089901d73cafc7294179362",
+        "opi_verification": "cli-runtime; cargo test -p opi-coding-agent --test system_prompt (10/10); cargo test --workspace --all-targets (180/180); cargo fmt --check --all",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.11 completed: SystemPromptBuilder with 3 layers (base instructions, tool descriptions, user system prompt). 10 behavioral tests pass. Evaluator passed with no blockers."
+        {
+          "timestamp": "2026-05-22T05:00:00Z",
+          "attempt": 1,
+          "summary": "Task 1.11 completed: SystemPromptBuilder with 3 layers (base instructions, tool descriptions, user system prompt). 10 behavioral tests pass. Evaluator passed with no blockers.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -968,13 +1168,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-tui crate with visual rendering \u2192 tui",
+          "reason": "opi-tui crate with visual rendering → tui",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new TUI shell component",
-          "source": "task title: TUI shell \u2192 feat"
+          "source": "task title: TUI shell → feat"
         },
         {
           "field": "evaluator_required",
@@ -1001,8 +1201,15 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "ce0e38478a5ce447e99b4b3077a627ef8995719c",
-      "last_attempt": "2026-05-22T02:30:00Z",
-      "verified_at_commit": "f528052",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-22T02:30:00Z",
+        "ended_at": "2026-05-22T02:30:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "f5280529fc5aa963fac51251a89d92a1c345dc0b",
       "evidence": {
         "commit_sha": "f5280529fc5aa963fac51251a89d92a1c345dc0b",
         "gates_passed": [
@@ -1024,11 +1231,20 @@
           "Shared types: Message, Role, AppState, ToolCallStatus, TuiError (thiserror)",
           "No stubs or TODOs in production code",
           "No anyhow in library crate"
-        ]
+        ],
+        "opi_task": "1.12",
+        "opi_dod_sha256": "b657c845510341cde645d351bb0a1244a1222e3e9d3643d3b09b1307c86205f0",
+        "opi_verification": "tui; cargo test -p opi-tui --test tui_snapshots (15/15); cargo test --workspace --all-targets (146/146); cargo fmt --check --all",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.12 completed: TUI shell with MessageList, InputEditor, StatusBar, ToolCallView, Shell. 15 snapshot tests pass at 80x24 and 120x40. Evaluator passed with no blockers."
+        {
+          "timestamp": "2026-05-22T02:30:00Z",
+          "attempt": 1,
+          "summary": "Task 1.12 completed: TUI shell with MessageList, InputEditor, StatusBar, ToolCallView, Shell. 15 snapshot tests pass at 80x24 and 120x40. Evaluator passed with no blockers.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -1049,13 +1265,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-tui crate with visual rendering \u2192 tui",
+          "reason": "opi-tui crate with visual rendering → tui",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new rendering feature for markdown/code blocks",
-          "source": "task title: rendering \u2192 feat"
+          "source": "task title: rendering → feat"
         },
         {
           "field": "evaluator_required",
@@ -1082,10 +1298,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "f5280529fc5aa963fac51251a89d92a1c345dc0b",
-      "last_attempt": "2026-05-22T03:00:00Z",
-      "verified_at_commit": "8de104f",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-22T03:00:00Z",
+        "ended_at": "2026-05-22T03:00:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "8de104fdd3283587f991d3985b1b14df5b87e22a",
       "evidence": {
-        "commit_sha": "8de104f",
+        "commit_sha": "8de104fdd3283587f991d3985b1b14df5b87e22a",
         "gates_passed": [
           "cargo test -p opi-tui --test markdown_snapshots (8/8)",
           "cargo test -p opi-tui --test tui_snapshots (15/15)",
@@ -1105,11 +1328,20 @@
           "No stubs or TODOs in production code",
           "No anyhow in library crate",
           "No unwrap/expect in non-test production code"
-        ]
+        ],
+        "opi_task": "1.13",
+        "opi_dod_sha256": "365353dad3c4da8d52ed0c652cc8e4411305557c27542c0a5b05c885e4510e8e",
+        "opi_verification": "tui; cargo test -p opi-tui --test markdown_snapshots (8/8); cargo test -p opi-tui --test tui_snapshots (15/15); cargo test --workspace --all-targets (154/154)",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.13 completed: MarkdownView (headings, bold, italic, paragraphs, code blocks) and CodeBlock (language label, bordered panel). 8 snapshot tests pass. Removed unused pulldown-cmark dep."
+        {
+          "timestamp": "2026-05-22T03:00:00Z",
+          "attempt": 1,
+          "summary": "Task 1.13 completed: MarkdownView (headings, bold, italic, paragraphs, code blocks) and CodeBlock (language label, bordered panel). 8 snapshot tests pass. Removed unused pulldown-cmark dep.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -1137,13 +1369,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-coding-agent crate, full CLI wiring \u2192 cli-runtime",
+          "reason": "opi-coding-agent crate, full CLI wiring → cli-runtime",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new interactive CLI mode wiring all components",
-          "source": "task title: interactive CLI wiring \u2192 feat"
+          "source": "task title: interactive CLI wiring → feat"
         },
         {
           "field": "evaluator_required",
@@ -1170,10 +1402,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "51f8c46033d776591b261dab05397bcbac37c309",
-      "last_attempt": "2026-05-22T06:00:00Z",
-      "verified_at_commit": "f42321a",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-22T06:00:00Z",
+        "ended_at": "2026-05-22T06:00:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "f42321aa045fd2bcc3416d5a0aa5743e7d57830f",
       "evidence": {
-        "commit_sha": "f42321a",
+        "commit_sha": "f42321aa045fd2bcc3416d5a0aa5743e7d57830f",
         "gates_passed": [
           "cargo test -p opi-coding-agent --test interactive_mock (5/5)",
           "cargo test --workspace --all-targets (204/204)",
@@ -1192,11 +1431,20 @@
           "Clap CLI: -m, -c, -s, --non-interactive, -v, -V, -h flags",
           "Agent::add_tool() for dynamic tool injection",
           "No stubs or TODOs in production code"
-        ]
+        ],
+        "opi_task": "1.14",
+        "opi_dod_sha256": "8c71fe76419533eefdb4de5a20e5e2d6ccc15ac6f15a3c8c239e3154a9deb1e7",
+        "opi_verification": "cli-runtime; cargo test -p opi-coding-agent --test interactive_mock (5/5); cargo test --workspace --all-targets (204/204); cargo fmt --check --all",
+        "opi_evaluator": "not-required"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.14 completed: CodingHarness with 6 built-in tools, CodingAgentHooks, SystemPromptBuilder wiring, clap CLI. Agent::add_tool() added. 5 E2E tests pass with MockProvider."
+        {
+          "timestamp": "2026-05-22T06:00:00Z",
+          "attempt": 1,
+          "summary": "Task 1.14 completed: CodingHarness with 6 built-in tools, CodingAgentHooks, SystemPromptBuilder wiring, clap CLI. Agent::add_tool() added. 5 E2E tests pass with MockProvider.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -1223,13 +1471,13 @@
         },
         {
           "field": "tier",
-          "reason": "opi-coding-agent crate, non-interactive CLI mode \u2192 cli-runtime",
+          "reason": "opi-coding-agent crate, non-interactive CLI mode → cli-runtime",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new non-interactive execution mode",
-          "source": "task title: non-interactive mode \u2192 feat"
+          "source": "task title: non-interactive mode → feat"
         },
         {
           "field": "evaluator_required",
@@ -1257,10 +1505,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "f42321aa045fd2bcc3416d5a0aa5743e7d57830f",
-      "last_attempt": "2026-05-22T08:00:00Z",
-      "verified_at_commit": "2c9da2f",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-22T08:00:00Z",
+        "ended_at": "2026-05-22T08:00:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "2c9da2ffb33c5656f5f762663b10197942a7c204",
       "evidence": {
-        "commit_sha": "2c9da2f",
+        "commit_sha": "2c9da2ffb33c5656f5f762663b10197942a7c204",
         "gates_passed": [
           "cargo test -p opi-coding-agent --test non_interactive (3/3)",
           "cargo test -p opi-coding-agent --test non_interactive_policy (6/6)",
@@ -1288,11 +1543,20 @@
           "CLI --allow-mutating flag added",
           "main.rs wired with provider construction and exit codes",
           "No stubs or TODOs in production code"
-        ]
+        ],
+        "opi_task": "1.15",
+        "opi_dod_sha256": "699fd335366255824c80a8db2254ef3c8a689c617e34ef0517a01fd57f720668",
+        "opi_verification": "cli-runtime; cargo test -p opi-coding-agent --test non_interactive (3/3); cargo test -p opi-coding-agent --test non_interactive_policy (6/6); cargo test --workspace --all-targets (213/213)",
+        "opi_evaluator": "not-required"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.15 completed: NonInteractiveRunner with exit code mapping, NonInteractiveHooks with tool safety policy (before_tool_call denies write/edit/bash), provider error detection, CodingHarness::new_with_hooks and cancel methods. 9 E2E tests pass (3 non_interactive + 6 policy)."
+        {
+          "timestamp": "2026-05-22T08:00:00Z",
+          "attempt": 1,
+          "summary": "Task 1.15 completed: NonInteractiveRunner with exit code mapping, NonInteractiveHooks with tool safety policy (before_tool_call denies write/edit/bash), provider error detection, CodingHarness::new_with_hooks and cancel methods. 9 E2E tests pass (3 non_interactive + 6 policy).",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -1314,13 +1578,13 @@
         },
         {
           "field": "tier",
-          "reason": "config loading is CLI runtime infrastructure in opi-coding-agent \u2192 cli-runtime",
+          "reason": "config loading is CLI runtime infrastructure in opi-coding-agent → cli-runtime",
           "source": "verification-tiers.md tier assignment rules"
         },
         {
           "field": "commit_type",
           "reason": "new functionality (config system), not refactor or chore",
-          "source": "task title verb: loading \u2192 feat"
+          "source": "task title verb: loading → feat"
         },
         {
           "field": "evaluator_required",
@@ -1348,10 +1612,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "0f8a3327ac2ff78e90542e918f5c3c5edbf7b2b2",
-      "last_attempt": "2026-05-21T09:01:52.080205+00:00",
-      "verified_at_commit": "51f8c46",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-21T09:01:52.080205+00:00",
+        "ended_at": "2026-05-21T09:01:52.080205+00:00",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "51f8c46033d776591b261dab05397bcbac37c309",
       "evidence": {
-        "commit_sha": "51f8c46",
+        "commit_sha": "51f8c46033d776591b261dab05397bcbac37c309",
         "gates_passed": [
           "cargo test -p opi-coding-agent --test config_loading (11/11)",
           "cargo test -p opi-coding-agent --test config_precedence (8/8)",
@@ -1372,11 +1643,20 @@
           "ConfigSource.user_config_path injection enables testing without env manipulation",
           "Option-based TomlConfig structs correctly detect field presence for merge",
           "No stubs or TODOs in production code"
-        ]
+        ],
+        "opi_task": "1.16",
+        "opi_dod_sha256": "641897ea72fbf0d3311a7a290ff1e04e4d00f11ba92e19a0731d28ff7060c06f",
+        "opi_verification": "cli-runtime; cargo test -p opi-coding-agent --test config_loading (11/11); cargo test -p opi-coding-agent --test config_precedence (8/8); cargo test --workspace --all-targets (199/199)",
+        "opi_evaluator": "not-required"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.16 completed: TOML config loading with OpiConfig/DefaultsConfig/ThinkingConfig/ProvidersConfig/AnthropicProviderConfig, ConfigError (Parse/Read), load_config_file(), resolve_config() with CLI>env>project>user>defaults precedence, Option-based TomlConfig raw structs for correct merge detection. 19 behavioral tests pass."
+        {
+          "timestamp": "2026-05-21T09:01:52.080205+00:00",
+          "attempt": 1,
+          "summary": "Task 1.16 completed: TOML config loading with OpiConfig/DefaultsConfig/ThinkingConfig/ProvidersConfig/AnthropicProviderConfig, ConfigError (Parse/Read), load_config_file(), resolve_config() with CLI>env>project>user>defaults precedence, Option-based TomlConfig raw structs for correct merge detection. 19 behavioral tests pass.",
+          "gate_results": null
+        }
       ]
     },
     {
@@ -1403,7 +1683,7 @@
         {
           "field": "commit_type",
           "reason": "new test infrastructure (MockProvider + E2E harness)",
-          "source": "task title: integration harness \u2192 feat"
+          "source": "task title: integration harness → feat"
         },
         {
           "field": "evaluator_required",
@@ -1426,10 +1706,17 @@
       "iteration_count": 1,
       "max_iterations": 5,
       "start_commit": "8de104fdd3283587f991d3985b1b14df5b87e22a",
-      "last_attempt": "2026-05-22T04:00:00Z",
-      "verified_at_commit": "c4d2a3c",
+      "last_attempt": {
+        "attempt": 1,
+        "started_at": "2026-05-22T04:00:00Z",
+        "ended_at": "2026-05-22T04:00:00Z",
+        "outcome": "passed",
+        "failing_gate": null,
+        "touched_files": []
+      },
+      "verified_at_commit": "c4d2a3c49fa5ff8df056685e1687f69537309f9d",
       "evidence": {
-        "commit_sha": "c4d2a3c",
+        "commit_sha": "c4d2a3c49fa5ff8df056685e1687f69537309f9d",
         "gates_passed": [
           "cargo test --workspace --all-targets (170/170)",
           "cargo fmt --check --all",
@@ -1448,19 +1735,21 @@
           "MockProvider is Send+Sync (verified by test)",
           "No live provider calls; all tests are fixture-based",
           "Tests run in CI via cargo test --workspace --all-targets"
-        ]
+        ],
+        "opi_task": "1.17",
+        "opi_dod_sha256": "87e47dd1009c12571d9cb48e57049d369bdf8040e022cbd6614984124667348f",
+        "opi_verification": "workspace; cargo test --workspace --all-targets (170/170); cargo fmt --check --all; cargo clippy --workspace --all-targets -- -D warnings",
+        "opi_evaluator": "passed"
       },
       "blocker": null,
       "session_notes": [
-        "Task 1.17 completed: MockProvider with builder helpers in opi-ai::test_support, 4 E2E integration tests in opi-coding-agent, agent_loop_mock migrated. Evaluator passed with 4 non-blocking findings (all addressed: #[doc(hidden)] on module, removed dead methods, descriptive panic on exhaustion)."
+        {
+          "timestamp": "2026-05-22T04:00:00Z",
+          "attempt": 1,
+          "summary": "Task 1.17 completed: MockProvider with builder helpers in opi-ai::test_support, 4 E2E integration tests in opi-coding-agent, agent_loop_mock migrated. Evaluator passed with 4 non-blocking findings (all addressed: #[doc(hidden)] on module, removed dead methods, descriptive panic on exhaustion).",
+          "gate_results": null
+        }
       ]
     }
-  ],
-  "phase_exit": {
-    "1": {
-      "completed_at": "2026-05-22T12:00:00Z",
-      "exit_criteria_met": true,
-      "evaluator_summary": "All 18 Phase 1 tasks passing. 213 tests green. Audit fixes committed (a66465a): SSE malformed event surfacing, CRLF parsing, BashTool cross-platform, interactive TUI wiring, auth error variant, config base_url/precedence, responsive cancellation. All cross-cutting gates pass: fmt, clippy, doc, smoke."
-    }
-  }
+  ]
 }
