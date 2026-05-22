@@ -4,6 +4,7 @@
 //! tool systems and communication transports.
 
 pub mod agent;
+pub mod compaction;
 pub mod event;
 pub mod hooks;
 pub mod loop_types;
