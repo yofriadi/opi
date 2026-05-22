@@ -5,6 +5,7 @@
 
 pub mod anthropic;
 pub mod config;
+pub mod gemini;
 pub mod message;
 pub mod model;
 pub mod openai_chat;
