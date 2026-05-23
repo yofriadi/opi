@@ -156,13 +156,16 @@ pub fn format_sessions(sessions: &[SessionInfo]) -> String {
     lines.join("\n")
 }
 
-/// Handle session CLI dispatch. Returns true if a session command was handled
-/// (caller should exit), false if normal execution should continue.
+/// Handle session CLI dispatch.
+///
+/// Returns `(handled, Some(ResumedSession))` for `--resume`,
+/// `(true, None)` for list/delete (caller should exit),
+/// `(false, None)` if no session command was given (normal execution continues).
 pub fn handle_session_cli(
     list: bool,
     resume: Option<&str>,
     delete: Option<&str>,
-) -> Result<bool, i32> {
+) -> Result<(bool, Option<ResumedSession>), i32> {
     let dir = session_dir();
 
     if list {
@@ -172,7 +175,7 @@ pub fn handle_session_cli(
                 if !output.is_empty() {
                     println!("{output}");
                 }
-                Ok(true)
+                Ok((true, None))
             }
             Err(e) => {
                 eprintln!("opi: {e}");
@@ -188,7 +191,7 @@ pub fn handle_session_cli(
                     session.entries.len(),
                     session.header.cwd,
                 );
-                Ok(true)
+                Ok((true, Some(session)))
             }
             Err(e) => {
                 eprintln!("opi: {e}");
@@ -199,7 +202,7 @@ pub fn handle_session_cli(
         match delete_session(&dir, id) {
             Ok(()) => {
                 println!("Deleted session {id}");
-                Ok(true)
+                Ok((true, None))
             }
             Err(e) => {
                 eprintln!("opi: {e}");
@@ -207,6 +210,21 @@ pub fn handle_session_cli(
             }
         }
     } else {
-        Ok(false)
+        Ok((false, None))
     }
+}
+
+/// Reconstruct agent messages from session entries for resume.
+pub fn reconstruct_context(
+    entries: &[opi_agent::session::SessionEntry],
+) -> Vec<opi_agent::message::AgentMessage> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            opi_agent::session::SessionEntry::Message(msg_entry) => {
+                Some(opi_agent::message::AgentMessage::Llm(msg_entry.message.clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }

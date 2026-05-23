@@ -155,6 +155,14 @@ impl Agent {
         self.tools.push(Arc::from(tool));
     }
 
+    /// Set the initial conversation messages (for session resume).
+    ///
+    /// Must be called before `prompt` or `continue_`. Replaces any
+    /// existing messages in the agent's internal buffer.
+    pub fn set_initial_messages(&mut self, messages: Vec<AgentMessage>) {
+        self.messages = messages;
+    }
+
     /// Register an event subscriber that receives all `AgentEvent`s.
     pub fn subscribe(&mut self, callback: EventSubscriber) {
         self.subscribers.lock().unwrap().push(callback);

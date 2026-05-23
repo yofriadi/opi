@@ -25,6 +25,7 @@ async fn runner_text_prompt_stdout_exit0() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run("Hi there").await;
@@ -59,6 +60,7 @@ async fn runner_readonly_tool_succeeds() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run("Read the Cargo.toml").await;
@@ -87,6 +89,7 @@ async fn runner_provider_error_stderr_exit4() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run("Do something").await;

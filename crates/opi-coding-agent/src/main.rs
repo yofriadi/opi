@@ -13,16 +13,21 @@ fn main() {
         eprintln!("opi {} - debug mode", env!("CARGO_PKG_VERSION"));
     }
 
-    // Handle session CLI commands first — they don't need config or a provider.
-    match opi_coding_agent::session_cli::handle_session_cli(
+    // Handle session CLI commands first -- they don't need config or a provider.
+    let resumed_messages = match opi_coding_agent::session_cli::handle_session_cli(
         cli.list_sessions,
         cli.resume.as_deref(),
         cli.delete_session.as_deref(),
     ) {
-        Ok(true) => return,
-        Ok(false) => {}
+        Ok((true, Some(session))) => {
+            Some(opi_coding_agent::session_cli::reconstruct_context(
+                &session.entries,
+            ))
+        }
+        Ok((true, None)) => return,         // list/delete handled
+        Ok((_, None | Some(_))) => None,    // no session command or unreachable
         Err(code) => std::process::exit(code),
-    }
+    };
 
     let config = match resolve_config(ConfigSource {
         cli_model: cli.model.clone(),
@@ -49,11 +54,12 @@ fn main() {
             }
         };
 
-        let exit_code =
-            rt.block_on(async { run_non_interactive(&cli, &config, &prompt_text).await });
+        let exit_code = rt.block_on(async {
+            run_non_interactive(&cli, &config, &prompt_text, resumed_messages).await
+        });
         std::process::exit(exit_code);
     } else {
-        // Interactive mode — use TUI
+        // Interactive mode -- use TUI
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
@@ -61,7 +67,7 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        rt.block_on(async { run_interactive(&cli, &config).await });
+        rt.block_on(async { run_interactive(&cli, &config, resumed_messages).await });
     }
 }
 
@@ -69,6 +75,7 @@ async fn run_non_interactive(
     cli: &Cli,
     config: &opi_coding_agent::config::OpiConfig,
     prompt_text: &str,
+    resumed_messages: Option<Vec<opi_agent::message::AgentMessage>>,
 ) -> i32 {
     use opi_coding_agent::runner::{ExitCode, NonInteractiveRunner};
 
@@ -112,6 +119,7 @@ async fn run_non_interactive(
         std::env::current_dir().unwrap_or_default(),
         allow_mutating,
         user_system_prompt,
+        resumed_messages.unwrap_or_default(),
     );
 
     let result = if cli.json {
@@ -130,7 +138,11 @@ async fn run_non_interactive(
     result.exit_code
 }
 
-async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig) {
+async fn run_interactive(
+    cli: &Cli,
+    config: &opi_coding_agent::config::OpiConfig,
+    resumed_messages: Option<Vec<opi_agent::message::AgentMessage>>,
+) {
     use opi_coding_agent::harness::{CodingHarness, InteractiveCodingHooks};
     use opi_coding_agent::interactive;
 
@@ -153,6 +165,7 @@ async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig
         .and_then(|path| std::fs::read_to_string(path).ok());
 
     let hooks = Box::new(InteractiveCodingHooks::new(allow_mutating));
+    let initial_messages = resumed_messages.unwrap_or_default();
     let harness = CodingHarness::new_with_hooks(
         provider,
         config.defaults.model.clone(),
@@ -160,6 +173,7 @@ async fn run_interactive(cli: &Cli, config: &opi_coding_agent::config::OpiConfig
         std::env::current_dir().unwrap_or_default(),
         hooks,
         user_system_prompt,
+        initial_messages,
     );
 
     let model_display = config.defaults.model.clone();

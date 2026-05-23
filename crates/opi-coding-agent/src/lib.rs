@@ -6,4 +6,5 @@ pub mod policy;
 pub mod prompt;
 pub mod runner;
 pub mod session_cli;
+pub mod session_coordinator;
 pub mod tool;

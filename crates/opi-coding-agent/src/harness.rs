@@ -16,6 +16,7 @@ use opi_ai::provider::Provider;
 
 use crate::config::OpiConfig;
 use crate::prompt::SystemPromptBuilder;
+use crate::session_coordinator::SessionCoordinator;
 use crate::tool::{BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool};
 
 /// Harness wiring config, tools, system prompt, hooks, and Agent.
@@ -23,6 +24,7 @@ pub struct CodingHarness {
     agent: Agent,
     config: OpiConfig,
     system_prompt: String,
+    session: Option<SessionCoordinator>,
 }
 
 impl CodingHarness {
@@ -40,6 +42,7 @@ impl CodingHarness {
             workspace_root,
             Box::new(CodingAgentHooks),
             None,
+            Vec::new(),
         )
     }
 
@@ -51,6 +54,7 @@ impl CodingHarness {
         workspace_root: PathBuf,
         hooks: Box<dyn AgentHooks>,
         user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
     ) -> Self {
         let tools = Self::build_tools(&workspace_root);
         let tool_defs: Vec<_> = tools.iter().map(|t| t.definition()).collect();
@@ -74,7 +78,7 @@ impl CodingHarness {
             ..Default::default()
         };
 
-        let agent = Agent::new(
+        let mut agent = Agent::new(
             provider,
             tools,
             model,
@@ -83,10 +87,28 @@ impl CodingHarness {
             hooks,
         );
 
+        if !initial_messages.is_empty() {
+            agent.set_initial_messages(initial_messages);
+        }
+
+        // Create session coordinator
+        let session_dir = crate::session_cli::session_dir();
+        let cwd = std::env::current_dir()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let session = SessionCoordinator::new(
+            &session_dir,
+            &cwd,
+            opi_agent::compaction::CompactionConfig::default(),
+        )
+        .ok();
+
         Self {
             agent,
             config,
             system_prompt,
+            session,
         }
     }
 
@@ -97,12 +119,35 @@ impl CodingHarness {
 
     /// Send a user prompt and run the agent loop.
     pub async fn prompt(&mut self, text: &str) -> Result<Vec<AgentMessage>, AgentError> {
-        self.agent.prompt(text).await
+        let messages = self.agent.prompt(text).await?;
+        self.persist_turn(&messages);
+        Ok(messages)
     }
 
     /// Continue the conversation with an additional message.
     pub async fn continue_(&mut self, text: &str) -> Result<Vec<AgentMessage>, AgentError> {
-        self.agent.continue_(text).await
+        let messages = self.agent.continue_(text).await?;
+        self.persist_turn(&messages);
+        Ok(messages)
+    }
+
+    /// Extract usage from the last assistant message in a turn and persist.
+    fn persist_turn(&mut self, messages: &[AgentMessage]) {
+        if let Some(session) = &mut self.session {
+            let usage = messages
+                .iter()
+                .filter_map(|m| {
+                    if let AgentMessage::Llm(Message::Assistant(a)) = m {
+                        Some(&a.usage)
+                    } else {
+                        None
+                    }
+                })
+                .next_back()
+                .cloned()
+                .unwrap_or_default();
+            session.on_turn_end(messages, &usage);
+        }
     }
 
     /// Register an event subscriber.
@@ -130,6 +175,11 @@ impl CodingHarness {
         self.agent.cancel_token()
     }
 
+    /// Return the session coordinator, if active.
+    pub fn session(&self) -> Option<&SessionCoordinator> {
+        self.session.as_ref()
+    }
+
     fn build_tools(workspace_root: &Path) -> Vec<Box<dyn Tool>> {
         vec![
             Box::new(ReadTool::new(workspace_root.to_path_buf())),
@@ -146,7 +196,7 @@ impl CodingHarness {
 // Hooks
 // ---------------------------------------------------------------------------
 
-/// Default hooks for the coding agent — pass-through message conversion.
+/// Default hooks for the coding agent -- pass-through message conversion.
 struct CodingAgentHooks;
 
 impl AgentHooks for CodingAgentHooks {

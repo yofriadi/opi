@@ -32,6 +32,7 @@ async fn json_mode_schema_version_header() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run_json("hello").await;
@@ -60,6 +61,7 @@ async fn json_mode_each_line_valid_json_with_type() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run_json("test").await;
@@ -91,6 +93,7 @@ async fn json_mode_agent_events_emitted() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run_json("prompt").await;
@@ -121,6 +124,7 @@ async fn json_mode_events_deserialize_as_session_events() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run_json("test").await;
@@ -154,6 +158,7 @@ async fn json_mode_no_blank_lines() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run_json("test").await;
@@ -181,6 +186,7 @@ async fn json_mode_provider_error_exit_code() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run_json("test").await;
@@ -222,6 +228,7 @@ async fn json_mode_tool_call_events() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run_json("Read Cargo.toml").await;
@@ -256,6 +263,7 @@ async fn json_mode_stdout_is_only_ndjson() {
         std::env::current_dir().unwrap(),
         false,
         None,
+        Vec::new(),
     );
 
     let result = runner.run_json("test").await;

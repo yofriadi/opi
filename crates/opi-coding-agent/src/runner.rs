@@ -72,6 +72,7 @@ impl NonInteractiveRunner {
         workspace_root: PathBuf,
         allow_mutating: bool,
         user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
     ) -> Self {
         let hooks = Box::new(NonInteractiveHooks { allow_mutating });
         let harness = CodingHarness::new_with_hooks(
@@ -81,6 +82,7 @@ impl NonInteractiveRunner {
             workspace_root,
             hooks,
             user_system_prompt,
+            initial_messages,
         );
         Self { harness }
     }
