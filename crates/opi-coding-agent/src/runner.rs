@@ -13,13 +13,13 @@ use opi_agent::hooks::{
 };
 use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
-use opi_agent::session_event::AgentSessionEvent;
+use opi_agent::session_event::{AgentSessionEvent, SessionCostTotals, SessionTokenTotals};
 use opi_ai::message::Message;
 use opi_ai::provider::Provider;
 use opi_ai::stream::AssistantStreamEvent;
 
 use crate::config::OpiConfig;
-use crate::harness::CodingHarness;
+use crate::harness::{CodingHarness, ResumeInfo};
 use crate::policy::is_mutating_tool;
 
 /// NDJSON output schema version.
@@ -74,8 +74,33 @@ impl NonInteractiveRunner {
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
     ) -> Self {
+        Self::new_with_resume(
+            provider,
+            model,
+            config,
+            workspace_root,
+            allow_mutating,
+            user_system_prompt,
+            initial_messages,
+            None,
+        )
+    }
+
+    /// Create a new non-interactive runner, optionally adopting an existing
+    /// session (resume).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_resume(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        allow_mutating: bool,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        resume_info: Option<ResumeInfo>,
+    ) -> Self {
         let hooks = Box::new(NonInteractiveHooks { allow_mutating });
-        let harness = CodingHarness::new_with_hooks(
+        let harness = CodingHarness::new_with_hooks_and_resume(
             provider,
             model,
             config,
@@ -83,6 +108,7 @@ impl NonInteractiveRunner {
             hooks,
             user_system_prompt,
             initial_messages,
+            resume_info,
         );
         Self { harness }
     }
@@ -125,6 +151,21 @@ impl NonInteractiveRunner {
                     attempt: *attempt,
                     final_error: final_error.clone(),
                 },
+                AgentEvent::CompactionStart { reason } => {
+                    AgentSessionEvent::CompactionStart { reason: *reason }
+                }
+                AgentEvent::CompactionEnd {
+                    reason,
+                    result,
+                    aborted,
+                    error_message,
+                } => AgentSessionEvent::CompactionEnd {
+                    reason: *reason,
+                    result: result.clone(),
+                    aborted: *aborted,
+                    will_retry: false,
+                    error_message: error_message.clone(),
+                },
                 _ => AgentSessionEvent::Agent {
                     event: event.clone(),
                 },
@@ -137,7 +178,41 @@ impl NonInteractiveRunner {
             }
         }));
 
-        match self.harness.prompt(prompt).await {
+        let prompt_result = self.harness.prompt(prompt).await;
+
+        // Emit a final `SessionSummary` event with cumulative token totals
+        // and (when known) cost breakdown. Emitted before the result match so
+        // even error paths surface what the user spent before failing.
+        if let Some(session) = self.harness.session() {
+            let usage = session.usage();
+            let cost = session.cost_summary().map(|c| SessionCostTotals {
+                input: c.input_cost,
+                output: c.output_cost,
+                cache_read: c.cache_read_cost,
+                cache_write: c.cache_write_cost,
+                total: c.total_cost(),
+            });
+            let summary_event = AgentSessionEvent::SessionSummary {
+                session_id: session.session_id().to_owned(),
+                model: session.model().to_owned(),
+                turns: usage.turn_count(),
+                tokens: SessionTokenTotals {
+                    input: usage.total_input_tokens(),
+                    output: usage.total_output_tokens(),
+                    cache_read: usage.total_cache_read_tokens(),
+                    cache_write: usage.total_cache_write_tokens(),
+                },
+                cost_usd: cost,
+            };
+            if let Ok(json) = serde_json::to_string(&summary_event)
+                && let Ok(mut guard) = output.lock()
+            {
+                guard.push_str(&json);
+                guard.push('\n');
+            }
+        }
+
+        match prompt_result {
             Ok(messages) => {
                 if let Some(error) = find_error_message(&messages) {
                     return NonInteractiveResult {
@@ -192,27 +267,44 @@ impl NonInteractiveRunner {
 
     /// Run a single prompt and return captured output.
     pub async fn run(&mut self, prompt: &str) -> NonInteractiveResult {
-        // Subscribe to capture text from TextDelta events
+        // Subscribe to capture text from TextDelta events and persist errors
         let text_parts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let persist_errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let tp = text_parts.clone();
-        self.harness.subscribe(Box::new(move |event| {
-            if let AgentEvent::MessageUpdate {
+        let pe = persist_errors.clone();
+        self.harness.subscribe(Box::new(move |event| match event {
+            AgentEvent::MessageUpdate {
                 assistant_event, ..
-            } = event
-                && let AssistantStreamEvent::TextDelta { delta, .. } = assistant_event.as_ref()
-                && let Ok(mut guard) = tp.lock()
-            {
-                guard.push(delta.clone());
+            } => {
+                if let AssistantStreamEvent::TextDelta { delta, .. } = assistant_event.as_ref()
+                    && let Ok(mut guard) = tp.lock()
+                {
+                    guard.push(delta.clone());
+                }
             }
+            AgentEvent::SessionPersistError { message } => {
+                if let Ok(mut guard) = pe.lock() {
+                    guard.push(message.clone());
+                }
+            }
+            _ => {}
         }));
 
-        match self.harness.prompt(prompt).await {
+        let prompt_result = self.harness.prompt(prompt).await;
+
+        // Format persist errors AFTER prompt returns so events emitted
+        // during the run are captured.
+        let persist_stderr = format_persist_errors(&persist_errors);
+
+        match prompt_result {
             Ok(messages) => {
                 // Check for provider errors in assistant messages
                 if let Some(error) = find_error_message(&messages) {
+                    let mut stderr = error;
+                    stderr.push_str(&persist_stderr);
                     return NonInteractiveResult {
                         stdout: String::new(),
-                        stderr: error,
+                        stderr,
                         exit_code: ExitCode::ProviderFailure as i32,
                     };
                 }
@@ -220,38 +312,38 @@ impl NonInteractiveRunner {
                 let stdout = text_parts.lock().map(|g| g.join("")).unwrap_or_default();
                 NonInteractiveResult {
                     stdout,
-                    stderr: String::new(),
+                    stderr: persist_stderr,
                     exit_code: ExitCode::Success as i32,
                 }
             }
             Err(AgentError::Cancelled) => NonInteractiveResult {
                 stdout: String::new(),
-                stderr: "cancelled".into(),
+                stderr: format!("cancelled{persist_stderr}"),
                 exit_code: ExitCode::Interrupted as i32,
             },
             Err(AgentError::AuthFailed(e)) => NonInteractiveResult {
                 stdout: String::new(),
-                stderr: format!("authentication error: {e}"),
+                stderr: format!("authentication error: {e}{persist_stderr}"),
                 exit_code: ExitCode::AuthFailure as i32,
             },
             Err(AgentError::Provider(e)) => NonInteractiveResult {
                 stdout: String::new(),
-                stderr: format!("provider error: {e}"),
+                stderr: format!("provider error: {e}{persist_stderr}"),
                 exit_code: ExitCode::ProviderFailure as i32,
             },
             Err(AgentError::Tool(e)) => NonInteractiveResult {
                 stdout: String::new(),
-                stderr: format!("tool error: {e}"),
+                stderr: format!("tool error: {e}{persist_stderr}"),
                 exit_code: ExitCode::ToolFailure as i32,
             },
             Err(AgentError::Hook(e)) => NonInteractiveResult {
                 stdout: String::new(),
-                stderr: format!("hook error: {e}"),
+                stderr: format!("hook error: {e}{persist_stderr}"),
                 exit_code: ExitCode::RuntimeFailure as i32,
             },
             Err(AgentError::MaxTurnsExceeded(n)) => NonInteractiveResult {
                 stdout: String::new(),
-                stderr: format!("max turns exceeded ({n})"),
+                stderr: format!("max turns exceeded ({n}){persist_stderr}"),
                 exit_code: ExitCode::RuntimeFailure as i32,
             },
         }
@@ -274,6 +366,20 @@ fn find_error_message(messages: &[AgentMessage]) -> Option<String> {
     None
 }
 
+/// Format any captured session persist errors into a stderr suffix.
+pub fn format_persist_errors(errors: &Arc<Mutex<Vec<String>>>) -> String {
+    let guard = errors.lock().unwrap();
+    if guard.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for e in guard.iter() {
+        out.push_str("\nsession persist error: ");
+        out.push_str(e);
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Hooks
 // ---------------------------------------------------------------------------
@@ -285,13 +391,7 @@ struct NonInteractiveHooks {
 
 impl AgentHooks for NonInteractiveHooks {
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
-        let mut result = Vec::new();
-        for msg in messages {
-            if let AgentMessage::Llm(m) = msg {
-                result.push(m.clone());
-            }
-        }
-        Ok(result)
+        Ok(crate::harness::agent_messages_to_llm(messages))
     }
 
     fn before_tool_call(

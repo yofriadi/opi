@@ -8,7 +8,11 @@ use ratatui::{
     widgets::{Block, Widget},
 };
 
-use crate::{Message, Role, theme::Theme};
+use crate::{DiffView, Message, Role, theme::Theme};
+
+/// Number of terminal rows a single diff message reserves when rendered as a
+/// `DiffView`. Chosen to comfortably fit a small hunk plus header.
+const DIFF_ROWS: u16 = 10;
 
 /// Displays a scrollable list of conversation messages.
 pub struct MessageList {
@@ -53,10 +57,27 @@ impl Widget for MessageList {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        for (i, msg) in self.messages.iter().enumerate() {
-            let y = i as u16;
+        let mut y = 0u16;
+        for msg in self.messages.iter() {
             if y >= inner.height {
                 break;
+            }
+            if let Some(diff) = &msg.diff {
+                let rows = DIFF_ROWS.min(inner.height.saturating_sub(y));
+                if rows == 0 {
+                    break;
+                }
+                let rect = Rect {
+                    x: inner.x,
+                    y: inner.y + y,
+                    width: inner.width,
+                    height: rows,
+                };
+                DiffView::new(diff.path.clone(), diff.before.clone(), diff.after.clone())
+                    .theme(self.theme.clone())
+                    .render(rect, buf);
+                y += rows;
+                continue;
             }
             let (label, style) = self.role_label(&msg.role);
             let line = Line::from(vec![
@@ -70,6 +91,7 @@ impl Widget for MessageList {
                 },
                 buf,
             );
+            y += 1;
         }
     }
 }

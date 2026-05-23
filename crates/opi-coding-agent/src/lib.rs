@@ -3,6 +3,7 @@ pub mod config;
 pub mod harness;
 pub mod interactive;
 pub mod policy;
+pub mod pricing;
 pub mod prompt;
 pub mod runner;
 pub mod session_cli;

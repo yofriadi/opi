@@ -63,6 +63,25 @@ impl MockProvider {
     pub fn stream_call_count(&self) -> usize {
         self.call_log.lock().unwrap().len()
     }
+
+    /// Snapshot the `messages` field of every `Request` passed to `stream()`
+    /// so far. Useful for asserting which messages the provider observed
+    /// during a test run.
+    pub fn recorded_messages(&self) -> Vec<Vec<crate::message::Message>> {
+        self.call_log
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.messages.clone())
+            .collect()
+    }
+
+    /// Clone the shared call-log handle. Lets a test hold a reference to the
+    /// recorded requests even after the provider is moved into a `Box<dyn
+    /// Provider>`.
+    pub fn call_log_handle(&self) -> Arc<Mutex<Vec<Request>>> {
+        Arc::clone(&self.call_log)
+    }
 }
 
 /// Helper: build a base `AssistantMessage` for fixture construction.

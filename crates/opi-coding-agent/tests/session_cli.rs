@@ -383,6 +383,41 @@ fn valid_session_ids_accepted() {
     assert!(matches!(r2, Err(session_cli::SessionCliError::NotFound(_))));
 }
 
+#[test]
+fn resume_session_reports_skipped_corrupt_entries() {
+    let dir = create_session_dir();
+    let header = make_header("corrupt-sess", "/repo");
+    let path = dir.path().join("corrupt-sess.jsonl");
+    let mut writer = SessionWriter::create(&path, header.clone()).unwrap();
+
+    // Write a valid entry
+    writer.append(&test_message_entry("e1", "good")).unwrap();
+    drop(writer);
+
+    // Inject a corrupt line directly into the JSONL file.
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(b"{not valid json}\n").unwrap();
+    }
+
+    // Write another valid entry
+    let mut writer = SessionWriter::open(&path).unwrap();
+    writer
+        .append(&test_message_entry("e2", "also-good"))
+        .unwrap();
+
+    let result = resume_session(dir.path(), "corrupt-sess").unwrap();
+    assert_eq!(result.entries.len(), 2, "should have 2 valid entries");
+    assert_eq!(
+        result.skipped_entries, 1,
+        "should report 1 corrupt entry skipped"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Subprocess E2E tests
 // ---------------------------------------------------------------------------

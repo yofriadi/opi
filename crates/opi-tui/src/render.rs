@@ -18,6 +18,7 @@ pub struct Shell {
     model: String,
     state: AppState,
     token_count: Option<u64>,
+    cost_usd: Option<f64>,
     active_tool: Option<ToolCallViewData>,
     theme: Theme,
 }
@@ -36,6 +37,7 @@ impl Shell {
             model,
             state: AppState::Idle,
             token_count: None,
+            cost_usd: None,
             active_tool: None,
             theme: Theme::default(),
         }
@@ -58,6 +60,11 @@ impl Shell {
 
     pub fn token_count(mut self, count: u64) -> Self {
         self.token_count = Some(count);
+        self
+    }
+
+    pub fn cost_usd(mut self, cost: f64) -> Self {
+        self.cost_usd = Some(cost);
         self
     }
 
@@ -105,9 +112,12 @@ impl Widget for Shell {
             ci += 1;
         }
 
-        StatusBar::new(self.model, self.state, self.token_count)
-            .theme(theme.clone())
-            .render(chunks[ci], buf);
+        let mut status =
+            StatusBar::new(self.model, self.state, self.token_count).theme(theme.clone());
+        if let Some(cost) = self.cost_usd {
+            status = status.cost_usd(cost);
+        }
+        status.render(chunks[ci], buf);
         ci += 1;
 
         InputEditor::new(self.input_text)

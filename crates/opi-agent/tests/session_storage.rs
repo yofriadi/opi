@@ -547,3 +547,93 @@ fn writer_appends_to_existing_file() {
     let (_, entries) = SessionReader::read_all(&path).unwrap();
     assert_eq!(entries.len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Crash recovery — open after incomplete tail, then append + read_all
+// ---------------------------------------------------------------------------
+
+#[test]
+fn writer_truncates_incomplete_tail_preserving_trailing_newline() {
+    // Simulate a crash: valid entries followed by an incomplete JSON fragment.
+    // SessionWriter::open must truncate the incomplete line *without* removing
+    // the trailing newline of the last valid entry. Then appending a new entry
+    // must produce valid JSONL (each entry on its own line).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tail-truncation.jsonl");
+
+    // Write a valid session with two entries.
+    {
+        let mut writer = SessionWriter::create(&path, make_header("tail-test")).unwrap();
+        writer.append(&test_message_entry("e1", "first")).unwrap();
+        writer.append(&test_message_entry("e2", "second")).unwrap();
+    }
+
+    // Simulate crash: append an incomplete line (no trailing newline).
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        // Intentionally incomplete JSON, no newline.
+        write!(f, "{{\"type\":\"message\",\"id\":\"e3\"").unwrap();
+    }
+
+    // Open with SessionWriter — should truncate the incomplete tail.
+    {
+        let mut writer = SessionWriter::open(&path).unwrap();
+        writer.append(&test_message_entry("e3", "third")).unwrap();
+    }
+
+    let (_, entries) = SessionReader::read_all(&path).unwrap();
+    assert_eq!(
+        entries.len(),
+        3,
+        "should have 3 entries after truncating incomplete tail + appending"
+    );
+    // Verify the last entry is the one we appended after recovery.
+    if let SessionEntry::Message(m) = &entries[2] {
+        assert_eq!(m.id, "e3");
+    } else {
+        panic!("expected Message entry at index 2");
+    }
+}
+
+#[test]
+fn writer_truncates_all_when_no_newline_in_file() {
+    // Edge case: a file whose only content is an incomplete line (no newline
+    // at all). SessionWriter::open should truncate to empty, leaving only the
+    // header line from the initial create.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("no-newline.jsonl");
+
+    // Write header + one valid entry.
+    {
+        let mut writer = SessionWriter::create(&path, make_header("no-nl")).unwrap();
+        writer.append(&test_message_entry("e1", "only")).unwrap();
+    }
+
+    // Overwrite the entire file content with an incomplete JSON (no newlines).
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&path).unwrap();
+        write!(f, "GARBAGE_NO_NEWLINES").unwrap();
+    }
+
+    // This is a degenerate case — the file no longer has a valid header.
+    // SessionWriter::open still opens it for append; the truncation logic
+    // should handle "no newline found" by truncating to 0.
+    let mut writer = SessionWriter::open(&path).unwrap();
+    // After truncation to 0, appending writes a valid JSONL line.
+    writer
+        .append(&test_message_entry("e-new", "post-recovery"))
+        .unwrap();
+
+    // The file is no longer a valid session (header was destroyed), but the
+    // new entry should be on its own line.
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        content.ends_with('\n'),
+        "file should end with a newline after append"
+    );
+}

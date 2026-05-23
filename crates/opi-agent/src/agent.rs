@@ -163,6 +163,42 @@ impl Agent {
         self.messages = messages;
     }
 
+    /// Inject a single message into the conversation buffer.
+    ///
+    /// Used after compaction to insert a `CompactionSummary` so subsequent
+    /// provider calls include the summary in their context window.
+    pub fn inject_message(&mut self, message: AgentMessage) {
+        self.messages.push(message);
+    }
+
+    /// Replace the entire conversation buffer.
+    ///
+    /// Used after compaction to install `[summary, ...kept]` so subsequent
+    /// provider requests no longer carry the compacted messages.
+    pub fn replace_messages(&mut self, messages: Vec<AgentMessage>) {
+        self.messages = messages;
+    }
+
+    /// Emit an `AgentEvent` to all subscribers outside of the agent loop.
+    ///
+    /// Used by callers (e.g. harness) to surface lifecycle events that occur
+    /// between loop invocations, such as compaction start/end.
+    pub fn emit_event(&self, event: AgentEvent) {
+        let subs = self.subscribers.lock().unwrap();
+        for sub in subs.iter() {
+            sub(&event);
+        }
+    }
+
+    /// Snapshot the current conversation buffer.
+    ///
+    /// The harness uses this after a turn (and any subsequent compaction) to
+    /// compute the next `turn_offset` and return the post-compaction message
+    /// list to callers.
+    pub fn messages_snapshot(&self) -> Vec<AgentMessage> {
+        self.messages.clone()
+    }
+
     /// Register an event subscriber that receives all `AgentEvent`s.
     pub fn subscribe(&mut self, callback: EventSubscriber) {
         self.subscribers.lock().unwrap().push(callback);

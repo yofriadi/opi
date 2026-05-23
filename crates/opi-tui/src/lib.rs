@@ -48,6 +48,17 @@ pub enum Role {
 pub struct Message {
     pub role: Role,
     pub content: String,
+    /// Optional structured diff payload. When present, the message is
+    /// rendered with the `DiffView` widget instead of plain text.
+    pub diff: Option<DiffPayload>,
+}
+
+/// Structured before/after content for diff rendering.
+#[derive(Debug, Clone)]
+pub struct DiffPayload {
+    pub path: String,
+    pub before: String,
+    pub after: String,
 }
 
 impl Message {
@@ -55,6 +66,29 @@ impl Message {
         Self {
             role,
             content: content.into(),
+            diff: None,
+        }
+    }
+
+    /// Build a tool-role message that renders the supplied before/after as a
+    /// unified diff via `DiffView`.
+    pub fn diff(
+        path: impl Into<String>,
+        before: impl Into<String>,
+        after: impl Into<String>,
+    ) -> Self {
+        let path = path.into();
+        let before = before.into();
+        let after = after.into();
+        let content = format!("diff: {path}");
+        Self {
+            role: Role::Tool,
+            content,
+            diff: Some(DiffPayload {
+                path,
+                before,
+                after,
+            }),
         }
     }
 }

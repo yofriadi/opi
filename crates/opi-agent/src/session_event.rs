@@ -77,6 +77,38 @@ pub enum AgentSessionEvent {
     ThinkingLevelChanged {
         level: ThinkingLevel,
     },
+    /// Cumulative token usage and (when known) cost breakdown for the
+    /// session. Emitted at the end of a non-interactive run, but may also be
+    /// emitted on demand. The wire `type` is `session_summary` to preserve
+    /// the ad-hoc shape that was used before this variant existed.
+    #[serde(rename = "session_summary")]
+    SessionSummary {
+        session_id: String,
+        model: String,
+        turns: u32,
+        tokens: SessionTokenTotals,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<SessionCostTotals>,
+    },
+}
+
+/// Token totals carried by `AgentSessionEvent::SessionSummary`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SessionTokenTotals {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+/// Cost totals carried by `AgentSessionEvent::SessionSummary`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SessionCostTotals {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+    pub total: f64,
 }
 
 /// Serde bridge for `AgentEvent` (no derives on the source type).

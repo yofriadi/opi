@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::message::AgentMessage;
+use crate::session_event::{CompactionReason, CompactionResult};
 
 /// Callback type for emitting agent events to subscribers.
 pub type AgentEventSink = Box<dyn Fn(AgentEvent) + Send + Sync>;
@@ -54,6 +55,7 @@ pub enum AgentEvent {
         tool_call_id: String,
         tool_name: String,
         result: serde_json::Value,
+        details: Option<serde_json::Value>,
         is_error: bool,
     },
     /// Queue messages were delivered to the conversation.
@@ -74,6 +76,17 @@ pub enum AgentEvent {
         attempt: u32,
         final_error: Option<String>,
     },
+    /// Compaction has started. Emitted by the harness outside the agent loop.
+    CompactionStart { reason: CompactionReason },
+    /// Compaction has finished. Emitted by the harness outside the agent loop.
+    CompactionEnd {
+        reason: CompactionReason,
+        result: Option<CompactionResult>,
+        aborted: bool,
+        error_message: Option<String>,
+    },
+    /// Session persistence failed (disk full, permissions, etc.).
+    SessionPersistError { message: String },
 }
 
 fn deserialize_boxed_stream_event<'de, D>(

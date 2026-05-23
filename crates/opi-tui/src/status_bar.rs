@@ -15,6 +15,7 @@ pub struct StatusBar {
     model: String,
     state: AppState,
     token_count: Option<u64>,
+    cost_usd: Option<f64>,
     theme: Theme,
 }
 
@@ -24,12 +25,19 @@ impl StatusBar {
             model,
             state,
             token_count,
+            cost_usd: None,
             theme: Theme::default(),
         }
     }
 
     pub fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
+        self
+    }
+
+    /// Set the total accumulated cost in USD. Surfaced next to the token count.
+    pub fn cost_usd(mut self, cost: f64) -> Self {
+        self.cost_usd = Some(cost);
         self
     }
 }
@@ -59,6 +67,13 @@ impl Widget for StatusBar {
         if let Some(count) = self.token_count {
             spans.push(Span::styled(
                 format!(" | {count} tokens"),
+                Style::default().fg(t.status_tokens),
+            ));
+        }
+
+        if let Some(cost) = self.cost_usd {
+            spans.push(Span::styled(
+                format!(" | ${cost:.4}"),
                 Style::default().fg(t.status_tokens),
             ));
         }

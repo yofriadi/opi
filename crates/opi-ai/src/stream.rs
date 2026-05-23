@@ -59,6 +59,23 @@ pub struct CumulativeUsage {
 }
 
 impl CumulativeUsage {
+    /// Construct from pre-computed totals (e.g. when replaying a session).
+    pub fn from_totals(
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_write_tokens: u64,
+        turns: u32,
+    ) -> Self {
+        Self {
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            turns,
+        }
+    }
+
     pub fn total_input_tokens(&self) -> u64 {
         self.input_tokens
     }

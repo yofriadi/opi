@@ -79,6 +79,17 @@ pub enum SessionEntry {
     Leaf(LeafEntry),
 }
 
+impl SessionEntry {
+    /// Return the entry's unique ID regardless of variant.
+    pub fn entry_id(&self) -> &str {
+        match self {
+            SessionEntry::Message(m) => &m.id,
+            SessionEntry::Compaction(c) => &c.id,
+            SessionEntry::Leaf(l) => &l.id,
+        }
+    }
+}
+
 /// Crash recovery status returned by `SessionReader`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CrashRecovery {
@@ -91,6 +102,17 @@ pub enum CrashRecovery {
     CorruptEntriesWithTruncation {
         count: usize,
     },
+}
+
+impl CrashRecovery {
+    /// Return the number of corrupt/unparseable entries found during load.
+    pub fn corrupt_count(&self) -> usize {
+        match self {
+            CrashRecovery::Clean | CrashRecovery::TruncatedLine => 0,
+            CrashRecovery::CorruptEntries { count }
+            | CrashRecovery::CorruptEntriesWithTruncation { count } => *count,
+        }
+    }
 }
 
 /// Append-only JSONL writer with crash-safe flush.
@@ -109,8 +131,53 @@ impl SessionWriter {
     }
 
     /// Open an existing session file for appending (seeks to end).
+    ///
+    /// If the file's last line is incomplete (no trailing newline from a
+    /// crashed write), the incomplete tail is truncated so subsequent appends
+    /// land on a clean line boundary.
     pub fn open(path: &Path) -> std::io::Result<Self> {
-        let file = std::fs::OpenOptions::new().append(true).open(path)?;
+        use std::io::{Read, Seek, SeekFrom};
+
+        // Open read+write (not append) so set_len works on Windows.
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)?;
+
+        // Check whether the file ends with a newline. If not, truncate the
+        // incomplete trailing line so the first appended entry lands cleanly.
+        let len = file.seek(SeekFrom::End(0))?;
+        if len > 0 {
+            let mut last = [0u8; 1];
+            file.seek(SeekFrom::End(-1))?;
+            file.read_exact(&mut last)?;
+            if last[0] != b'\n' {
+                // Scan backwards for the last newline to find the truncation point.
+                let mut pos = len;
+                let mut buf = [0u8; 1];
+                let mut found_newline = false;
+                loop {
+                    if pos == 0 {
+                        // No newline found — truncate the whole file to empty.
+                        break;
+                    }
+                    pos -= 1;
+                    file.seek(SeekFrom::Start(pos))?;
+                    file.read_exact(&mut buf)?;
+                    if buf[0] == b'\n' {
+                        found_newline = true;
+                        break;
+                    }
+                }
+                // When a newline was found, keep it (truncate to pos+1) so the
+                // next append starts on a fresh line. Without this the prior
+                // complete entry and the new entry would be concatenated on one
+                // line, corrupting the JSONL.
+                file.set_len(if found_newline { pos + 1 } else { pos })?;
+            }
+            file.seek(SeekFrom::End(0))?;
+        }
+
         Ok(Self { file })
     }
 

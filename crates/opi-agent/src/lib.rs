@@ -123,9 +123,10 @@ pub async fn agent_loop(
                         if let Some(msg) =
                             process_stream_event(&event, &mut assistant_content, &events)
                         {
-                            let mut assistant_msg = msg;
-                            assistant_msg.content = assistant_content.clone();
-                            let agent_msg = AgentMessage::Llm(Message::Assistant(assistant_msg));
+                            // Use the provider's complete content (includes thinking)
+                            // rather than the locally-accumulated assistant_content
+                            // which only tracks text and tool calls.
+                            let agent_msg = AgentMessage::Llm(Message::Assistant(msg));
 
                             events(AgentEvent::MessageEnd {
                                 message: agent_msg.clone(),
@@ -133,7 +134,12 @@ pub async fn agent_loop(
 
                             messages.push(agent_msg.clone());
 
-                            let tool_calls: Vec<_> = assistant_content
+                            // Extract tool calls from the provider's complete content.
+                            let content = match &agent_msg {
+                                AgentMessage::Llm(Message::Assistant(a)) => &a.content,
+                                _ => &Vec::new(),
+                            };
+                            let tool_calls: Vec<_> = content
                                 .iter()
                                 .filter_map(|c| match c {
                                     AssistantContent::ToolCall { tool_call } => {
@@ -179,11 +185,13 @@ pub async fn agent_loop(
                                         .await;
 
                                         let is_error = result.is_error;
+                                        let details = result.details.clone();
                                         terminate_flags.push(result.terminate);
                                         events(AgentEvent::ToolExecutionEnd {
                                             tool_call_id: tc.id.clone(),
                                             tool_name: tc.name.clone(),
                                             result: serde_json::json!(&result.content),
+                                            details,
                                             is_error,
                                         });
 
@@ -236,11 +244,13 @@ pub async fn agent_loop(
                                     let results = futures_util::future::join_all(futures).await;
                                     for (tc_id, tc_name, result) in results {
                                         let is_error = result.is_error;
+                                        let details = result.details.clone();
                                         terminate_flags.push(result.terminate);
                                         events(AgentEvent::ToolExecutionEnd {
                                             tool_call_id: tc_id.clone(),
                                             tool_name: tc_name.clone(),
                                             result: serde_json::json!(&result.content),
+                                            details,
                                             is_error,
                                         });
                                         let trm = ToolResultMessage {

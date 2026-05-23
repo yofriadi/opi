@@ -38,6 +38,7 @@ struct TuiState {
     theme: Theme,
     keybindings: Keybindings,
     total_tokens: u64,
+    cost_usd: Option<f64>,
 }
 
 pub async fn run_interactive_tui(
@@ -60,6 +61,7 @@ pub async fn run_interactive_tui(
         theme,
         keybindings,
         total_tokens: 0,
+        cost_usd: None,
     }));
 
     // Wire agent events into shared state before wrapping harness
@@ -120,8 +122,22 @@ pub async fn run_interactive_tui(
             AgentEvent::ToolExecutionEnd {
                 tool_name,
                 is_error,
+                details,
                 ..
             } => {
+                // Render diff for edit tool results that have before/after details.
+                if !is_error
+                    && tool_name == "edit"
+                    && let Some(d) = details
+                    && let (Some(path), Some(before), Some(after)) =
+                        (d.get("path"), d.get("before"), d.get("after"))
+                {
+                    let path_str = path.as_str().unwrap_or("unknown");
+                    let before_str = before.as_str().unwrap_or("");
+                    let after_str = after.as_str().unwrap_or("");
+                    s.messages
+                        .push(TuiMessage::diff(path_str, before_str, after_str));
+                }
                 if let Some((name, args, _)) = &s.active_tool
                     && name == tool_name
                 {
@@ -140,6 +156,39 @@ pub async fn run_interactive_tui(
             }
             AgentEvent::TurnStart => {
                 s.app_state = AppState::Thinking;
+            }
+            AgentEvent::CompactionStart { reason } => {
+                s.messages.push(TuiMessage::new(
+                    TuiRole::System,
+                    format!("[compaction started: {reason:?}]"),
+                ));
+            }
+            AgentEvent::CompactionEnd {
+                reason,
+                result,
+                aborted,
+                error_message,
+            } => {
+                let summary = if *aborted {
+                    format!(
+                        "[compaction aborted ({reason:?}): {}]",
+                        error_message.clone().unwrap_or_default()
+                    )
+                } else if let Some(r) = result {
+                    format!(
+                        "[compaction done ({reason:?}): {} -> {} tokens]",
+                        r.tokens_before, r.tokens_after
+                    )
+                } else {
+                    format!("[compaction done ({reason:?})]")
+                };
+                s.messages.push(TuiMessage::new(TuiRole::System, summary));
+            }
+            AgentEvent::SessionPersistError { message } => {
+                s.messages.push(TuiMessage::new(
+                    TuiRole::System,
+                    format!("[session persist error: {message}]"),
+                ));
             }
             _ => {}
         }
@@ -207,6 +256,18 @@ async fn tui_event_loop(
                     s.app_state = AppState::Idle;
                 }
             }
+
+            // Refresh cost from the harness session (pricing lookup may yield
+            // a number; if the model isn't in the table we leave it as-is).
+            {
+                let h = harness.lock().await;
+                if let Some(session) = h.session()
+                    && let Some(cost) = session.cost_summary()
+                {
+                    state.lock().unwrap().cost_usd = Some(cost.total_cost());
+                }
+            }
+
             // Refresh cancel token — Agent::maybe_reset_cancel() creates a new one
             // after cancellation, so the old token would be stale.
             cancel_token = harness.lock().await.cancel_token();
@@ -294,6 +355,10 @@ fn build_shell(s: &TuiState) -> Shell {
 
     if s.total_tokens > 0 {
         shell = shell.token_count(s.total_tokens);
+    }
+
+    if let Some(cost) = s.cost_usd {
+        shell = shell.cost_usd(cost);
     }
 
     if !s.messages.is_empty() {

@@ -1,22 +1,58 @@
 //! Session lifecycle coordinator bridging harness, session writer,
 //! compaction engine, and usage accumulation.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use opi_agent::compaction::CompactionConfig;
-use opi_agent::compaction::CompactionEngine;
-use opi_agent::message::AgentMessage;
-use opi_agent::session::SessionEntry;
-use opi_agent::session::SessionHeader;
-use opi_agent::session::SessionWriter;
-use opi_ai::stream::CumulativeUsage;
-use opi_ai::stream::Usage;
+use opi_agent::compaction::{CompactionConfig, CompactionEngine, DefaultCompactionHooks, Entry};
+use opi_agent::message::{AgentMessage, CompactionSummaryMessage};
+use opi_agent::session::{
+    CompactionEntry, MessageEntry, SessionEntry, SessionHeader, SessionWriter,
+};
+use opi_agent::session_event::{CompactionReason, CompactionResult};
+use opi_ai::message::Message;
+use opi_ai::stream::{CumulativeUsage, Usage};
+
+use crate::pricing::lookup_pricing;
+
+static ENTRY_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Result of a compaction triggered during `on_turn_end`.
+///
+/// The harness uses these fields to (a) install `[summary, ...kept]` as the
+/// new Agent message buffer, (b) emit `CompactionStart`/`End` events, and
+/// (c) propagate token-before/after on the session event protocol.
+pub struct CompactionResultOutput {
+    pub summary: CompactionSummaryMessage,
+    /// New Agent message buffer to install: `[summary, ...kept_messages]`.
+    pub new_agent_messages: Vec<AgentMessage>,
+    pub reason: CompactionReason,
+    pub tokens_before: u64,
+    pub tokens_after: u64,
+    pub first_kept_entry_id: String,
+}
 
 pub struct SessionCoordinator {
     writer: SessionWriter,
     compaction: CompactionEngine,
     usage: CumulativeUsage,
     session_id: String,
+    session_path: PathBuf,
+    model: String,
+    /// Entries accumulated so far, used as compaction input.
+    /// Indexed in parallel with `agent_message_indices`.
+    entries: Vec<Entry>,
+    /// For each `entries[i]`, the index into the Agent's internal message
+    /// buffer when that entry was appended. Used to compute which Agent
+    /// messages survive a compaction.
+    agent_message_indices: Vec<usize>,
+    /// Running count of how many messages the Agent has accumulated.
+    /// Updated on every `on_turn_end` call.
+    agent_message_count: usize,
+    /// Cumulative token count at the last compaction. The threshold check
+    /// uses `current_total - watermark` so compaction doesn't re-trigger
+    /// every turn after the threshold is crossed once.
+    compaction_watermark_tokens: u64,
 }
 
 impl SessionCoordinator {
@@ -24,6 +60,7 @@ impl SessionCoordinator {
         dir: &Path,
         cwd: &str,
         compaction_config: CompactionConfig,
+        model: impl Into<String>,
     ) -> std::io::Result<Self> {
         let id = generate_session_id();
         let timestamp = now_iso();
@@ -36,20 +73,276 @@ impl SessionCoordinator {
             compaction: CompactionEngine::new(compaction_config),
             usage: CumulativeUsage::default(),
             session_id: id,
+            session_path: path,
+            model: model.into(),
+            entries: Vec::new(),
+            agent_message_indices: Vec::new(),
+            agent_message_count: 0,
+            compaction_watermark_tokens: 0,
         })
     }
 
-    pub fn on_turn_end(&mut self, messages: &[AgentMessage], usage: &Usage) {
+    /// Open an existing session file for appending (resume).
+    ///
+    /// `existing_entries` are the prior session entries already loaded by the
+    /// caller via `SessionReader::read_all`. Only entries on the active branch
+    /// (determined by the last `Leaf` pointer) are replayed into the internal
+    /// compaction buffer — matching the ordering used by `reconstruct_context`
+    /// for the Agent's message buffer. Legacy sessions without Leaf entries
+    /// fall back to file-order replay.
+    ///
+    /// Compaction entries are honored by replaying their semantics: the
+    /// kept tail (entries from `first_kept_entry_id` onward, persisted before
+    /// the marker) is preserved, the summary occupies a synthetic slot at
+    /// index 0 of the post-compaction agent buffer, and indices are rebuilt
+    /// to match the runtime layout `[summary, ...kept_tail, ...post_marker]`.
+    /// If `first_kept_entry_id` cannot be located among the already-replayed
+    /// entries (corrupt or forward-incompatible session), the buffer is
+    /// reset entirely — matching the legacy defensive behavior.
+    pub fn open_existing(
+        path: PathBuf,
+        session_id: String,
+        existing_entries: &[SessionEntry],
+        prior_agent_message_count: usize,
+        compaction_config: CompactionConfig,
+        model: impl Into<String>,
+    ) -> std::io::Result<Self> {
+        let writer = SessionWriter::open(&path)?;
+
+        // Advance the global sequence counter past any existing IDs.
+        advance_seq_from_entries(existing_entries);
+
+        // Replay entries in active-branch order (not raw file order) to seed
+        // the compaction buffer. This uses the same Leaf-based branch
+        // selection as reconstruct_context so the coordinator's internal
+        // state stays aligned with the Agent's message buffer.
+        let ordered = crate::session_cli::select_ordered_entries(existing_entries);
+
+        let mut entries: Vec<Entry> = Vec::new();
+        let mut indices: Vec<usize> = Vec::new();
+        let mut agent_idx: usize = 0;
+        let mut total_input: u64 = 0;
+        let mut total_output: u64 = 0;
+        let mut total_cache_read: u64 = 0;
+        let mut total_cache_write: u64 = 0;
+        // Each LLM call produces exactly one assistant message, so counting
+        // assistant messages gives the same count as accumulate() would have
+        // produced during the original run (one increment per on_turn_end call).
+        let mut assistant_count: u32 = 0;
+
+        for entry in ordered {
+            match entry {
+                SessionEntry::Message(m) => {
+                    // Accumulate usage from persisted assistant messages.
+                    if let Message::Assistant(a) = &m.message {
+                        total_input += a.usage.input_tokens as u64;
+                        total_output += a.usage.output_tokens as u64;
+                        total_cache_read += a.usage.cache_read_tokens as u64;
+                        total_cache_write += a.usage.cache_write_tokens as u64;
+                        assistant_count += 1;
+                    }
+                    entries.push(Entry {
+                        id: m.id.clone(),
+                        message: AgentMessage::Llm(m.message.clone()),
+                    });
+                    indices.push(agent_idx);
+                    agent_idx += 1;
+                }
+                SessionEntry::Compaction(c) => {
+                    let kept_start = entries.iter().position(|e| e.id == c.first_kept_entry_id);
+                    let kept: Vec<Entry> = match kept_start {
+                        Some(idx) => entries.split_off(idx),
+                        None => Vec::new(),
+                    };
+                    let kept_count = kept.len();
+                    entries = kept;
+                    // Summary occupies index 0; kept entries are 1..=kept_count.
+                    indices = (1..=kept_count).collect();
+                    agent_idx = 1 + kept_count;
+                }
+                SessionEntry::Leaf(_) => {}
+                _ => {}
+            }
+        }
+
+        let usage = CumulativeUsage::from_totals(
+            total_input,
+            total_output,
+            total_cache_read,
+            total_cache_write,
+            assistant_count,
+        );
+        let watermark = usage.as_usage().total_tokens();
+
+        Ok(Self {
+            writer,
+            compaction: CompactionEngine::new(compaction_config),
+            usage,
+            session_id,
+            session_path: path,
+            model: model.into(),
+            entries,
+            agent_message_indices: indices,
+            agent_message_count: prior_agent_message_count,
+            compaction_watermark_tokens: watermark,
+        })
+    }
+
+    /// Persist only the new messages from a completed turn.
+    ///
+    /// `new_messages` should contain only the messages produced during this
+    /// turn (not the full conversation history). The caller is responsible for
+    /// slicing appropriately. `turn_start_agent_index` is the index in the
+    /// Agent's full message buffer where `new_messages[0]` lives.
+    ///
+    /// Returns `Ok(Some(CompactionReason))` if compaction should be triggered
+    /// (the caller should emit `CompactionStart`, then call
+    /// `execute_compaction`). Returns `Ok(None)` if no compaction is needed.
+    /// Returns `Err` if a session write failed.
+    pub fn on_turn_end(
+        &mut self,
+        new_messages: &[AgentMessage],
+        usage: &Usage,
+        turn_start_agent_index: usize,
+    ) -> Result<Option<CompactionReason>, std::io::Error> {
         self.usage.accumulate(usage);
-        for msg in messages {
+
+        let mut agent_idx = turn_start_agent_index;
+        for msg in new_messages {
             if let AgentMessage::Llm(m) = msg {
-                let entry = SessionEntry::Message(opi_agent::session::MessageEntry {
-                    id: format!("msg-{}", self.usage.turn_count()),
+                let entry_id = format!("msg-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed));
+                let entry = SessionEntry::Message(MessageEntry {
+                    id: entry_id.clone(),
                     parent_id: None,
                     timestamp: now_iso(),
                     message: m.clone(),
                 });
-                let _ = self.writer.append(&entry);
+                self.writer.append(&entry)?;
+                self.entries.push(Entry {
+                    id: entry_id,
+                    message: msg.clone(),
+                });
+                self.agent_message_indices.push(agent_idx);
+            }
+            agent_idx += 1;
+        }
+        self.agent_message_count = agent_idx;
+
+        // Check threshold-based compaction after each turn.
+        // Use tokens accumulated since the last compaction (watermark) so
+        // compaction doesn't re-trigger every turn after the first crossing.
+        let total_tokens = self.usage.as_usage().total_tokens();
+        let delta = total_tokens.saturating_sub(self.compaction_watermark_tokens);
+        if self
+            .compaction
+            .should_compact(delta, CompactionReason::Threshold)
+        {
+            Ok(Some(CompactionReason::Threshold))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Execute compaction after `on_turn_end` returned `Some(reason)`.
+    /// The caller should emit `CompactionStart` before calling this and
+    /// `CompactionEnd` afterwards.
+    ///
+    /// Returns `Err` if the compaction marker could not be persisted — in this
+    /// case the in-memory state is left unchanged (no buffer replacement, no
+    /// watermark advance) so the session file stays consistent with the
+    /// runtime.
+    pub fn execute_compaction(
+        &mut self,
+        reason: CompactionReason,
+    ) -> Result<Option<CompactionResultOutput>, std::io::Error> {
+        self.run_compaction(reason)
+    }
+
+    /// Backwards-compatible variant used by tests that don't track Agent indices.
+    /// Assumes `new_messages` are appended starting at the current message count.
+    /// Runs compaction inline if needed (no separate event emission).
+    pub fn on_turn_end_simple(
+        &mut self,
+        new_messages: &[AgentMessage],
+        usage: &Usage,
+    ) -> Result<Option<CompactionResultOutput>, std::io::Error> {
+        let start = self.agent_message_count;
+        let reason = self.on_turn_end(new_messages, usage, start)?;
+        match reason {
+            Some(r) => self.execute_compaction(r),
+            None => Ok(None),
+        }
+    }
+
+    fn run_compaction(
+        &mut self,
+        reason: CompactionReason,
+    ) -> Result<Option<CompactionResultOutput>, std::io::Error> {
+        let hooks = DefaultCompactionHooks;
+        match self.compaction.compact(&self.entries, reason, &hooks) {
+            Ok(output) => {
+                let split = self.entries.len() - output.kept_entries.len();
+                let kept_indices: Vec<usize> = self
+                    .agent_message_indices
+                    .iter()
+                    .skip(split)
+                    .copied()
+                    .collect();
+                let kept_messages: Vec<AgentMessage> = output
+                    .kept_entries
+                    .iter()
+                    .map(|e| e.message.clone())
+                    .collect();
+
+                let summary = CompactionSummaryMessage {
+                    summary: output.summary_text.clone(),
+                    first_kept_entry_id: output.first_kept_entry_id.clone(),
+                    tokens_before: output.tokens_before,
+                    tokens_after: output.tokens_after,
+                };
+
+                let compaction_entry = SessionEntry::Compaction(CompactionEntry {
+                    id: format!("cmp-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed)),
+                    parent_id: None,
+                    timestamp: now_iso(),
+                    summary: output.summary_text.clone(),
+                    first_kept_entry_id: output.first_kept_entry_id.clone(),
+                    tokens_before: output.tokens_before,
+                    tokens_after: output.tokens_after,
+                });
+
+                // Persist the compaction marker BEFORE mutating in-memory state.
+                // If this fails, the runtime context remains un-compacted so
+                // the session file and memory stay consistent.
+                self.writer.append(&compaction_entry)?;
+
+                // Reset internal entries to the kept-only set, with new indices
+                // [0=summary, 1..=kept].
+                self.entries = output.kept_entries;
+                self.agent_message_indices = (1..=kept_indices.len()).collect();
+                self.agent_message_count = 1 + kept_messages.len();
+
+                // Advance the watermark so the next threshold check measures
+                // tokens accumulated from this point forward.
+                self.compaction_watermark_tokens = self.usage.as_usage().total_tokens();
+
+                // Build the new Agent buffer: [summary, ...kept].
+                let mut new_agent_messages = Vec::with_capacity(1 + kept_messages.len());
+                new_agent_messages.push(AgentMessage::CompactionSummary(summary.clone()));
+                new_agent_messages.extend(kept_messages);
+
+                Ok(Some(CompactionResultOutput {
+                    summary,
+                    new_agent_messages,
+                    reason: output.reason,
+                    tokens_before: output.tokens_before,
+                    tokens_after: output.tokens_after,
+                    first_kept_entry_id: output.first_kept_entry_id,
+                }))
+            }
+            Err(_) => {
+                // Nothing to compact (too few entries) — no-op.
+                Ok(None)
             }
         }
     }
@@ -58,12 +351,65 @@ impl SessionCoordinator {
         &self.session_id
     }
 
+    pub fn session_path(&self) -> &Path {
+        &self.session_path
+    }
+
     pub fn usage(&self) -> &CumulativeUsage {
         &self.usage
     }
 
     pub fn compaction_engine(&self) -> &CompactionEngine {
         &self.compaction
+    }
+
+    /// Read-only view of the entries currently tracked for compaction.
+    /// Exposed for tests that need to assert resume correctness.
+    pub fn compaction_entries(&self) -> &[Entry] {
+        &self.entries
+    }
+
+    /// Compute the cost summary from the accumulated usage and the model
+    /// pricing table. Returns `None` if no pricing is known for the model.
+    pub fn cost_summary(&self) -> Option<opi_ai::stream::CostBreakdown> {
+        let pricing = lookup_pricing(&self.model)?;
+        Some(opi_ai::stream::calculate_cost(
+            &self.usage.as_usage(),
+            &pricing,
+        ))
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+}
+
+/// Extract the numeric suffix from entry IDs like `msg-3` or `cmp-7`.
+/// Returns 0 for entries that don't match the pattern.
+fn entry_seq(id: &str) -> u64 {
+    id.split_once('-')
+        .and_then(|(_, rest)| rest.parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+/// Advance the global `ENTRY_SEQ` past any IDs found in existing session
+/// entries so resumed sessions don't produce duplicate IDs.
+fn advance_seq_from_entries(entries: &[SessionEntry]) {
+    let max_seq = entries
+        .iter()
+        .map(|e| entry_seq(e.entry_id()))
+        .max()
+        .unwrap_or(0);
+    if max_seq > 0 {
+        ENTRY_SEQ.fetch_max(max_seq + 1, Ordering::Relaxed);
+    }
+}
+pub fn to_wire_result(out: &CompactionResultOutput) -> CompactionResult {
+    CompactionResult {
+        summary: out.summary.summary.clone(),
+        first_kept_entry_id: out.first_kept_entry_id.clone(),
+        tokens_before: out.tokens_before,
+        tokens_after: out.tokens_after,
     }
 }
 

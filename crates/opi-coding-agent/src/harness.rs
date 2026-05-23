@@ -16,8 +16,16 @@ use opi_ai::provider::Provider;
 
 use crate::config::OpiConfig;
 use crate::prompt::SystemPromptBuilder;
-use crate::session_coordinator::SessionCoordinator;
+use crate::session_coordinator::{SessionCoordinator, to_wire_result};
 use crate::tool::{BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool};
+
+/// Optional pre-existing session the harness can adopt instead of creating
+/// a new JSONL file. Produced by `--resume` flows.
+pub struct ResumeInfo {
+    pub path: PathBuf,
+    pub session_id: String,
+    pub entries: Vec<opi_agent::session::SessionEntry>,
+}
 
 /// Harness wiring config, tools, system prompt, hooks, and Agent.
 pub struct CodingHarness {
@@ -25,6 +33,8 @@ pub struct CodingHarness {
     config: OpiConfig,
     system_prompt: String,
     session: Option<SessionCoordinator>,
+    /// Message count before the current turn — used to slice only new messages for persistence.
+    turn_offset: usize,
 }
 
 impl CodingHarness {
@@ -56,6 +66,30 @@ impl CodingHarness {
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
     ) -> Self {
+        Self::new_with_hooks_and_resume(
+            provider,
+            model,
+            config,
+            workspace_root,
+            hooks,
+            user_system_prompt,
+            initial_messages,
+            None,
+        )
+    }
+
+    /// Create a new harness, optionally adopting an existing session (resume).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_hooks_and_resume(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        hooks: Box<dyn AgentHooks>,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        resume: Option<ResumeInfo>,
+    ) -> Self {
         let tools = Self::build_tools(&workspace_root);
         let tool_defs: Vec<_> = tools.iter().map(|t| t.definition()).collect();
         let mut builder = SystemPromptBuilder::new().tools(tool_defs);
@@ -81,18 +115,17 @@ impl CodingHarness {
         let mut agent = Agent::new(
             provider,
             tools,
-            model,
+            model.clone(),
             Some(system_prompt.clone()),
             agent_config,
             hooks,
         );
 
+        let initial_len = initial_messages.len();
         if !initial_messages.is_empty() {
             agent.set_initial_messages(initial_messages);
         }
 
-        // Create session coordinator
-        let session_dir = crate::session_cli::session_dir();
         let cwd = std::env::current_dir()
             .unwrap_or_default()
             .to_string_lossy()
@@ -101,13 +134,28 @@ impl CodingHarness {
             enabled: config.compaction.enabled,
             threshold_tokens: config.compaction.threshold_tokens,
         };
-        let session = SessionCoordinator::new(&session_dir, &cwd, compaction_config).ok();
+
+        let session = if let Some(info) = resume {
+            SessionCoordinator::open_existing(
+                info.path,
+                info.session_id,
+                &info.entries,
+                initial_len,
+                compaction_config,
+                model.clone(),
+            )
+            .ok()
+        } else {
+            let session_dir = crate::session_cli::session_dir();
+            SessionCoordinator::new(&session_dir, &cwd, compaction_config, model.clone()).ok()
+        };
 
         Self {
             agent,
             config,
             system_prompt,
             session,
+            turn_offset: initial_len,
         }
     }
 
@@ -118,35 +166,117 @@ impl CodingHarness {
 
     /// Send a user prompt and run the agent loop.
     pub async fn prompt(&mut self, text: &str) -> Result<Vec<AgentMessage>, AgentError> {
+        let offset = self.turn_offset;
         let messages = self.agent.prompt(text).await?;
-        self.persist_turn(&messages);
-        Ok(messages)
+        let new = &messages[offset..];
+        self.persist_turn(new, offset);
+        let final_messages = self.current_messages();
+        self.turn_offset = final_messages.len();
+        Ok(final_messages)
     }
 
     /// Continue the conversation with an additional message.
     pub async fn continue_(&mut self, text: &str) -> Result<Vec<AgentMessage>, AgentError> {
+        let offset = self.turn_offset;
         let messages = self.agent.continue_(text).await?;
-        self.persist_turn(&messages);
-        Ok(messages)
+        let new = &messages[offset..];
+        self.persist_turn(new, offset);
+        let final_messages = self.current_messages();
+        self.turn_offset = final_messages.len();
+        Ok(final_messages)
     }
 
-    /// Extract usage from the last assistant message in a turn and persist.
-    fn persist_turn(&mut self, messages: &[AgentMessage]) {
-        if let Some(session) = &mut self.session {
-            let usage = messages
-                .iter()
-                .filter_map(|m| {
-                    if let AgentMessage::Llm(Message::Assistant(a)) = m {
-                        Some(&a.usage)
-                    } else {
-                        None
-                    }
-                })
-                .next_back()
-                .cloned()
-                .unwrap_or_default();
-            session.on_turn_end(messages, &usage);
+    /// Sum usage across every assistant message produced during a turn.
+    ///
+    /// A single user prompt can drive multiple provider calls (e.g.
+    /// tool-call response followed by a final response). Each emitted
+    /// assistant message carries its own `usage`; the cumulative session
+    /// total must include all of them, not just the last one.
+    fn aggregate_turn_usage(messages: &[AgentMessage]) -> opi_ai::stream::Usage {
+        let mut total = opi_ai::stream::Usage::default();
+        for m in messages {
+            if let AgentMessage::Llm(Message::Assistant(a)) = m {
+                total.input_tokens = total.input_tokens.saturating_add(a.usage.input_tokens);
+                total.output_tokens = total.output_tokens.saturating_add(a.usage.output_tokens);
+                total.cache_read_tokens = total
+                    .cache_read_tokens
+                    .saturating_add(a.usage.cache_read_tokens);
+                total.cache_write_tokens = total
+                    .cache_write_tokens
+                    .saturating_add(a.usage.cache_write_tokens);
+            }
         }
+        total
+    }
+
+    /// Aggregate usage across all assistant messages in a turn and persist.
+    ///
+    /// If compaction was triggered during persistence, this also rewrites
+    /// the Agent's message buffer to `[summary, ...kept]` so subsequent
+    /// provider calls no longer carry the compacted history. Emits
+    /// `CompactionStart`/`CompactionEnd` events for subscribers.
+    fn persist_turn(&mut self, messages: &[AgentMessage], turn_start_agent_index: usize) {
+        if let Some(session) = &mut self.session {
+            let usage = Self::aggregate_turn_usage(messages);
+            let compaction_reason =
+                match session.on_turn_end(messages, &usage, turn_start_agent_index) {
+                    Ok(reason) => reason,
+                    Err(e) => {
+                        self.agent.emit_event(AgentEvent::SessionPersistError {
+                            message: format!("session write failed: {e}"),
+                        });
+                        return;
+                    }
+                };
+
+            if let Some(reason) = compaction_reason {
+                self.agent
+                    .emit_event(AgentEvent::CompactionStart { reason });
+                match session.execute_compaction(reason) {
+                    Ok(Some(out)) => {
+                        let wire = to_wire_result(&out);
+                        self.agent.replace_messages(out.new_agent_messages);
+                        self.agent.emit_event(AgentEvent::CompactionEnd {
+                            reason,
+                            result: Some(wire),
+                            aborted: false,
+                            error_message: None,
+                        });
+                    }
+                    Ok(None) => {
+                        self.agent.emit_event(AgentEvent::CompactionEnd {
+                            reason,
+                            result: None,
+                            aborted: true,
+                            error_message: Some("compaction produced no output".into()),
+                        });
+                    }
+                    Err(e) => {
+                        // Compaction marker failed to persist — leave in-memory
+                        // state un-compacted (SessionCoordinator already skipped
+                        // the mutation) and surface the error to subscribers.
+                        self.agent.emit_event(AgentEvent::CompactionEnd {
+                            reason,
+                            result: None,
+                            aborted: true,
+                            error_message: Some(format!("compaction persist failed: {e}")),
+                        });
+                        self.agent.emit_event(AgentEvent::SessionPersistError {
+                            message: format!("compaction write failed: {e}"),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Return the current message buffer (after any compaction).
+    fn current_messages(&self) -> Vec<AgentMessage> {
+        // The Agent's `set_initial_messages` / `replace_messages` API doesn't
+        // expose a getter, so we re-derive the buffer from what was returned
+        // by the loop plus any post-loop mutation. Simplest correct option:
+        // ask the Agent via a new getter.
+        self.agent.messages_snapshot()
     }
 
     /// Register an event subscriber.
@@ -195,32 +325,44 @@ impl CodingHarness {
 // Hooks
 // ---------------------------------------------------------------------------
 
+/// Shared conversion of agent-level messages to the provider-facing Message
+/// stream. Used by every hook in this crate so resume/compaction semantics
+/// stay consistent between interactive and non-interactive paths.
+///
+/// - `AgentMessage::Llm` is forwarded directly.
+/// - `AgentMessage::CompactionSummary` is rendered as a synthetic user
+///   message so the provider sees a textual marker for context that was
+///   compacted away.
+/// - Other variants (`BranchSummary`, `Custom`) are dropped — they have no
+///   provider-facing representation yet.
+pub(crate) fn agent_messages_to_llm(messages: &[AgentMessage]) -> Vec<Message> {
+    let mut result = Vec::with_capacity(messages.len());
+    for msg in messages {
+        match msg {
+            AgentMessage::Llm(m) => result.push(m.clone()),
+            AgentMessage::CompactionSummary(summary) => {
+                result.push(Message::User(opi_ai::message::UserMessage {
+                    content: vec![opi_ai::message::InputContent::Text {
+                        text: format!(
+                            "[Context was compacted. Summary of earlier conversation: {}]",
+                            summary.summary
+                        ),
+                    }],
+                    timestamp_ms: 0,
+                }));
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
 /// Default hooks for the coding agent -- pass-through message conversion.
 struct CodingAgentHooks;
 
 impl AgentHooks for CodingAgentHooks {
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
-        let mut result = Vec::new();
-        for msg in messages {
-            match msg {
-                AgentMessage::Llm(m) => {
-                    result.push(m.clone());
-                }
-                AgentMessage::CompactionSummary(summary) => {
-                    result.push(Message::User(opi_ai::message::UserMessage {
-                        content: vec![opi_ai::message::InputContent::Text {
-                            text: format!(
-                                "[Context was compacted. Summary of earlier conversation: {}]",
-                                summary.summary
-                            ),
-                        }],
-                        timestamp_ms: 0,
-                    }));
-                }
-                _ => {}
-            }
-        }
-        Ok(result)
+        Ok(agent_messages_to_llm(messages))
     }
 }
 
@@ -241,27 +383,7 @@ impl InteractiveCodingHooks {
 
 impl AgentHooks for InteractiveCodingHooks {
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
-        let mut result = Vec::new();
-        for msg in messages {
-            match msg {
-                AgentMessage::Llm(m) => {
-                    result.push(m.clone());
-                }
-                AgentMessage::CompactionSummary(summary) => {
-                    result.push(Message::User(opi_ai::message::UserMessage {
-                        content: vec![opi_ai::message::InputContent::Text {
-                            text: format!(
-                                "[Context was compacted. Summary of earlier conversation: {}]",
-                                summary.summary
-                            ),
-                        }],
-                        timestamp_ms: 0,
-                    }));
-                }
-                _ => {}
-            }
-        }
-        Ok(result)
+        Ok(agent_messages_to_llm(messages))
     }
 
     fn before_tool_call(

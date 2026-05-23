@@ -2,6 +2,7 @@ use clap::Parser;
 
 use opi_coding_agent::cli::Cli;
 use opi_coding_agent::config::{ConfigSource, resolve_config};
+use opi_coding_agent::harness::ResumeInfo;
 
 fn main() {
     // Load .env if present (for local development/testing convenience).
@@ -14,16 +15,22 @@ fn main() {
     }
 
     // Handle session CLI commands first -- they don't need config or a provider.
-    let resumed_messages = match opi_coding_agent::session_cli::handle_session_cli(
+    let (resumed_messages, resume_info) = match opi_coding_agent::session_cli::handle_session_cli(
         cli.list_sessions,
         cli.resume.as_deref(),
         cli.delete_session.as_deref(),
     ) {
-        Ok((true, Some(session))) => Some(opi_coding_agent::session_cli::reconstruct_context(
-            &session.entries,
-        )),
-        Ok((true, None)) => return,      // list/delete handled
-        Ok((_, None | Some(_))) => None, // no session command or unreachable
+        Ok((true, Some(session))) => {
+            let msgs = opi_coding_agent::session_cli::reconstruct_context(&session.entries);
+            let info = ResumeInfo {
+                path: session.path,
+                session_id: session.header.id,
+                entries: session.entries,
+            };
+            (Some(msgs), Some(info))
+        }
+        Ok((true, None)) => return,              // list/delete handled
+        Ok((_, None | Some(_))) => (None, None), // no session command or unreachable
         Err(code) => std::process::exit(code),
     };
 
@@ -53,7 +60,7 @@ fn main() {
         };
 
         let exit_code = rt.block_on(async {
-            run_non_interactive(&cli, &config, &prompt_text, resumed_messages).await
+            run_non_interactive(&cli, &config, &prompt_text, resumed_messages, resume_info).await
         });
         std::process::exit(exit_code);
     } else {
@@ -65,7 +72,7 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        rt.block_on(async { run_interactive(&cli, &config, resumed_messages).await });
+        rt.block_on(async { run_interactive(&cli, &config, resumed_messages, resume_info).await });
     }
 }
 
@@ -74,6 +81,7 @@ async fn run_non_interactive(
     config: &opi_coding_agent::config::OpiConfig,
     prompt_text: &str,
     resumed_messages: Option<Vec<opi_agent::message::AgentMessage>>,
+    resume_info: Option<ResumeInfo>,
 ) -> i32 {
     use opi_coding_agent::runner::{ExitCode, NonInteractiveRunner};
 
@@ -110,7 +118,7 @@ async fn run_non_interactive(
                 }
             });
 
-    let mut runner = NonInteractiveRunner::new(
+    let mut runner = NonInteractiveRunner::new_with_resume(
         provider,
         config.defaults.model.clone(),
         config.clone(),
@@ -118,6 +126,7 @@ async fn run_non_interactive(
         allow_mutating,
         user_system_prompt,
         resumed_messages.unwrap_or_default(),
+        resume_info,
     );
 
     let result = if cli.json {
@@ -140,6 +149,7 @@ async fn run_interactive(
     cli: &Cli,
     config: &opi_coding_agent::config::OpiConfig,
     resumed_messages: Option<Vec<opi_agent::message::AgentMessage>>,
+    resume_info: Option<ResumeInfo>,
 ) {
     use opi_coding_agent::harness::{CodingHarness, InteractiveCodingHooks};
     use opi_coding_agent::interactive;
@@ -164,7 +174,7 @@ async fn run_interactive(
 
     let hooks = Box::new(InteractiveCodingHooks::new(allow_mutating));
     let initial_messages = resumed_messages.unwrap_or_default();
-    let harness = CodingHarness::new_with_hooks(
+    let harness = CodingHarness::new_with_hooks_and_resume(
         provider,
         config.defaults.model.clone(),
         config.clone(),
@@ -172,6 +182,7 @@ async fn run_interactive(
         hooks,
         user_system_prompt,
         initial_messages,
+        resume_info,
     );
 
     let model_display = config.defaults.model.clone();
@@ -205,11 +216,7 @@ fn build_provider(
     match provider_id {
         "anthropic" => {
             let env_name = &config.providers.anthropic.api_key_env;
-            let api_key = std::env::var(env_name).map_err(|_| {
-                ProviderBuildError::Auth(format!(
-                    "missing API key: set {env_name} environment variable"
-                ))
-            })?;
+            let api_key = require_api_key(env_name)?;
             let provider = opi_ai::anthropic::AnthropicProvider::new(
                 api_key,
                 config.providers.anthropic.base_url.clone(),
@@ -218,11 +225,7 @@ fn build_provider(
         }
         "openai" => {
             let env_name = resolve_env_name(&config.providers.openai.api_key_env, "OPENAI_API_KEY");
-            let api_key = std::env::var(&env_name).map_err(|_| {
-                ProviderBuildError::Auth(format!(
-                    "missing API key: set {env_name} environment variable"
-                ))
-            })?;
+            let api_key = require_api_key(&env_name)?;
             let provider = opi_ai::openai_chat::OpenAiChatProvider::new(
                 api_key,
                 config.providers.openai.base_url.clone(),
@@ -234,11 +237,7 @@ fn build_provider(
                 &config.providers.openrouter.api_key_env,
                 "OPENROUTER_API_KEY",
             );
-            let api_key = std::env::var(&env_name).map_err(|_| {
-                ProviderBuildError::Auth(format!(
-                    "missing API key: set {env_name} environment variable"
-                ))
-            })?;
+            let api_key = require_api_key(&env_name)?;
             // If a custom referer is configured, build the provider directly with it.
             let provider = if let Some(ref referer) = config.providers.openrouter.referer {
                 let base_url = config
@@ -277,11 +276,7 @@ fn build_provider(
         "mistral" => {
             let env_name =
                 resolve_env_name(&config.providers.mistral.api_key_env, "MISTRAL_API_KEY");
-            let api_key = std::env::var(&env_name).map_err(|_| {
-                ProviderBuildError::Auth(format!(
-                    "missing API key: set {env_name} environment variable"
-                ))
-            })?;
+            let api_key = require_api_key(&env_name)?;
             let provider = opi_ai::mistral::mistral_provider(
                 api_key,
                 config.providers.mistral.base_url.clone(),
@@ -293,11 +288,7 @@ fn build_provider(
                 &config.providers.openai_responses.api_key_env,
                 "OPENAI_API_KEY",
             );
-            let api_key = std::env::var(&env_name).map_err(|_| {
-                ProviderBuildError::Auth(format!(
-                    "missing API key: set {env_name} environment variable"
-                ))
-            })?;
+            let api_key = require_api_key(&env_name)?;
             let provider = opi_ai::openai_responses::OpenAiResponsesProvider::new(
                 api_key,
                 config.providers.openai_responses.base_url.clone(),
@@ -306,11 +297,7 @@ fn build_provider(
         }
         "gemini" => {
             let env_name = resolve_env_name(&config.providers.gemini.api_key_env, "GEMINI_API_KEY");
-            let api_key = std::env::var(&env_name).map_err(|_| {
-                ProviderBuildError::Auth(format!(
-                    "missing API key: set {env_name} environment variable"
-                ))
-            })?;
+            let api_key = require_api_key(&env_name)?;
             let provider = opi_ai::gemini::GeminiProvider::new(
                 api_key,
                 config.providers.gemini.base_url.clone(),
@@ -329,6 +316,20 @@ fn resolve_env_name(configured: &str, default: &str) -> String {
     } else {
         configured.into()
     }
+}
+
+fn require_api_key(env_name: &str) -> Result<String, ProviderBuildError> {
+    let key = std::env::var(env_name).map_err(|_| {
+        ProviderBuildError::Auth(format!(
+            "missing API key: set {env_name} environment variable"
+        ))
+    })?;
+    if key.trim().is_empty() {
+        return Err(ProviderBuildError::Auth(format!(
+            "empty API key: {env_name} is set but empty"
+        )));
+    }
+    Ok(key)
 }
 
 fn parse_keybindings(config: &opi_coding_agent::config::KeybindingsConfig) -> opi_tui::Keybindings {

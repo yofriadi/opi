@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project
 
@@ -64,7 +64,7 @@ Key abstractions in `opi-agent`:
 - **`Tool`** trait — `definition()` returns JSON schema, `execute()` runs the tool, `execution_mode()` controls parallel vs sequential batching.
 - **`Transport`** trait — abstraction over stdio/SSE for MCP-style tool servers.
 
-Config resolution (model): `--model` > `OPI_MODEL` (only when `--config` was not passed) > `--config` file > project `.opi/config.toml` > user config > built-in defaults. TOML layers merge user → project → `--config`. Model specs use `provider:model` format (e.g. `anthropic:claude-sonnet-4`).
+Config resolution (model): `--model` > `OPI_MODEL` (only when `--config` was not passed) > `--config` file > project `.opi/config.toml` > user config > built-in defaults. TOML layers merge user → project → `--config`. Model specs use `provider:model` format (e.g. `anthropic:Codex-sonnet-4`).
 
 ## Edition
 
@@ -116,7 +116,7 @@ If you create or modify a test file, you MUST run that test and iterate until it
 - ALWAYS use `git add <specific-file-paths>` listing only files you modified.
 - Before committing, run `git status` and verify you are only staging YOUR files.
 - Always include `fixes #<number>` or `closes #<number>` in the commit message when there is a related issue.
-- **NEVER include `Co-Authored-By` trailers in commit messages.** No `Co-Authored-By: Claude ...` or similar.
+- **NEVER include `Co-Authored-By` trailers in commit messages.** No `Co-Authored-By: Codex ...` or similar.
 
 ### Forbidden git operations
 
@@ -177,7 +177,7 @@ Rules:
 
 ## Releasing
 
-Releases go to both **GitHub Releases** and **crates.io** via the `opi-release` skill at `.claude/skills/opi-release/skill.md`. Invoke with a target semver version (e.g. `0.2.0`). Critical properties of that flow:
+Releases go to both **GitHub Releases** and **crates.io** via the `opi-release` skill at `.Codex/skills/opi-release/skill.md`. Invoke with a target semver version (e.g. `0.2.0`). Critical properties of that flow:
 
 - **Phases 1–4 are reversible**; **Phase 5 pushes a tag (publicly visible)**; **Phase 6 publishes to crates.io and is irreversible** (crates can only be yanked, never deleted).
 - All crates publish at the same version, in dependency order, computed dynamically via `cargo metadata`.
