@@ -92,7 +92,10 @@ impl Tool for EditTool {
                 });
             }
 
-            // Replace first occurrence only
+            // Capture before state for diff rendering.
+            let before = content.clone();
+
+            // Replace first occurrence only.
             let new_content = content.replacen(&args.old_string, &args.new_string, 1);
 
             if let Err(e) = tokio::fs::write(&file_path, &new_content).await {
@@ -111,6 +114,8 @@ impl Tool for EditTool {
                 "workspace_root": workspace_root.to_string_lossy(),
                 "path": args.path,
                 "inside_workspace": inside,
+                "before": before,
+                "after": new_content,
             });
 
             Ok(ToolResult {
