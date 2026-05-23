@@ -35,14 +35,18 @@ fn test_message_entry(id: &str, text: &str) -> SessionEntry {
 fn set_sessions_dir(dir: &std::path::Path) {
     // SAFETY: test-only env var mutation; no other thread reads this var
     // concurrently during the test.
-    unsafe { std::env::set_var("OPI_SESSIONS_DIR", dir); }
+    unsafe {
+        std::env::set_var("OPI_SESSIONS_DIR", dir);
+    }
 }
 
 /// Remove env var safely (edition 2024 requires unsafe for remove_var).
 fn clear_sessions_dir() {
     // SAFETY: test-only env var mutation; no other thread reads this var
     // concurrently during the test.
-    unsafe { std::env::remove_var("OPI_SESSIONS_DIR"); }
+    unsafe {
+        std::env::remove_var("OPI_SESSIONS_DIR");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -63,11 +67,7 @@ fn session_coordinator_creates_jsonl_file() {
     let jsonl_files: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "jsonl")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
         .collect();
     assert_eq!(jsonl_files.len(), 1, "should create exactly one JSONL file");
 
@@ -174,11 +174,7 @@ async fn harness_creates_session_file_on_prompt() {
     let jsonl_files: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "jsonl")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "jsonl"))
         .collect();
     assert_eq!(jsonl_files.len(), 1, "should create one session file");
 
@@ -323,11 +319,7 @@ async fn multi_turn_session_persistence() {
 
     // Check usage accumulation
     let session = harness.session().unwrap();
-    assert_eq!(
-        session.usage().turn_count(),
-        2,
-        "should track 2 turns"
-    );
+    assert_eq!(session.usage().turn_count(), 2, "should track 2 turns");
 
     // Read back session file
     let session_id = session.session_id().to_owned();

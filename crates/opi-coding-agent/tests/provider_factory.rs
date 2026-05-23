@@ -5,7 +5,9 @@
 //! TOML-deserialized provider configs resolve to the right env var names.
 
 use opi_ai::provider::Provider;
-use opi_coding_agent::config::{GenericProviderConfig, OpiConfig, OpenRouterProviderConfig, load_config_file};
+use opi_coding_agent::config::{
+    GenericProviderConfig, OpenRouterProviderConfig, OpiConfig, load_config_file,
+};
 
 // ---------------------------------------------------------------------------
 // Provider construction: correct id() per provider
@@ -13,43 +15,37 @@ use opi_coding_agent::config::{GenericProviderConfig, OpiConfig, OpenRouterProvi
 
 #[test]
 fn anthropic_provider_construction() {
-    let provider =
-        opi_ai::anthropic::AnthropicProvider::new("test-key".into(), None);
+    let provider = opi_ai::anthropic::AnthropicProvider::new("test-key".into(), None);
     assert_eq!(provider.id(), "anthropic");
 }
 
 #[test]
 fn openai_provider_construction() {
-    let provider =
-        opi_ai::openai_chat::OpenAiChatProvider::new("test-key".into(), None);
+    let provider = opi_ai::openai_chat::OpenAiChatProvider::new("test-key".into(), None);
     assert_eq!(provider.id(), "openai");
 }
 
 #[test]
 fn openrouter_provider_construction() {
-    let provider =
-        opi_ai::openrouter::openrouter_provider("test-key".into(), None);
+    let provider = opi_ai::openrouter::openrouter_provider("test-key".into(), None);
     assert_eq!(provider.id(), "openrouter");
 }
 
 #[test]
 fn mistral_provider_construction() {
-    let provider =
-        opi_ai::mistral::mistral_provider("test-key".into(), None);
+    let provider = opi_ai::mistral::mistral_provider("test-key".into(), None);
     assert_eq!(provider.id(), "mistral");
 }
 
 #[test]
 fn openai_responses_provider_construction() {
-    let provider =
-        opi_ai::openai_responses::OpenAiResponsesProvider::new("test-key".into(), None);
+    let provider = opi_ai::openai_responses::OpenAiResponsesProvider::new("test-key".into(), None);
     assert_eq!(provider.id(), "openai-responses");
 }
 
 #[test]
 fn gemini_provider_construction() {
-    let provider =
-        opi_ai::gemini::GeminiProvider::new("test-key".into(), None);
+    let provider = opi_ai::gemini::GeminiProvider::new("test-key".into(), None);
     assert_eq!(provider.id(), "gemini");
 }
 
@@ -99,10 +95,7 @@ fn openrouter_provider_default_has_empty_env() {
 #[test]
 fn opi_config_default_anthropic_env() {
     let config = OpiConfig::default();
-    assert_eq!(
-        config.providers.anthropic.api_key_env,
-        "ANTHROPIC_API_KEY"
-    );
+    assert_eq!(config.providers.anthropic.api_key_env, "ANTHROPIC_API_KEY");
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +173,10 @@ api_key_env = "MY_OPENAI_KEY"
     )
     .unwrap();
     let config = load_config_file(&path).unwrap();
-    assert_eq!(config.providers.openai_responses.api_key_env, "MY_OPENAI_KEY");
+    assert_eq!(
+        config.providers.openai_responses.api_key_env,
+        "MY_OPENAI_KEY"
+    );
 }
 
 #[test]

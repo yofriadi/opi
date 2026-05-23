@@ -18,19 +18,17 @@ impl Provider for CaptureProvider {
     fn stream(&self, request: Request) -> EventStream {
         self.requests.lock().unwrap().push(request);
         let msg = opi_ai::message::AssistantMessage {
-            content: vec![opi_ai::message::AssistantContent::Text {
-                text: "ok".into(),
-            }],
+            content: vec![opi_ai::message::AssistantContent::Text { text: "ok".into() }],
             usage: Usage::default(),
             stop_reason: StopReason::Stop,
             ..opi_ai::test_support::base_assistant()
         };
-        Box::pin(futures_util::stream::iter(vec![
-            Ok(AssistantStreamEvent::Done {
+        Box::pin(futures_util::stream::iter(vec![Ok(
+            AssistantStreamEvent::Done {
                 reason: StopReason::Stop,
                 message: msg,
-            }),
-        ]))
+            },
+        )]))
     }
 
     fn id(&self) -> &str {
@@ -60,9 +58,7 @@ impl AgentHooks for NoopHooks {
 
 fn user_msg(text: &str) -> AgentMessage {
     AgentMessage::Llm(Message::User(UserMessage {
-        content: vec![InputContent::Text {
-            text: text.into(),
-        }],
+        content: vec![InputContent::Text { text: text.into() }],
         timestamp_ms: 0,
     }))
 }

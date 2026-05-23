@@ -629,9 +629,7 @@ impl GeminiProvider {
         tx: &tokio::sync::mpsc::Sender<Result<AssistantStreamEvent, ProviderError>>,
     ) -> Result<(), ProviderError> {
         let client = reqwest::Client::new();
-        let url = format!(
-            "{base_url}/v1beta/models/{model_id}:streamGenerateContent?alt=sse"
-        );
+        let url = format!("{base_url}/v1beta/models/{model_id}:streamGenerateContent?alt=sse");
         let response = client
             .post(&url)
             .header("x-goog-api-key", &api_key)
@@ -780,8 +778,7 @@ impl Provider for GeminiProvider {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
 
         tokio::spawn(async move {
-            if let Err(e) =
-                Self::stream_http(api_key, base_url, model_id, &body, cancel, &tx).await
+            if let Err(e) = Self::stream_http(api_key, base_url, model_id, &body, cancel, &tx).await
             {
                 let _ = tx.send(Err(e)).await;
             }

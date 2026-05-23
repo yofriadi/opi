@@ -917,9 +917,7 @@ impl Provider for OpenAiResponsesProvider {
         let (tx, rx) = tokio::sync::mpsc::channel(64);
 
         tokio::spawn(async move {
-            if let Err(e) =
-                Self::stream_http(api_key, base_url, &body, cancel, &tx).await
-            {
+            if let Err(e) = Self::stream_http(api_key, base_url, &body, cancel, &tx).await {
                 let _ = tx.send(Err(e)).await;
             }
         });

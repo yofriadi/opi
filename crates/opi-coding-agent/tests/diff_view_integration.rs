@@ -41,10 +41,18 @@ async fn edit_tool_captures_before_content() {
         .await
         .unwrap();
 
-    assert!(!result.is_error, "unexpected error: {}", tool_result_text(&result));
+    assert!(
+        !result.is_error,
+        "unexpected error: {}",
+        tool_result_text(&result)
+    );
 
     let details = result.details.expect("should have details");
-    let before = details.get("before").expect("should have before").as_str().unwrap();
+    let before = details
+        .get("before")
+        .expect("should have before")
+        .as_str()
+        .unwrap();
     assert!(
         before.contains("hello"),
         "before should contain original content"
@@ -79,7 +87,11 @@ async fn edit_tool_captures_after_content() {
     assert!(!result.is_error);
 
     let details = result.details.expect("should have details");
-    let after = details.get("after").expect("should have after").as_str().unwrap();
+    let after = details
+        .get("after")
+        .expect("should have after")
+        .as_str()
+        .unwrap();
     assert!(
         after.contains("a + b + 0"),
         "after should contain new content"
@@ -120,14 +132,26 @@ async fn edit_tool_before_after_preserve_full_file() {
     let after = details.get("after").unwrap().as_str().unwrap();
 
     // before is the full original file
-    assert_eq!(before, original, "before should be the complete original file");
+    assert_eq!(
+        before, original,
+        "before should be the complete original file"
+    );
     // after preserves context around the change
     assert!(
-        after.contains("line1") && after.contains("line2") && after.contains("line4") && after.contains("line5"),
+        after.contains("line1")
+            && after.contains("line2")
+            && after.contains("line4")
+            && after.contains("line5"),
         "after should preserve unchanged lines"
     );
-    assert!(after.contains("LINE_THREE"), "after should contain the replacement");
-    assert!(!after.contains("line3"), "after should not contain the old text");
+    assert!(
+        after.contains("LINE_THREE"),
+        "after should contain the replacement"
+    );
+    assert!(
+        !after.contains("line3"),
+        "after should not contain the old text"
+    );
 }
 
 #[tokio::test]

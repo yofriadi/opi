@@ -58,7 +58,9 @@ pub fn calculate_backoff_delay(attempt: u32, base_ms: u64, max_delay_ms: u64) ->
 /// Returns delay in milliseconds, or `None` if no usable header is found.
 pub fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     // Priority 1: Retry-After header
-    if let Some(val) = headers.get("retry-after") && let Ok(s) = val.to_str() {
+    if let Some(val) = headers.get("retry-after")
+        && let Ok(s) = val.to_str()
+    {
         // Try seconds first
         if let Ok(secs) = s.parse::<f64>() {
             return Some((secs * 1000.0) as u64);

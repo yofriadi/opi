@@ -10,7 +10,9 @@
 
 use opi_ai::Provider;
 use opi_ai::provider::ProviderError;
-use opi_ai::retry::{RetryConfig, calculate_backoff_delay, parse_http_date_delay, parse_retry_after};
+use opi_ai::retry::{
+    RetryConfig, calculate_backoff_delay, parse_http_date_delay, parse_retry_after,
+};
 use opi_ai::test_support::{self, MockProvider, MockResponse};
 
 // ---------------------------------------------------------------------------
@@ -248,10 +250,7 @@ fn parse_http_date_invalid_format_returns_none() {
 
 #[test]
 fn parse_http_date_wrong_timezone_returns_none() {
-    assert_eq!(
-        parse_http_date_delay("Fri, 23 May 2026 12:00:00 EST"),
-        None
-    );
+    assert_eq!(parse_http_date_delay("Fri, 23 May 2026 12:00:00 EST"), None);
 }
 
 #[test]
@@ -292,12 +291,9 @@ fn unix_to_http_date(ts: u64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
 
-    let weekday = [
-        "Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed",
-    ][(days % 7) as usize];
+    let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][(days % 7) as usize];
     let month_name = [
-        "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ][m as usize];
 
     format!(

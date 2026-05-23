@@ -468,7 +468,9 @@ fn process_stream_event(
             });
             None
         }
-        ThinkingStart { partial, .. } | ThinkingDelta { partial, .. } | ThinkingEnd { partial, .. } => {
+        ThinkingStart { partial, .. }
+        | ThinkingDelta { partial, .. }
+        | ThinkingEnd { partial, .. } => {
             let msg = AgentMessage::Llm(Message::Assistant(partial.clone()));
             events(AgentEvent::MessageUpdate {
                 message: msg,

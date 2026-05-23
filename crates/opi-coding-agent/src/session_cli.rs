@@ -221,9 +221,9 @@ pub fn reconstruct_context(
     entries
         .iter()
         .filter_map(|entry| match entry {
-            opi_agent::session::SessionEntry::Message(msg_entry) => {
-                Some(opi_agent::message::AgentMessage::Llm(msg_entry.message.clone()))
-            }
+            opi_agent::session::SessionEntry::Message(msg_entry) => Some(
+                opi_agent::message::AgentMessage::Llm(msg_entry.message.clone()),
+            ),
             _ => None,
         })
         .collect()

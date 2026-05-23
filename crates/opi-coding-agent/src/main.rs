@@ -19,13 +19,11 @@ fn main() {
         cli.resume.as_deref(),
         cli.delete_session.as_deref(),
     ) {
-        Ok((true, Some(session))) => {
-            Some(opi_coding_agent::session_cli::reconstruct_context(
-                &session.entries,
-            ))
-        }
-        Ok((true, None)) => return,         // list/delete handled
-        Ok((_, None | Some(_))) => None,    // no session command or unreachable
+        Ok((true, Some(session))) => Some(opi_coding_agent::session_cli::reconstruct_context(
+            &session.entries,
+        )),
+        Ok((true, None)) => return,      // list/delete handled
+        Ok((_, None | Some(_))) => None, // no session command or unreachable
         Err(code) => std::process::exit(code),
     };
 
@@ -212,13 +210,14 @@ fn build_provider(
                     "missing API key: set {env_name} environment variable"
                 ))
             })?;
-            let provider =
-                opi_ai::anthropic::AnthropicProvider::new(api_key, config.providers.anthropic.base_url.clone());
+            let provider = opi_ai::anthropic::AnthropicProvider::new(
+                api_key,
+                config.providers.anthropic.base_url.clone(),
+            );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         "openai" => {
-            let env_name =
-                resolve_env_name(&config.providers.openai.api_key_env, "OPENAI_API_KEY");
+            let env_name = resolve_env_name(&config.providers.openai.api_key_env, "OPENAI_API_KEY");
             let api_key = std::env::var(&env_name).map_err(|_| {
                 ProviderBuildError::Auth(format!(
                     "missing API key: set {env_name} environment variable"
@@ -283,8 +282,10 @@ fn build_provider(
                     "missing API key: set {env_name} environment variable"
                 ))
             })?;
-            let provider =
-                opi_ai::mistral::mistral_provider(api_key, config.providers.mistral.base_url.clone());
+            let provider = opi_ai::mistral::mistral_provider(
+                api_key,
+                config.providers.mistral.base_url.clone(),
+            );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         "openai-responses" => {

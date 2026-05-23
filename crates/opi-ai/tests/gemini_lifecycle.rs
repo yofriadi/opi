@@ -122,11 +122,9 @@ async fn stream_auth_error() {
         .and(path(
             "/v1beta/models/gemini-2.5-flash:streamGenerateContent",
         ))
-        .respond_with(
-            ResponseTemplate::new(400).set_body_string(
-                r#"{"error":{"code":401,"message":"API key not valid","status":"INVALID_ARGUMENT"}}"#,
-            ),
-        )
+        .respond_with(ResponseTemplate::new(400).set_body_string(
+            r#"{"error":{"code":401,"message":"API key not valid","status":"INVALID_ARGUMENT"}}"#,
+        ))
         .mount(&server)
         .await;
 
@@ -170,10 +168,7 @@ async fn stream_rate_limited() {
     let result = stream.next().await.expect("should have event");
     match result {
         Err(ProviderError::RateLimited { retry_after_ms }) => {
-            assert!(
-                retry_after_ms.is_some(),
-                "should parse retry-after header"
-            );
+            assert!(retry_after_ms.is_some(), "should parse retry-after header");
             // 5 seconds -> 5000 ms
             assert_eq!(retry_after_ms.unwrap(), 5000);
         }
