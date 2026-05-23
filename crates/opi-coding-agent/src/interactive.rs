@@ -37,6 +37,7 @@ struct TuiState {
     streaming_started: bool,
     theme: Theme,
     keybindings: Keybindings,
+    total_tokens: u64,
 }
 
 pub async fn run_interactive_tui(
@@ -58,6 +59,7 @@ pub async fn run_interactive_tui(
         streaming_started: false,
         theme,
         keybindings,
+        total_tokens: 0,
     }));
 
     // Wire agent events into shared state before wrapping harness
@@ -86,6 +88,7 @@ pub async fn run_interactive_tui(
             AgentEvent::MessageEnd {
                 message: AgentMessage::Llm(Message::Assistant(a)),
             } => {
+                s.total_tokens += a.usage.total_tokens();
                 for content in &a.content {
                     match content {
                         AssistantContent::Text { text } if !s.streaming_started => {
@@ -288,6 +291,10 @@ fn build_shell(s: &TuiState) -> Shell {
         .input_text(s.input_text.clone())
         .state(s.app_state)
         .theme(s.theme.clone());
+
+    if s.total_tokens > 0 {
+        shell = shell.token_count(s.total_tokens);
+    }
 
     if !s.messages.is_empty() {
         shell = shell.messages(s.messages.clone());
