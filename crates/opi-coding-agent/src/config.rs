@@ -5,6 +5,9 @@
 //!
 //! Phase 1 fields: model, max_iterations, tool_timeout_ms, theme,
 //! thinking, providers.anthropic.api_key_env.
+//!
+//! Phase 2 fields: providers.{openai,openrouter,mistral,openai_responses,gemini}
+//! config with api_key_env, base_url, and OpenRouter-specific referer.
 
 use std::path::{Path, PathBuf};
 
@@ -66,6 +69,11 @@ impl Default for ThinkingConfig {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ProvidersConfig {
     pub anthropic: AnthropicProviderConfig,
+    pub openai: GenericProviderConfig,
+    pub openrouter: OpenRouterProviderConfig,
+    pub mistral: GenericProviderConfig,
+    pub openai_responses: GenericProviderConfig,
+    pub gemini: GenericProviderConfig,
 }
 
 /// `[providers.anthropic]` section.
@@ -82,6 +90,21 @@ impl Default for AnthropicProviderConfig {
             base_url: None,
         }
     }
+}
+
+/// Generic provider config (api_key_env + optional base_url).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GenericProviderConfig {
+    pub api_key_env: String,
+    pub base_url: Option<String>,
+}
+
+/// OpenRouter-specific provider config.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpenRouterProviderConfig {
+    pub api_key_env: String,
+    pub base_url: Option<String>,
+    pub referer: Option<String>,
 }
 
 /// `[keybindings]` section.
@@ -137,6 +160,11 @@ struct TomlThinking {
 #[serde(default)]
 struct TomlProviders {
     anthropic: TomlAnthropic,
+    openai: TomlGenericProvider,
+    openrouter: TomlOpenRouterProvider,
+    mistral: TomlGenericProvider,
+    openai_responses: TomlGenericProvider,
+    gemini: TomlGenericProvider,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -144,6 +172,21 @@ struct TomlProviders {
 struct TomlAnthropic {
     api_key_env: Option<String>,
     base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlGenericProvider {
+    api_key_env: Option<String>,
+    base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlOpenRouterProvider {
+    api_key_env: Option<String>,
+    base_url: Option<String>,
+    referer: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -190,6 +233,39 @@ impl TomlConfig {
         }
         if let Some(v) = self.providers.anthropic.base_url {
             config.providers.anthropic.base_url = Some(v);
+        }
+        if let Some(v) = self.providers.openai.api_key_env {
+            config.providers.openai.api_key_env = v;
+        }
+        if let Some(v) = self.providers.openai.base_url {
+            config.providers.openai.base_url = Some(v);
+        }
+        if let Some(v) = self.providers.openrouter.api_key_env {
+            config.providers.openrouter.api_key_env = v;
+        }
+        if let Some(v) = self.providers.openrouter.base_url {
+            config.providers.openrouter.base_url = Some(v);
+        }
+        if let Some(v) = self.providers.openrouter.referer {
+            config.providers.openrouter.referer = Some(v);
+        }
+        if let Some(v) = self.providers.mistral.api_key_env {
+            config.providers.mistral.api_key_env = v;
+        }
+        if let Some(v) = self.providers.mistral.base_url {
+            config.providers.mistral.base_url = Some(v);
+        }
+        if let Some(v) = self.providers.openai_responses.api_key_env {
+            config.providers.openai_responses.api_key_env = v;
+        }
+        if let Some(v) = self.providers.openai_responses.base_url {
+            config.providers.openai_responses.base_url = Some(v);
+        }
+        if let Some(v) = self.providers.gemini.api_key_env {
+            config.providers.gemini.api_key_env = v;
+        }
+        if let Some(v) = self.providers.gemini.base_url {
+            config.providers.gemini.base_url = Some(v);
         }
         if let Some(v) = self.keybindings.submit {
             config.keybindings.submit = v;

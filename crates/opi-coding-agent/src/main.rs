@@ -181,7 +181,6 @@ enum ProviderBuildError {
 fn build_provider(
     config: &opi_coding_agent::config::OpiConfig,
 ) -> Result<Box<dyn opi_ai::provider::Provider>, ProviderBuildError> {
-    use opi_ai::anthropic::AnthropicProvider;
     use opi_ai::provider::Provider;
 
     let spec = &config.defaults.model;
@@ -193,19 +192,127 @@ fn build_provider(
 
     match provider_id {
         "anthropic" => {
-            let api_key_env = &config.providers.anthropic.api_key_env;
-            let api_key = std::env::var(api_key_env).map_err(|_| {
+            let env_name = &config.providers.anthropic.api_key_env;
+            let api_key = std::env::var(env_name).map_err(|_| {
                 ProviderBuildError::Auth(format!(
-                    "missing API key: set {api_key_env} environment variable"
+                    "missing API key: set {env_name} environment variable"
                 ))
             })?;
-            let base_url = config.providers.anthropic.base_url.clone();
-            let provider = AnthropicProvider::new(api_key, base_url);
+            let provider =
+                opi_ai::anthropic::AnthropicProvider::new(api_key, config.providers.anthropic.base_url.clone());
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
+        "openai" => {
+            let env_name =
+                resolve_env_name(&config.providers.openai.api_key_env, "OPENAI_API_KEY");
+            let api_key = std::env::var(&env_name).map_err(|_| {
+                ProviderBuildError::Auth(format!(
+                    "missing API key: set {env_name} environment variable"
+                ))
+            })?;
+            let provider = opi_ai::openai_chat::OpenAiChatProvider::new(
+                api_key,
+                config.providers.openai.base_url.clone(),
+            );
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
+        "openrouter" => {
+            let env_name = resolve_env_name(
+                &config.providers.openrouter.api_key_env,
+                "OPENROUTER_API_KEY",
+            );
+            let api_key = std::env::var(&env_name).map_err(|_| {
+                ProviderBuildError::Auth(format!(
+                    "missing API key: set {env_name} environment variable"
+                ))
+            })?;
+            // If a custom referer is configured, build the provider directly with it.
+            let provider = if let Some(ref referer) = config.providers.openrouter.referer {
+                let base_url = config
+                    .providers
+                    .openrouter
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "https://openrouter.ai/api".into());
+                let compat = opi_ai::openai_chat::CompatConfig::default();
+                let extra_headers = vec![
+                    ("HTTP-Referer".into(), referer.clone()),
+                    ("X-Title".into(), "opi".into()),
+                ];
+                // Use the default model list from the openrouter module.
+                let temp = opi_ai::openrouter::openrouter_provider(
+                    String::new(),
+                    config.providers.openrouter.base_url.clone(),
+                );
+                let models = temp.models().to_vec();
+                opi_ai::openai_chat::OpenAiChatProvider::new_for_profile(
+                    api_key,
+                    base_url,
+                    "openrouter".into(),
+                    compat,
+                    extra_headers,
+                    models,
+                )
+            } else {
+                opi_ai::openrouter::openrouter_provider(
+                    api_key,
+                    config.providers.openrouter.base_url.clone(),
+                )
+            };
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
+        "mistral" => {
+            let env_name =
+                resolve_env_name(&config.providers.mistral.api_key_env, "MISTRAL_API_KEY");
+            let api_key = std::env::var(&env_name).map_err(|_| {
+                ProviderBuildError::Auth(format!(
+                    "missing API key: set {env_name} environment variable"
+                ))
+            })?;
+            let provider =
+                opi_ai::mistral::mistral_provider(api_key, config.providers.mistral.base_url.clone());
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
+        "openai-responses" => {
+            let env_name = resolve_env_name(
+                &config.providers.openai_responses.api_key_env,
+                "OPENAI_API_KEY",
+            );
+            let api_key = std::env::var(&env_name).map_err(|_| {
+                ProviderBuildError::Auth(format!(
+                    "missing API key: set {env_name} environment variable"
+                ))
+            })?;
+            let provider = opi_ai::openai_responses::OpenAiResponsesProvider::new(
+                api_key,
+                config.providers.openai_responses.base_url.clone(),
+            );
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
+        "gemini" => {
+            let env_name = resolve_env_name(&config.providers.gemini.api_key_env, "GEMINI_API_KEY");
+            let api_key = std::env::var(&env_name).map_err(|_| {
+                ProviderBuildError::Auth(format!(
+                    "missing API key: set {env_name} environment variable"
+                ))
+            })?;
+            let provider = opi_ai::gemini::GeminiProvider::new(
+                api_key,
+                config.providers.gemini.base_url.clone(),
+            );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         other => Err(ProviderBuildError::Config(format!(
             "unknown provider: {other}"
         ))),
+    }
+}
+
+fn resolve_env_name(configured: &str, default: &str) -> String {
+    if configured.is_empty() {
+        default.into()
+    } else {
+        configured.into()
     }
 }
 
