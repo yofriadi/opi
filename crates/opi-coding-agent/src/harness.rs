@@ -97,12 +97,11 @@ impl CodingHarness {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        let session = SessionCoordinator::new(
-            &session_dir,
-            &cwd,
-            opi_agent::compaction::CompactionConfig::default(),
-        )
-        .ok();
+        let compaction_config = opi_agent::compaction::CompactionConfig {
+            enabled: config.compaction.enabled,
+            threshold_tokens: config.compaction.threshold_tokens,
+        };
+        let session = SessionCoordinator::new(&session_dir, &cwd, compaction_config).ok();
 
         Self {
             agent,
@@ -203,8 +202,22 @@ impl AgentHooks for CodingAgentHooks {
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
         let mut result = Vec::new();
         for msg in messages {
-            if let AgentMessage::Llm(m) = msg {
-                result.push(m.clone());
+            match msg {
+                AgentMessage::Llm(m) => {
+                    result.push(m.clone());
+                }
+                AgentMessage::CompactionSummary(summary) => {
+                    result.push(Message::User(opi_ai::message::UserMessage {
+                        content: vec![opi_ai::message::InputContent::Text {
+                            text: format!(
+                                "[Context was compacted. Summary of earlier conversation: {}]",
+                                summary.summary
+                            ),
+                        }],
+                        timestamp_ms: 0,
+                    }));
+                }
+                _ => {}
             }
         }
         Ok(result)
@@ -230,8 +243,22 @@ impl AgentHooks for InteractiveCodingHooks {
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
         let mut result = Vec::new();
         for msg in messages {
-            if let AgentMessage::Llm(m) = msg {
-                result.push(m.clone());
+            match msg {
+                AgentMessage::Llm(m) => {
+                    result.push(m.clone());
+                }
+                AgentMessage::CompactionSummary(summary) => {
+                    result.push(Message::User(opi_ai::message::UserMessage {
+                        content: vec![opi_ai::message::InputContent::Text {
+                            text: format!(
+                                "[Context was compacted. Summary of earlier conversation: {}]",
+                                summary.summary
+                            ),
+                        }],
+                        timestamp_ms: 0,
+                    }));
+                }
+                _ => {}
             }
         }
         Ok(result)

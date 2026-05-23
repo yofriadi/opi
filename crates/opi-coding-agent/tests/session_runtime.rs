@@ -147,6 +147,7 @@ fn session_coordinator_accumulates_usage() {
 static SESSION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn harness_creates_session_file_on_prompt() {
     let _lock = SESSION_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -252,6 +253,7 @@ fn reconstruct_context_skips_non_message_entries() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn full_lifecycle_write_read_verify() {
     let _lock = SESSION_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -296,6 +298,7 @@ async fn full_lifecycle_write_read_verify() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn multi_turn_session_persistence() {
     let _lock = SESSION_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

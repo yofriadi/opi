@@ -25,6 +25,7 @@ pub struct OpiConfig {
     pub providers: ProvidersConfig,
     pub keybindings: KeybindingsConfig,
     pub retry: opi_ai::retry::RetryConfig,
+    pub compaction: CompactionConfigSection,
 }
 
 /// `[defaults]` section.
@@ -125,6 +126,22 @@ impl Default for KeybindingsConfig {
     }
 }
 
+/// `[compaction]` section.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompactionConfigSection {
+    pub enabled: bool,
+    pub threshold_tokens: u64,
+}
+
+impl Default for CompactionConfigSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold_tokens: 100_000,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TOML deserialization structs (Option fields detect presence)
 // ---------------------------------------------------------------------------
@@ -137,6 +154,7 @@ struct TomlConfig {
     providers: TomlProviders,
     keybindings: TomlKeybindings,
     retry: TomlRetry,
+    compaction: TomlCompaction,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -203,6 +221,13 @@ struct TomlRetry {
     max_attempts: Option<u32>,
     initial_delay_ms: Option<u64>,
     max_delay_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlCompaction {
+    enabled: Option<bool>,
+    threshold_tokens: Option<u64>,
 }
 
 impl TomlConfig {
@@ -284,6 +309,12 @@ impl TomlConfig {
         }
         if let Some(v) = self.retry.max_delay_ms {
             config.retry.max_delay_ms = v;
+        }
+        if let Some(v) = self.compaction.enabled {
+            config.compaction.enabled = v;
+        }
+        if let Some(v) = self.compaction.threshold_tokens {
+            config.compaction.threshold_tokens = v;
         }
     }
 }
