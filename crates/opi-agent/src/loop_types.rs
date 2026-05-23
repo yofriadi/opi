@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::message::AgentMessage;
 use crate::tool::Tool;
-use opi_ai::provider::Provider;
+use opi_ai::provider::{Provider, ThinkingConfig};
 
 /// Errors that can occur during the agent loop.
 #[derive(Debug, thiserror::Error)]
@@ -53,6 +53,8 @@ pub struct AgentLoopConfig {
     pub temperature: Option<f64>,
     /// Retry configuration for retryable provider errors.
     pub retry: Option<opi_ai::retry::RetryConfig>,
+    /// Thinking/reasoning configuration for extended thinking models.
+    pub thinking: Option<ThinkingConfig>,
 }
 
 impl Default for AgentLoopConfig {
@@ -62,6 +64,7 @@ impl Default for AgentLoopConfig {
             max_tokens: None,
             temperature: None,
             retry: None,
+            thinking: None,
         }
     }
 }

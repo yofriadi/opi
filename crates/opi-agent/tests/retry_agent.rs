@@ -59,6 +59,7 @@ fn make_config(retry: Option<RetryConfig>) -> AgentLoopConfig {
         max_tokens: None,
         temperature: None,
         retry,
+        ..Default::default()
     }
 }
 

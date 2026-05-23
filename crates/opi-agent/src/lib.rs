@@ -98,7 +98,7 @@ pub async fn agent_loop(
                 tools: tool_defs.clone(),
                 max_tokens: config.max_tokens,
                 temperature: config.temperature,
-                thinking: Default::default(),
+                thinking: config.thinking.clone().unwrap_or_default(),
                 stop_sequences: vec![],
                 metadata: None,
                 cancel: cancel.clone(),
@@ -465,6 +465,14 @@ fn process_stream_event(
         ToolCallEnd { tool_call, .. } => {
             content.push(AssistantContent::ToolCall {
                 tool_call: tool_call.clone(),
+            });
+            None
+        }
+        ThinkingStart { partial, .. } | ThinkingDelta { partial, .. } | ThinkingEnd { partial, .. } => {
+            let msg = AgentMessage::Llm(Message::Assistant(partial.clone()));
+            events(AgentEvent::MessageUpdate {
+                message: msg,
+                assistant_event: Box::new(event.clone()),
             });
             None
         }
