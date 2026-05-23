@@ -142,9 +142,13 @@ fn session_coordinator_accumulates_usage() {
 // ---------------------------------------------------------------------------
 // Harness session wiring tests
 // ---------------------------------------------------------------------------
+// These tests mutate OPI_SESSIONS_DIR so they must run sequentially.
+
+static SESSION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[tokio::test]
 async fn harness_creates_session_file_on_prompt() {
+    let _lock = SESSION_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     set_sessions_dir(dir.path());
 
@@ -249,6 +253,7 @@ fn reconstruct_context_skips_non_message_entries() {
 
 #[tokio::test]
 async fn full_lifecycle_write_read_verify() {
+    let _lock = SESSION_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     set_sessions_dir(dir.path());
 
@@ -292,6 +297,7 @@ async fn full_lifecycle_write_read_verify() {
 
 #[tokio::test]
 async fn multi_turn_session_persistence() {
+    let _lock = SESSION_TEST_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     set_sessions_dir(dir.path());
 
