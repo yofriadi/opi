@@ -6,7 +6,7 @@
 //! `response.output_text.delta`, `response.function_call_arguments.delta`,
 //! `response.completed`, etc.
 
-use futures_util::stream;
+use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
@@ -587,9 +587,7 @@ fn empty_assistant_message(provider: &str) -> AssistantMessage {
 // ---------------------------------------------------------------------------
 
 pub struct OpenAiResponsesProvider {
-    #[allow(dead_code)]
     api_key: String,
-    #[allow(dead_code)]
     base_url: String,
     models: Vec<ModelInfo>,
 }
@@ -782,15 +780,151 @@ impl OpenAiResponsesProvider {
         let _cancel = cancel;
         Box::pin(stream::iter(stream_events))
     }
+
+    /// Real HTTP streaming: POST to OpenAI Responses API.
+    async fn stream_http(
+        api_key: String,
+        base_url: String,
+        body: &serde_json::Value,
+        cancel: CancellationToken,
+        tx: &tokio::sync::mpsc::Sender<Result<AssistantStreamEvent, ProviderError>>,
+    ) -> Result<(), ProviderError> {
+        let client = reqwest::Client::new();
+        let response = client
+            .post(format!("{base_url}/v1/responses"))
+            .header("authorization", format!("Bearer {api_key}"))
+            .header("content-type", "application/json")
+            .body(serde_json::to_string(body).unwrap_or_default())
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let headers = response.headers().clone();
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(map_http_status(status, &error_body, &headers));
+        }
+
+        let mut byte_stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut mapper = ResponsesMapper::new("openai-responses");
+
+        loop {
+            let chunk = tokio::select! {
+                _ = cancel.cancelled() => {
+                    return Ok(());
+                }
+                chunk = byte_stream.next() => {
+                    match chunk {
+                        Some(c) => c,
+                        None => break,
+                    }
+                }
+            };
+
+            let chunk = chunk.map_err(|e| ProviderError::StreamError(e.to_string()))?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            for frame in drain_sse_frames(&mut buffer) {
+                match ResponsesEvent::try_from_frame(&frame) {
+                    ParsedEvent::Valid(event) => {
+                        for stream_event in mapper.process(event) {
+                            if tx.send(Ok(stream_event)).await.is_err() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                    ParsedEvent::Malformed { data, error } => {
+                        let err = ProviderError::StreamError(format!(
+                            "malformed SSE data: {error} (data: {data:.80})"
+                        ));
+                        if tx.send(Err(err)).await.is_err() {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+
+        if !mapper.saw_done {
+            let err = ProviderError::StreamError("stream ended without a terminal event".into());
+            let _ = tx.send(Err(err)).await;
+        }
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming helpers
+// ---------------------------------------------------------------------------
+
+struct ReceiverStream {
+    rx: tokio::sync::mpsc::Receiver<Result<AssistantStreamEvent, ProviderError>>,
+}
+
+impl futures_core::Stream for ReceiverStream {
+    type Item = Result<AssistantStreamEvent, ProviderError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.rx.poll_recv(cx)
+    }
+}
+
+/// Drain complete SSE frames from the buffer, leaving incomplete data for the
+/// next chunk.
+fn drain_sse_frames(buffer: &mut String) -> Vec<SseFrame> {
+    if buffer.contains('\r') {
+        *buffer = buffer.replace("\r\n", "\n").replace('\r', "\n");
+    }
+
+    let mut frames = Vec::new();
+    while let Some(idx) = buffer.find("\n\n") {
+        let end = idx + 2;
+        let chunk: String = buffer.drain(..end).collect();
+        frames.extend(parse_sse_frames(&chunk));
+    }
+    frames
+}
+
+fn map_http_status(
+    status: reqwest::StatusCode,
+    body: &str,
+    headers: &reqwest::header::HeaderMap,
+) -> ProviderError {
+    match status.as_u16() {
+        401 => ProviderError::AuthFailed(format!("authentication failed: {body}")),
+        403 => ProviderError::AuthFailed(format!("access denied: {body}")),
+        429 => ProviderError::RateLimited {
+            retry_after_ms: crate::retry::parse_retry_after(headers),
+        },
+        408 | 504 => ProviderError::Timeout,
+        code => ProviderError::RequestFailed(format!("HTTP {code}: {body}")),
+    }
 }
 
 impl Provider for OpenAiResponsesProvider {
-    fn stream(&self, _request: Request) -> EventStream {
-        // HTTP streaming not yet implemented — use stream_from_sse for tests
-        let events: Vec<Result<AssistantStreamEvent, ProviderError>> = vec![Err(
-            ProviderError::RequestFailed("HTTP streaming not implemented".into()),
-        )];
-        Box::pin(stream::iter(events))
+    fn stream(&self, request: Request) -> EventStream {
+        let api_key = self.api_key.clone();
+        let base_url = self.base_url.clone();
+        let body = self.build_request_body(&request);
+        let cancel = request.cancel.clone();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+
+        tokio::spawn(async move {
+            if let Err(e) =
+                Self::stream_http(api_key, base_url, &body, cancel, &tx).await
+            {
+                let _ = tx.send(Err(e)).await;
+            }
+        });
+
+        Box::pin(ReceiverStream { rx })
     }
 
     fn id(&self) -> &str {
