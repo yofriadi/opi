@@ -2,23 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-// Legacy placeholder — replaced by AssistantStreamEvent in task 1.2.
-#[derive(Debug, Clone)]
-pub enum StreamEvent {
-    Text(String),
-    ToolCall {
-        id: String,
-        name: String,
-        arguments: String,
-    },
-    Thinking(String),
-    Usage {
-        input_tokens: u32,
-        output_tokens: u32,
-    },
-    Stop,
-}
-
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
