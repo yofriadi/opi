@@ -125,21 +125,28 @@ impl SessionCoordinator {
         let mut total_output: u64 = 0;
         let mut total_cache_read: u64 = 0;
         let mut total_cache_write: u64 = 0;
-        // Each LLM call produces exactly one assistant message, so counting
-        // assistant messages gives the same count as accumulate() would have
-        // produced during the original run (one increment per on_turn_end call).
-        let mut assistant_count: u32 = 0;
+        // Count turns as user messages — each user prompt drives exactly one
+        // on_turn_end call. Counting assistant messages would overcount because
+        // a single user turn can produce multiple assistant messages (tool call
+        // + final response).
+        let mut user_count: u32 = 0;
 
         for entry in ordered {
             match entry {
                 SessionEntry::Message(m) => {
-                    // Accumulate usage from persisted assistant messages.
-                    if let Message::Assistant(a) = &m.message {
-                        total_input += a.usage.input_tokens as u64;
-                        total_output += a.usage.output_tokens as u64;
-                        total_cache_read += a.usage.cache_read_tokens as u64;
-                        total_cache_write += a.usage.cache_write_tokens as u64;
-                        assistant_count += 1;
+                    // Accumulate usage from persisted assistant messages and
+                    // count turns by user messages.
+                    match &m.message {
+                        Message::Assistant(a) => {
+                            total_input += a.usage.input_tokens as u64;
+                            total_output += a.usage.output_tokens as u64;
+                            total_cache_read += a.usage.cache_read_tokens as u64;
+                            total_cache_write += a.usage.cache_write_tokens as u64;
+                        }
+                        Message::User(_) => {
+                            user_count += 1;
+                        }
+                        _ => {}
                     }
                     entries.push(Entry {
                         id: m.id.clone(),
@@ -155,9 +162,24 @@ impl SessionCoordinator {
                         None => Vec::new(),
                     };
                     let kept_count = kept.len();
-                    entries = kept;
-                    // Summary occupies index 0; kept entries are 1..=kept_count.
-                    indices = (1..=kept_count).collect();
+                    // Rebuild entries with the compaction summary at index 0,
+                    // followed by the kept tail. This mirrors the runtime
+                    // compaction layout so a subsequent compaction sees the
+                    // full context including prior summaries.
+                    let summary_entry = Entry {
+                        id: format!("sum-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed)),
+                        message: AgentMessage::CompactionSummary(CompactionSummaryMessage {
+                            summary: c.summary.clone(),
+                            first_kept_entry_id: c.first_kept_entry_id.clone(),
+                            tokens_before: c.tokens_before,
+                            tokens_after: c.tokens_after,
+                        }),
+                    };
+                    let mut rebuilt = Vec::with_capacity(1 + kept_count);
+                    rebuilt.push(summary_entry);
+                    rebuilt.extend(kept);
+                    entries = rebuilt;
+                    indices = (0..=kept_count).collect();
                     agent_idx = 1 + kept_count;
                 }
                 SessionEntry::Leaf(_) => {}
@@ -170,7 +192,7 @@ impl SessionCoordinator {
             total_output,
             total_cache_read,
             total_cache_write,
-            assistant_count,
+            user_count,
         );
         let watermark = usage.as_usage().total_tokens();
 
@@ -316,10 +338,17 @@ impl SessionCoordinator {
                 // the session file and memory stay consistent.
                 self.writer.append(&compaction_entry)?;
 
-                // Reset internal entries to the kept-only set, with new indices
-                // [0=summary, 1..=kept].
-                self.entries = output.kept_entries;
-                self.agent_message_indices = (1..=kept_indices.len()).collect();
+                // Reset internal entries to [summary, ...kept]. The summary
+                // must be included so that a subsequent compaction can see the
+                // full context including earlier compaction summaries.
+                let mut new_entries = Vec::with_capacity(1 + output.kept_entries.len());
+                new_entries.push(Entry {
+                    id: format!("sum-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed)),
+                    message: AgentMessage::CompactionSummary(summary.clone()),
+                });
+                new_entries.extend(output.kept_entries);
+                self.entries = new_entries;
+                self.agent_message_indices = (0..=kept_indices.len()).collect();
                 self.agent_message_count = 1 + kept_messages.len();
 
                 // Advance the watermark so the next threshold check measures

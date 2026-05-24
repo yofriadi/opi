@@ -189,7 +189,10 @@ fn format_persist_errors_unit() {
 
     // Empty -> no output
     let result = opi_coding_agent::runner::format_persist_errors(&errors);
-    assert!(result.is_empty(), "expected empty for no errors, got: {result:?}");
+    assert!(
+        result.is_empty(),
+        "expected empty for no errors, got: {result:?}"
+    );
 
     // With errors
     {

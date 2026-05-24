@@ -64,8 +64,21 @@ impl Tool for EditTool {
                 });
             }
         };
-        let file_path = self.workspace_root.join(&args.path);
+        let file_path = match super::validate_workspace_path(&self.workspace_root, &args.path) {
+            Ok(p) => p,
+            Err(msg) => {
+                return Box::pin(async move {
+                    Ok(ToolResult {
+                        content: vec![OutputContent::Text { text: msg }],
+                        details: None,
+                        is_error: true,
+                        terminate: false,
+                    })
+                });
+            }
+        };
         let workspace_root = self.workspace_root.clone();
+        let path_for_display = args.path.clone();
         Box::pin(async move {
             let content = match tokio::fs::read_to_string(&file_path).await {
                 Ok(c) => c,
@@ -109,18 +122,16 @@ impl Tool for EditTool {
                 });
             }
 
-            let inside = file_path.starts_with(&workspace_root);
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
-                "path": args.path,
-                "inside_workspace": inside,
+                "path": path_for_display,
                 "before": before,
                 "after": new_content,
             });
 
             Ok(ToolResult {
                 content: vec![OutputContent::Text {
-                    text: format!("edited {}", args.path),
+                    text: format!("edited {}", path_for_display),
                 }],
                 details: Some(details),
                 is_error: false,

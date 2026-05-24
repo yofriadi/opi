@@ -62,8 +62,21 @@ impl Tool for WriteTool {
                 });
             }
         };
-        let file_path = self.workspace_root.join(&args.path);
+        let file_path = match super::validate_workspace_path(&self.workspace_root, &args.path) {
+            Ok(p) => p,
+            Err(msg) => {
+                return Box::pin(async move {
+                    Ok(ToolResult {
+                        content: vec![OutputContent::Text { text: msg }],
+                        details: None,
+                        is_error: true,
+                        terminate: false,
+                    })
+                });
+            }
+        };
         let workspace_root = self.workspace_root.clone();
+        let path_for_display = args.path.clone();
         Box::pin(async move {
             // Create parent directories if needed
             if let Some(parent) = file_path.parent()
@@ -90,16 +103,14 @@ impl Tool for WriteTool {
                 });
             }
 
-            let inside = file_path.starts_with(&workspace_root);
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
-                "path": args.path,
-                "inside_workspace": inside,
+                "path": path_for_display,
             });
 
             Ok(ToolResult {
                 content: vec![OutputContent::Text {
-                    text: format!("wrote {}", args.path),
+                    text: format!("wrote {}", path_for_display),
                 }],
                 details: Some(details),
                 is_error: false,

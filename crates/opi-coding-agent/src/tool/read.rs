@@ -64,8 +64,21 @@ impl Tool for ReadTool {
                 });
             }
         };
-        let file_path = self.workspace_root.join(&args.path);
+        let file_path = match super::validate_workspace_path(&self.workspace_root, &args.path) {
+            Ok(p) => p,
+            Err(msg) => {
+                return Box::pin(async move {
+                    Ok(ToolResult {
+                        content: vec![OutputContent::Text { text: msg }],
+                        details: None,
+                        is_error: true,
+                        terminate: false,
+                    })
+                });
+            }
+        };
         let workspace_root = self.workspace_root.clone();
+        let path_for_display = args.path.clone();
         Box::pin(async move {
             let content = match tokio::fs::read_to_string(&file_path).await {
                 Ok(c) => c,
@@ -91,18 +104,9 @@ impl Tool for ReadTool {
             };
 
             let output = selected.join("\n");
-            let inside_workspace = std::fs::canonicalize(&file_path)
-                .ok()
-                .and_then(|cp| {
-                    std::fs::canonicalize(&workspace_root)
-                        .ok()
-                        .map(|cr| cp.starts_with(&cr))
-                })
-                .unwrap_or(false);
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
-                "path": args.path,
-                "inside_workspace": inside_workspace,
+                "path": path_for_display,
             });
 
             let text = format!("{}\n{}", file_path.display(), output);

@@ -200,16 +200,13 @@ async fn write_tool_safety_context_in_details() {
         .await
         .unwrap();
 
-    // Safety boundary: details should include workspace membership info
+    // Safety boundary: details should include workspace root and path
     let details = result.details.expect("should have details");
     assert!(
         details.get("workspace_root").is_some(),
         "details should include workspace_root"
     );
-    assert!(
-        details.get("inside_workspace").is_some(),
-        "details should include inside_workspace flag"
-    );
+    assert!(details.get("path").is_some(), "details should include path");
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +296,7 @@ async fn edit_tool_safety_context_in_details() {
 
     let details = result.details.expect("should have details");
     assert!(details.get("workspace_root").is_some());
-    assert!(details.get("inside_workspace").is_some());
+    assert!(details.get("path").is_some());
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +347,80 @@ async fn bash_tool_nonzero_exit_is_error() {
         .unwrap();
 
     assert!(result.is_error, "non-zero exit should be error");
+}
+
+// ---------------------------------------------------------------------------
+// Path boundary enforcement
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn write_tool_rejects_path_outside_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = WriteTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "escape-1",
+            json!({ "path": "../outside.txt", "content": "escaped" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "should reject path outside workspace");
+    let text = tool_result_text(&result);
+    assert!(
+        text.contains("outside the workspace"),
+        "error should mention workspace boundary, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn edit_tool_rejects_path_outside_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = EditTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "escape-2",
+            json!({
+                "path": "../escape.txt",
+                "old_string": "x",
+                "new_string": "y"
+            }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "should reject path outside workspace");
+    let text = tool_result_text(&result);
+    assert!(
+        text.contains("outside the workspace"),
+        "error should mention workspace boundary, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn read_tool_rejects_path_outside_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = ReadTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "escape-3",
+            json!({ "path": "../etc/passwd" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "should reject path outside workspace");
+    let text = tool_result_text(&result);
+    assert!(
+        text.contains("outside the workspace"),
+        "error should mention workspace boundary, got: {text}"
+    );
 }
 
 #[tokio::test]
@@ -483,6 +554,149 @@ async fn bash_tool_env_inheritance_reporting() {
     assert!(!result.is_error);
     let text = tool_result_text(&result);
     assert!(!text.is_empty(), "should have env output");
+}
+
+// ---------------------------------------------------------------------------
+// Symlink / junction escape regression tests
+// ---------------------------------------------------------------------------
+
+/// Helper: create a directory junction (Windows) or symlink (Unix) from
+/// `link_path` pointing to `target`. Returns true if the link was created.
+fn create_dir_link(link_path: &std::path::Path, target: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        // Use junction on Windows — no special privileges needed.
+        let output = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &link_path.to_string_lossy(),
+                &target.to_string_lossy(),
+            ])
+            .output();
+        match output {
+            Ok(o) => o.status.success(),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::os::unix::fs::symlink(target, link_path).is_ok()
+    }
+}
+
+#[tokio::test]
+async fn write_tool_rejects_symlink_escape_via_new_subpath() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+
+    // workspace/link -> outside
+    let link = workspace.path().join("link");
+    if !create_dir_link(&link, outside.path()) {
+        eprintln!("skipping: could not create directory link");
+        return;
+    }
+
+    let tool = WriteTool::new(workspace.path().to_path_buf());
+    let result = tool
+        .execute(
+            "symlink-escape-1",
+            json!({ "path": "link/new/file.txt", "content": "escaped" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        result.is_error,
+        "should reject symlink escape, got: {:?}",
+        tool_result_text(&result)
+    );
+    let text = tool_result_text(&result);
+    assert!(
+        text.contains("outside the workspace"),
+        "error should mention workspace boundary, got: {text}"
+    );
+
+    // Verify nothing was written outside
+    assert!(
+        !outside.path().join("new/file.txt").exists(),
+        "file must not exist outside workspace"
+    );
+}
+
+#[tokio::test]
+async fn read_tool_rejects_symlink_escape_via_new_subpath() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+
+    let link = workspace.path().join("link");
+    if !create_dir_link(&link, outside.path()) {
+        eprintln!("skipping: could not create directory link");
+        return;
+    }
+
+    let tool = ReadTool::new(workspace.path().to_path_buf());
+    let result = tool
+        .execute(
+            "symlink-escape-2",
+            json!({ "path": "link/new/file.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        result.is_error,
+        "should reject symlink escape, got: {:?}",
+        tool_result_text(&result)
+    );
+    let text = tool_result_text(&result);
+    assert!(
+        text.contains("outside the workspace"),
+        "error should mention workspace boundary, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn edit_tool_rejects_symlink_escape_via_new_subpath() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+
+    let link = workspace.path().join("link");
+    if !create_dir_link(&link, outside.path()) {
+        eprintln!("skipping: could not create directory link");
+        return;
+    }
+
+    let tool = EditTool::new(workspace.path().to_path_buf());
+    let result = tool
+        .execute(
+            "symlink-escape-3",
+            json!({
+                "path": "link/new/file.txt",
+                "old_string": "x",
+                "new_string": "y"
+            }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        result.is_error,
+        "should reject symlink escape, got: {:?}",
+        tool_result_text(&result)
+    );
+    let text = tool_result_text(&result);
+    assert!(
+        text.contains("outside the workspace"),
+        "error should mention workspace boundary, got: {text}"
+    );
 }
 
 // ---------------------------------------------------------------------------

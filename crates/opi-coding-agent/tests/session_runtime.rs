@@ -715,11 +715,17 @@ fn open_existing_preserves_kept_tail_after_compaction() {
     let kept = resumed.compaction_entries();
     assert_eq!(
         kept.len(),
-        1,
-        "kept tail (msg-2) must survive resume after Compaction; got {} entries",
+        2,
+        "entries should be [summary, msg-2] after resume with Compaction; got {} entries",
         kept.len(),
     );
-    assert_eq!(kept[0].id, "msg-2");
+    // First entry is the compaction summary.
+    assert!(matches!(
+        &kept[0].message,
+        AgentMessage::CompactionSummary(_)
+    ));
+    // Second entry is the kept tail.
+    assert_eq!(kept[1].id, "msg-2");
 }
 
 // ---------------------------------------------------------------------------
@@ -1297,7 +1303,11 @@ fn open_existing_replays_usage_from_assistant_messages() {
     .unwrap();
 
     let usage = resumed.usage();
-    assert_eq!(usage.turn_count(), 2, "should count 2 assistant messages");
+    assert_eq!(
+        usage.turn_count(),
+        1,
+        "should count 1 user message as 1 turn, not 2 assistant messages"
+    );
     assert_eq!(
         usage.total_input_tokens(),
         300,

@@ -22,10 +22,12 @@ fn main() {
     ) {
         Ok((true, Some(session))) => {
             let msgs = opi_coding_agent::session_cli::reconstruct_context(&session.entries);
+            let original_cwd = std::path::PathBuf::from(&session.header.cwd);
             let info = ResumeInfo {
                 path: session.path,
                 session_id: session.header.id,
                 entries: session.entries,
+                original_cwd,
             };
             (Some(msgs), Some(info))
         }
@@ -38,7 +40,10 @@ fn main() {
         cli_model: cli.model.clone(),
         config_path: cli.config.clone(),
         env_model: std::env::var("OPI_MODEL").ok(),
-        project_dir: std::env::current_dir().ok(),
+        project_dir: resume_info
+            .as_ref()
+            .map(|info| info.original_cwd.clone())
+            .or_else(|| std::env::current_dir().ok()),
         user_config_path: None,
     }) {
         Ok(c) => c,
@@ -118,11 +123,16 @@ async fn run_non_interactive(
                 }
             });
 
+    let workspace_root = resume_info
+        .as_ref()
+        .map(|info| info.original_cwd.clone())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
     let mut runner = NonInteractiveRunner::new_with_resume(
         provider,
         config.defaults.model.clone(),
         config.clone(),
-        std::env::current_dir().unwrap_or_default(),
+        workspace_root,
         allow_mutating,
         user_system_prompt,
         resumed_messages.unwrap_or_default(),
@@ -174,11 +184,16 @@ async fn run_interactive(
 
     let hooks = Box::new(InteractiveCodingHooks::new(allow_mutating));
     let initial_messages = resumed_messages.unwrap_or_default();
+    let workspace_root = resume_info
+        .as_ref()
+        .map(|info| info.original_cwd.clone())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
     let harness = CodingHarness::new_with_hooks_and_resume(
         provider,
         config.defaults.model.clone(),
         config.clone(),
-        std::env::current_dir().unwrap_or_default(),
+        workspace_root,
         hooks,
         user_system_prompt,
         initial_messages,

@@ -25,6 +25,9 @@ pub struct ResumeInfo {
     pub path: PathBuf,
     pub session_id: String,
     pub entries: Vec<opi_agent::session::SessionEntry>,
+    /// The workspace cwd recorded in the session header. Used to restore the
+    /// correct workspace root when resuming from a different directory.
+    pub original_cwd: PathBuf,
 }
 
 /// Harness wiring config, tools, system prompt, hooks, and Agent.
@@ -126,10 +129,17 @@ impl CodingHarness {
             agent.set_initial_messages(initial_messages);
         }
 
-        let cwd = std::env::current_dir()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let cwd = if let Some(ref info) = resume {
+            // When resuming, use the workspace cwd from the session header so
+            // tools operate in the correct workspace even if the process was
+            // launched from a different directory.
+            info.original_cwd.to_string_lossy().into_owned()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
         let compaction_config = opi_agent::compaction::CompactionConfig {
             enabled: config.compaction.enabled,
             threshold_tokens: config.compaction.threshold_tokens,
