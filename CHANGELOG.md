@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-25
+
+Phase 2 hardening: multi-provider support (6 LLM providers), session
+persistence, context compaction, configurable TUI, and cost tracking.
+
+### Added
+
+- `opi-ai`: OpenAI-compatible chat provider with SSE streaming
+- `opi-ai`: OpenAI Responses API provider with streaming
+- `opi-ai`: Google Gemini provider with HTTP streaming
+- `opi-ai`: Mistral provider profile
+- `opi-ai`: OpenRouter provider profile
+- `opi-ai`: retry/backoff/rate-limit support with configurable strategies
+- `opi-ai`: usage accumulation and cost tracking across turns
+- `opi-agent`: session v1 JSONL storage for conversation persistence
+- `opi-agent`: compaction engine with trigger and hook support
+- `opi-agent`: thinking config passed through to provider requests
+- `opi-agent`: enhanced event handling and message management
+- `opi-coding-agent`: session list/resume/delete CLI flags
+- `opi-coding-agent`: session persistence wired into harness runtime
+- `opi-coding-agent`: compaction wired into session coordinator
+- `opi-coding-agent`: `--json` NDJSON output mode for non-interactive use
+- `opi-coding-agent`: provider factory extended for all 6 providers
+- `opi-coding-agent`: usage accumulation wired to TUI status bar
+- `opi-coding-agent`: edit tool captures before/after content
+- `opi-coding-agent`: workspace path validation for all tools
+- `opi-tui`: configurable keybindings with TOML parsing
+- `opi-tui`: Theme struct with default and monokai palettes
+- `opi-tui`: DiffView widget for edit/patch visualization
+
+### Fixed
+
+- Session runtime tests serialized to avoid env var races
+
 ## [0.2.0] - 2026-05-22
 
 Phase 1 MVP: functional Anthropic-based coding assistant with six tools,
@@ -98,6 +132,7 @@ boundaries; functional implementations land in subsequent releases.
 - This release is published as a GitHub Release only; crates.io publish
   is deferred until the crates have real implementations.
 
+[0.3.0]: https://github.com/OdradekAI/opi/releases/tag/v0.3.0
 [0.2.0]: https://github.com/OdradekAI/opi/releases/tag/v0.2.0
 [0.1.1]: https://github.com/OdradekAI/opi/releases/tag/v0.1.1
 [0.1.0]: https://github.com/OdradekAI/opi/releases/tag/v0.1.0
