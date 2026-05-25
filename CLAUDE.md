@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi) — an AI agent toolkit. Phase 1 MVP shipped in v0.2.0: a functional Anthropic-based coding assistant with six tools, a ratatui TUI, TOML config, and 248 integration/unit tests. New work extends this foundation rather than redesigning the layout.
+`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi) — an AI agent toolkit. v0.3.0 ships a multi-provider coding assistant (Anthropic, OpenAI, OpenAI Responses, OpenRouter, Mistral, Gemini), six built-in tools, a ratatui TUI with configurable keybindings/themes, session JSONL persistence with resume, context compaction, retry/backoff, and cost tracking. New work extends this foundation rather than redesigning the layout.
 
 Repository: https://github.com/OdradekAI/opi
+
+`AGENTS.md` is the Codex-flavored sibling of this file. When project rules change, update both in lockstep to avoid drift.
 
 ## Conversational style
 
@@ -45,12 +47,13 @@ When publishing internal crates, the `path` dependencies MUST also carry a `vers
 
 ## Architecture
 
-The `opi` binary (`opi-coding-agent`) has two modes selected at startup:
+The `opi` binary (`opi-coding-agent`) chooses a mode at startup:
 
-- **Non-interactive** (non-empty positional `[PROMPT]...`, or `--non-interactive`): builds a provider, runs `NonInteractiveRunner::run()`, prints output, exits.
+- **Session commands** (`--list-sessions`, `--resume`, `--delete-session`): handled before any provider is constructed.
+- **Non-interactive** (non-empty positional `[PROMPT]...`, `--non-interactive`, or `--json`): builds a provider, runs `NonInteractiveRunner::run()`, prints output (or NDJSON events with `--json`), exits.
 - **Interactive** (default, no prompt args): builds a `CodingHarness` with `InteractiveCodingHooks`, launches the ratatui-based TUI via `interactive::run_interactive_tui()`.
 
-Both modes use the same core loop from `opi-agent`:
+Both interactive and non-interactive modes use the same core loop from `opi-agent`:
 
 ```
 agent_loop() → stream provider response → detect tool calls → validate schema
@@ -59,12 +62,18 @@ after_tool_call hook → check should_stop_after_turn → poll steering/follow-u
 queues → repeat
 ```
 
-Key abstractions in `opi-agent`:
-- **`AgentHooks`** trait — 6 hook methods: `transform_context`, `convert_to_llm`, `before_tool_call`, `after_tool_call`, `should_stop_after_turn`, `prepare_next_turn`.
-- **`Tool`** trait — `definition()` returns JSON schema, `execute()` runs the tool, `execution_mode()` controls parallel vs sequential batching.
-- **`Transport`** trait — abstraction over stdio/SSE for MCP-style tool servers.
+Six built-in tools in `opi-coding-agent`: `read`, `glob`, `grep` (parallel, read-only) and `write`, `edit`, `bash` (sequential, mutating). All paths are constrained to the harness workspace root. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
 
-Config resolution (model): `--model` > `OPI_MODEL` (only when `--config` was not passed) > `--config` file > project `.opi/config.toml` > user config > built-in defaults. TOML layers merge user → project → `--config`. Model specs use `provider:model` format (e.g. `anthropic:claude-sonnet-4`).
+Key abstractions:
+- **`opi_ai::Provider`** trait — streaming LLM backend; resolved from `provider:model` specs via the registry.
+- **`opi_ai::AssistantStreamEvent`** — provider-neutral stream event model (text, thinking, tool calls, completion, errors).
+- **`opi_agent::AgentHooks`** trait — 6 hook methods: `transform_context`, `convert_to_llm`, `before_tool_call`, `after_tool_call`, `should_stop_after_turn`, `prepare_next_turn`.
+- **`opi_agent::Tool`** trait — `definition()` returns JSON schema, `execute()` runs the tool, `execution_mode()` controls parallel vs sequential batching.
+- **`opi_agent::SessionWriter` / `SessionReader`** — append-only JSONL session storage with crash recovery.
+- **`opi_agent::CompactionEngine`** — threshold/manual/overflow context compaction.
+- **`opi_agent::Transport`** trait — stdio/SSE abstraction reserved for external (MCP-style) tool servers; not wired into the main loop yet.
+
+Config resolution (model): `--model` > `OPI_MODEL` (only when `--config` was not passed) > `--config` file > project `.opi/config.toml` > user config > built-in defaults. TOML layers merge user → project → `--config`. Model specs use `provider:model` format (e.g. `anthropic:claude-sonnet-4-5-20250514`, `openai:gpt-4o`, `gemini:gemini-2.5-flash`).
 
 ## Edition
 
@@ -105,6 +114,12 @@ If you create or modify a test file, you MUST run that test and iterate until it
 - Use `opi_ai::test_support::MockProvider` for agent/harness integration tests — never hit a real LLM API or require API keys in tests.
 - For tool tests that touch the filesystem, use `tempfile::tempdir()` and build fixtures in the temp directory.
 - Run the relevant test after writing it: `cargo test -p <crate> -- <test_name>`.
+
+## Sessions
+
+Sessions are append-only JSONL files written by the coding harness. Default location is `%LOCALAPPDATA%\opi\sessions\` on Windows, `~/.local/share/opi/sessions/` on Unix; override with `OPI_SESSIONS_DIR`. Storage and resume logic lives in `opi-agent::SessionWriter`/`SessionReader`; compaction is in `opi-agent::CompactionEngine`. Session files hold a header plus message, compaction, and leaf entries; resume reconstructs the active branch and honors compaction summaries.
+
+Tests that touch the session dir or `OPI_SESSIONS_DIR` must serialize — parallel env-var mutation has caused flakes before (see CHANGELOG 0.3.0 Fixed).
 
 ## Git rules
 
@@ -186,6 +201,10 @@ Releases go to both **GitHub Releases** and **crates.io** via the `opi-release` 
 - **CI-driven builds** (recommended): Push the tag → `release.yml` builds all 6 platform targets and uploads to the GitHub Release. No local `cross` needed.
 
 The design rationale is in `docs/superpowers/specs/2026-05-19-opi-release-skill-design.md`.
+
+## Implementation workflow
+
+Long-running spec implementations track state in `.opi-impl-state.json` at the repo root, driven by the `opi-implement` skill. Don't delete or hand-edit this file; use the skill's commands to query, advance, or reset progress.
 
 ## CI
 
