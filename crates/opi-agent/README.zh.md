@@ -3,25 +3,23 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-agent.svg)](https://crates.io/crates/opi-agent)
 [![Docs.rs](https://docs.rs/opi-agent/badge.svg)](https://docs.rs/opi-agent)
 
-> [opi](https://github.com/OdradekAI/opi) 的 Agent 运行时 —— 工具调用、Hook 生命周期、消息队列轮询。基于 [pi](https://github.com/earendil-works/pi) agent core 的 Rust 移植。
+> [opi](https://github.com/OdradekAI/opi) 的通用 Agent 运行时：流式 turn、工具调用、hooks、事件、会话与上下文压缩。
 
-[English](README.md) · [← opi](../../README.zh.md)
+[English](README.md) | [opi workspace](../../README.zh.md)
 
----
+## 当前状态
 
-## 当前状态（v0.2.0）
+当前 crate 版本：`0.3.0`。
 
-Phase 1 运行时已经完整：包含一轮完整的 turn 生命周期、工具执行（支持并行 / 串行批次）、参数校验、取消、Hook、steering 与 follow-up 队列。流式 Provider 由 [`opi-ai`](https://crates.io/crates/opi-ai) 提供。
+`opi-agent` 提供 `opi` 二进制使用的 Provider 无关运行时。它负责 turn 主循环、工具参数 JSON Schema 校验、并行/串行工具执行、支持 retry 的 Provider streaming、事件订阅、steering/follow-up 队列、JSONL 会话存储，以及阈值/手动/溢出触发的上下文压缩基础能力。
 
-`Transport` trait 已经预留给 stdio / SSE 类型的工具服务器，但本版本尚未接入主循环。
+`Transport` trait 已作为 stdio/SSE 工具传输抽象存在，但基于外部 transport 的工具服务器尚未接入主循环。
 
 ## 核心抽象
 
-> 下方 Hook 签名为示意；完整类型见 `hooks.rs` 中的 `Pin<Box<dyn Future<...>>>`。
-
 ```rust
 pub trait Tool: Send + Sync {
-    fn definition(&self) -> ToolDef;            // name + JSON Schema
+    fn definition(&self) -> ToolDef;
     fn execute(&self, call_id: &str, args: serde_json::Value,
                signal: CancellationToken,
                on_update: Option<UpdateCallback>) -> ...;
@@ -31,38 +29,68 @@ pub trait Tool: Send + Sync {
 pub trait AgentHooks: Send + Sync {
     async fn transform_context(...) -> Result<Vec<AgentMessage>, AgentError>;
     fn convert_to_llm(...) -> Result<Vec<Message>, AgentError>;
-    async fn before_tool_call(...) -> BeforeToolCallResult;     // Allow | Deny
-    async fn after_tool_call(...) -> AfterToolCallResult;       // Keep | Replace
+    async fn before_tool_call(...) -> BeforeToolCallResult;
+    async fn after_tool_call(...) -> AfterToolCallResult;
     async fn should_stop_after_turn(...) -> bool;
     async fn prepare_next_turn(...) -> Option<PrepareNextTurnUpdate>;
 }
 ```
 
+`Agent` 在主循环外提供 `prompt`、`continue_`、`abort`、`subscribe`、`add_tool` 与消息缓冲区辅助方法。
+
 ## Agent 主循环
 
-```
-agent_loop()
-  ├── 每一轮（直到 max_turns）：
-  │     transform_context  → convert_to_llm  → provider.stream(Request)
-  │     ├── 把 AssistantStreamEvent 累积成 AssistantContent
-  │     ├── 检测工具调用
-  │     │     ├── 用 JSON Schema 校验参数（jsonschema crate）
-  │     │     ├── before_tool_call hook（Allow / Deny）
-  │     │     ├── 执行（全部 Parallel 则并行，任意 Sequential 则串行）
-  │     │     ├── after_tool_call hook（Keep / Replace）
-  │     │     ├── 若所有结果 terminate=true，提前结束
-  │     │     └── should_stop_after_turn → 决定继续还是停止
-  │     └── prepare_next_turn → 可注入额外消息
-  ├── drain steering 队列（模式：All）
-  └── 无待执行工具时，从 follow_up 队列取一条（模式：OneAtATime）
+```text
+agent_loop
+  -> transform_context
+  -> convert_to_llm
+  -> provider.stream(Request)
+  -> 发出并累积 AssistantStreamEvent
+  -> 检测工具调用
+  -> 用 jsonschema 校验参数
+  -> before_tool_call hook
+  -> 执行工具
+     -> 全部是 parallel 工具时一起执行
+     -> 只要有 sequential 工具，整批串行执行
+  -> after_tool_call hook
+  -> 所有工具结果 terminate 时停止
+  -> should_stop_after_turn hook
+  -> prepare_next_turn hook
+  -> drain steering 队列
+  -> 无待执行工具时弹出一条 follow-up 消息
 ```
 
-## 用法示例
+可重试的 Provider 错误（`RateLimited`、`Timeout`）可以通过 `AgentLoopConfig.retry` 自动重试。retry 开始/结束会通过 `AgentEvent` 发出。
+
+## 会话与压缩
+
+会话存储采用 append-only JSONL：
+
+- 第一行：`SessionHeader`。
+- 条目：`MessageEntry`、`CompactionEntry`、`LeafEntry`。
+- Reader 支持崩溃恢复，会跳过损坏条目和末尾截断行。
+
+上下文压缩能力包括：
+
+- `CompactionConfig { enabled, threshold_tokens }`。
+- `CompactionReason::{Manual, Threshold, Overflow}`。
+- `CompactionEngine::should_compact`。
+- `CompactionEngine::compact`。
+- `CompactionHooks` 自定义摘要生成，缺省时使用 core fallback summary。
+
+`opi-coding-agent` 负责把这些基础能力连接到运行时持久化。
+
+## 事件
+
+`AgentEvent` 覆盖 Agent 生命周期、turn 生命周期、消息流式更新、工具执行、队列、自动 retry、压缩、会话持久化错误和 Agent 结束。
+
+`AgentSessionEvent` 是 JSON 输出使用的会话级 wire protocol。它包装 agent events，并增加 compaction、retry、thinking level、session info、session summary 等事件。
+
+## 简短示例
 
 ```rust
-use opi_agent::{Agent, ExecutionMode, Tool, ToolError, ToolResult};
+use opi_agent::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_ai::message::{OutputContent, ToolDef};
-use std::sync::Arc;
 
 struct EchoTool;
 
@@ -70,7 +98,7 @@ impl Tool for EchoTool {
     fn definition(&self) -> ToolDef {
         ToolDef {
             name: "echo".into(),
-            description: "原样回显输入。".into(),
+            description: "原样返回输入。".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": { "text": { "type": "string" } },
@@ -101,23 +129,26 @@ impl Tool for EchoTool {
 }
 ```
 
-再用 `opi_ai::Provider` 和你的 `AgentHooks` 实现，通过 `Agent::new` 构造 Agent，调用 `agent.prompt("...")` 即可。
+创建 `Agent` 时传入 boxed `opi_ai::Provider`、工具列表、模型、可选系统提示词、`AgentLoopConfig` 和 `AgentHooks` 实现即可。
 
 ## 模块速查
 
 | 模块 | 作用 |
 |------|------|
-| `agent` | `Agent` 封装，提供 `prompt` / `continue_` / `abort` / `subscribe` |
-| （根模块 `agent_loop`） | 推动完整对话的异步入口 |
-| `tool` | `Tool` trait、`ToolResult`、`ToolError`、`ExecutionMode` |
-| `hooks` | `AgentHooks` trait 与每个 Hook 的上下文 / 结果类型 |
-| `event` | `AgentEvent`（开始 / 消息 / 工具 / turn / 队列 / 结束） |
-| `state` | `AgentState`（会话状态承载器） |
-| `message` | `AgentMessage`（LLM 消息 + 自定义变体） |
-| `loop_types` | `AgentLoopContext`、`AgentLoopConfig`、`AgentError` |
-| `validation` | 基于 `jsonschema` 的参数校验 |
-| `transport` | `Transport` trait 占位（尚未接入主循环） |
+| `agent` | `Agent` 封装与消息缓冲区管理 |
+| 根模块 `agent_loop` | Provider/tool turn 主循环 |
+| `tool` | `Tool`、`ToolResult`、`ToolError`、`ExecutionMode` |
+| `hooks` | Hook trait 及其上下文/结果类型 |
+| `event` | 运行时事件协议 |
+| `session_event` | JSON 模式使用的会话级事件协议 |
+| `session` | JSONL 会话 header、条目、writer、reader、恢复 |
+| `compaction` | 上下文压缩引擎与 hooks |
+| `state` | 对话状态容器 |
+| `message` | Agent 层消息变体 |
+| `loop_types` | 主循环上下文、配置和错误 |
+| `validation` | JSON Schema 参数校验 |
+| `transport` | 外部工具服务器 transport trait |
 
 ## 许可证
 
-MIT —— 见 workspace 根目录 [`LICENSE`](../../LICENSE)。
+MIT。详见 workspace [LICENSE](../../LICENSE)。

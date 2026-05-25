@@ -1,26 +1,35 @@
 # opi-web-ui
 
-> Placeholder crate in the [opi](https://github.com/OdradekAI/opi) workspace, reserved for web UI components for AI chat interfaces. A Rust port of [pi](https://github.com/earendil-works/pi)'s `pi-web-ui` package will eventually live here.
+> Reserved web UI component crate in the [opi](https://github.com/OdradekAI/opi) workspace.
 
-[简体中文](README.zh.md) · [← opi](../../README.md)
+[Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
----
+## Status
 
-## Status (v0.2.0)
+Current crate version: `0.3.0`.
 
-**Not implemented and not published to crates.io** — the `Cargo.toml` carries
-`publish = false`. The crate exists only to reserve the name and keep the
-workspace layout aligned with upstream `pi`.
+`opi-web-ui` is still a placeholder and is not published to crates.io (`publish = false`). The crate exists to keep the workspace layout stable and reserve the package boundary for future reusable web chat components.
 
-What's currently in the source tree:
+Current source contents:
 
-- `lib.rs` — exports a single `ChatWidget` placeholder struct.
-- `components.rs` — `ChatWidget::new()` / `Default` impl; nothing else.
+- `lib.rs`: module declaration and `ChatWidget` re-export.
+- `components.rs`: empty `ChatWidget` type with `new()` and `Default`.
 
-There are no widgets, no rendering, no HTTP integration, and no tests yet.
-Track progress in the [project changelog](../../CHANGELOG.md) and the
-[opi-spec](../../docs/opi-spec.md).
+There are no real widgets, rendering adapters, HTTP integrations, browser bindings, or tests yet. The crate depends on `opi-ai`, `serde`, `serde_json`, and `thiserror`, but those dependencies are not meaningfully exercised by the placeholder implementation.
+
+## Public API
+
+```rust
+use opi_web_ui::ChatWidget;
+
+let widget = ChatWidget::new();
+let default_widget = ChatWidget::default();
+```
+
+## Roadmap Boundary
+
+Expected future work belongs here only when web-facing reusable components are implemented. The terminal coding agent lives in `opi-coding-agent`; provider and message types live in `opi-ai`.
 
 ## License
 
-MIT — see workspace [`LICENSE`](../../LICENSE).
+MIT. See the workspace [LICENSE](../../LICENSE).

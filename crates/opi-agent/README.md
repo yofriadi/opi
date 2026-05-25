@@ -3,30 +3,23 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-agent.svg)](https://crates.io/crates/opi-agent)
 [![Docs.rs](https://docs.rs/opi-agent/badge.svg)](https://docs.rs/opi-agent)
 
-> Agent runtime — tool calling, hook lifecycle, and queue polling — for [opi](https://github.com/OdradekAI/opi). A Rust port of [pi](https://github.com/earendil-works/pi)'s agent core.
+> General-purpose agent runtime for [opi](https://github.com/OdradekAI/opi): streaming turns, tool calling, hooks, event emission, sessions, and context compaction.
 
-[简体中文](README.zh.md) · [← opi](../../README.md)
+[Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
----
+## Status
 
-## Status (v0.2.0)
+Current crate version: `0.3.0`.
 
-The Phase 1 runtime ships with the full turn lifecycle, tool execution
-(parallel + sequential batching), validated arguments, cancellation, hook
-points, and steering / follow-up message queues. Built on
-[`opi-ai`](https://crates.io/crates/opi-ai) for provider streaming.
+`opi-agent` provides the provider-independent runtime used by the `opi` binary. It handles the turn loop, JSON Schema validation for tools, parallel/sequential tool execution, retry-aware provider streaming, event subscriptions, steering/follow-up queues, JSONL session storage, and threshold/manual/overflow compaction primitives.
 
-The `Transport` trait is reserved for stdio / SSE tool servers but is not yet
-wired into the agent loop.
+The `Transport` trait is available as an abstraction for stdio/SSE tool transports, but external transport-backed tools are not wired into the main loop yet.
 
-## Core abstractions
-
-> Hook signatures below are abbreviated; see `hooks.rs` for the full
-> `Pin<Box<dyn Future<...>>>` return types.
+## Core Abstractions
 
 ```rust
 pub trait Tool: Send + Sync {
-    fn definition(&self) -> ToolDef;            // name + JSON Schema
+    fn definition(&self) -> ToolDef;
     fn execute(&self, call_id: &str, args: serde_json::Value,
                signal: CancellationToken,
                on_update: Option<UpdateCallback>) -> ...;
@@ -36,39 +29,68 @@ pub trait Tool: Send + Sync {
 pub trait AgentHooks: Send + Sync {
     async fn transform_context(...) -> Result<Vec<AgentMessage>, AgentError>;
     fn convert_to_llm(...) -> Result<Vec<Message>, AgentError>;
-    async fn before_tool_call(...) -> BeforeToolCallResult;     // Allow | Deny
-    async fn after_tool_call(...) -> AfterToolCallResult;       // Keep | Replace
+    async fn before_tool_call(...) -> BeforeToolCallResult;
+    async fn after_tool_call(...) -> AfterToolCallResult;
     async fn should_stop_after_turn(...) -> bool;
     async fn prepare_next_turn(...) -> Option<PrepareNextTurnUpdate>;
 }
 ```
 
-## Agent loop
+`Agent` wraps the loop with `prompt`, `continue_`, `abort`, `subscribe`, `add_tool`, and message-buffer helpers.
 
-```
-agent_loop()
-  ├── for each turn (up to max_turns):
-  │     transform_context  → convert_to_llm  → provider.stream(Request)
-  │     ├── accumulate AssistantStreamEvent into AssistantContent
-  │     ├── detect tool calls
-  │     │     ├── validate args against JSON Schema (jsonschema crate)
-  │     │     ├── before_tool_call hook (Allow / Deny)
-  │     │     ├── execute (parallel when all tools are Parallel,
-  │     │     │            sequential if any tool is Sequential)
-  │     │     ├── after_tool_call hook (Keep / Replace)
-  │     │     ├── early stop if ALL results have terminate=true
-  │     │     └── should_stop_after_turn → stop or continue
-  │     └── prepare_next_turn → may inject extra messages
-  ├── drain steering queue (mode: All)
-  └── pop one follow_up message (mode: OneAtATime) when no tools pending
+## Agent Loop
+
+```text
+agent_loop
+  -> transform_context
+  -> convert_to_llm
+  -> provider.stream(Request)
+  -> emit/accumulate AssistantStreamEvent values
+  -> detect tool calls
+  -> validate args with jsonschema
+  -> before_tool_call hook
+  -> execute tools
+     -> all parallel tools run together
+     -> any sequential tool makes the batch sequential
+  -> after_tool_call hook
+  -> stop if all tool results terminate
+  -> should_stop_after_turn hook
+  -> prepare_next_turn hook
+  -> drain steering queue
+  -> pop one follow-up message when no tools are pending
 ```
 
-## Quick example
+Retryable provider errors (`RateLimited`, `Timeout`) can be retried through `AgentLoopConfig.retry`. Retry start/end events are emitted through `AgentEvent`.
+
+## Sessions and Compaction
+
+Session storage uses append-only JSONL:
+
+- First line: `SessionHeader`.
+- Entries: `MessageEntry`, `CompactionEntry`, and `LeafEntry`.
+- Reader supports crash recovery by skipping corrupt entries and truncated trailing lines.
+
+Compaction support includes:
+
+- `CompactionConfig { enabled, threshold_tokens }`.
+- `CompactionReason::{Manual, Threshold, Overflow}`.
+- `CompactionEngine::should_compact`.
+- `CompactionEngine::compact`.
+- `CompactionHooks` for custom summary generation, with a core fallback summary.
+
+`opi-coding-agent` owns the higher-level coordinator that connects these primitives to runtime persistence.
+
+## Events
+
+`AgentEvent` reports agent lifecycle, turn lifecycle, message streaming, tool execution, queues, automatic retries, compaction, session persistence errors, and agent end.
+
+`AgentSessionEvent` is the session-level wire protocol used by JSON output. It wraps agent events and adds compaction, retry, thinking-level, session-info, and session-summary events.
+
+## Quick Example
 
 ```rust
-use opi_agent::{Agent, ExecutionMode, Tool, ToolError, ToolResult};
+use opi_agent::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_ai::message::{OutputContent, ToolDef};
-use std::sync::Arc;
 
 struct EchoTool;
 
@@ -107,24 +129,26 @@ impl Tool for EchoTool {
 }
 ```
 
-Wire it up with an `opi_ai::Provider` and `AgentHooks` impl via `Agent::new`,
-then call `agent.prompt("...")`.
+Create an `Agent` with a boxed `opi_ai::Provider`, tool list, model, optional system prompt, `AgentLoopConfig`, and an `AgentHooks` implementation.
 
 ## Modules
 
 | Module | Purpose |
 |--------|---------|
-| `agent` | `Agent` wrapper with `prompt`, `continue_`, `abort`, `subscribe` |
-| (root `agent_loop`) | Async function that drives one full conversation |
-| `tool` | `Tool` trait, `ToolResult`, `ToolError`, `ExecutionMode` |
-| `hooks` | `AgentHooks` trait + per-hook context / result types |
-| `event` | `AgentEvent` (start / message / tool / turn / queue / end) |
-| `state` | `AgentState` (conversation state holder) |
-| `message` | `AgentMessage` (LLM message + custom variants) |
-| `loop_types` | `AgentLoopContext`, `AgentLoopConfig`, `AgentError` |
-| `validation` | `jsonschema`-backed argument validation |
-| `transport` | Placeholder `Transport` trait (not yet wired in) |
+| `agent` | `Agent` wrapper and message buffer management |
+| root `agent_loop` | Provider/tool turn loop |
+| `tool` | `Tool`, `ToolResult`, `ToolError`, `ExecutionMode` |
+| `hooks` | Hook trait and hook context/result types |
+| `event` | Runtime event protocol |
+| `session_event` | Session-level event protocol for JSON mode |
+| `session` | JSONL session header, entries, writer, reader, recovery |
+| `compaction` | Context compaction engine and hooks |
+| `state` | Conversation state holder |
+| `message` | Agent-level message variants |
+| `loop_types` | Loop context, config, and errors |
+| `validation` | JSON Schema argument validation |
+| `transport` | Transport trait for external tool servers |
 
 ## License
 
-MIT — see workspace [`LICENSE`](../../LICENSE).
+MIT. See the workspace [LICENSE](../../LICENSE).

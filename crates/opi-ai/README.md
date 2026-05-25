@@ -3,56 +3,57 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-ai.svg)](https://crates.io/crates/opi-ai)
 [![Docs.rs](https://docs.rs/opi-ai/badge.svg)](https://docs.rs/opi-ai)
 
-> Provider abstraction with streaming support for [opi](https://github.com/OdradekAI/opi) — a Rust port of [pi](https://github.com/earendil-works/pi).
+> Provider-neutral LLM API for [opi](https://github.com/OdradekAI/opi), with streaming events, tool-call message types, retry helpers, usage accumulation, and cost calculation.
 
-[简体中文](README.zh.md) · [← opi](../../README.md)
+[Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
----
+## Status
 
-## Status (v0.2.0)
+Current crate version: `0.3.0`.
 
-Phase 1 ships a complete streaming pipeline for **Anthropic Messages**. The
-`Provider` trait, registry, message types, and 12-variant
-`AssistantStreamEvent` model are designed to support multiple providers, but
-only Anthropic is wired up in this release. OpenAI, Google, Mistral, Bedrock,
-and Azure providers are reserved on the `ProviderKind` enum and will follow in
-later phases.
+`opi-ai` exposes a common `Provider` trait and provider-neutral message/event model. It includes real streaming implementations for Anthropic, OpenAI Chat Completions, OpenAI Responses, Gemini, plus OpenAI-compatible profiles for OpenRouter and Mistral.
 
-## What's in the box
+## Providers
 
-- **`Provider` trait** — `stream(Request) -> EventStream` with cancellation via
-  `tokio_util::sync::CancellationToken`.
-- **`anthropic`** — Anthropic Messages SSE provider with a hand-written SSE
-  parser that surfaces malformed events (instead of silently dropping them) and
-  handles CRLF line endings.
-- **`registry::ProviderRegistry`** — resolves `provider:model` specs to a
-  `Provider` + `ModelInfo`, plus capability queries (`context_window`,
-  `max_output_tokens`, `supports_streaming`, `supports_thinking`).
-- **`message`** — `Message`, `AssistantMessage`, `UserMessage`,
-  `ToolResultMessage`, `ToolDef`, `ToolCall`, content variants.
-- **`stream::AssistantStreamEvent`** — 12 variants (`Start`, `Text*`, `Thinking*`,
-  `ToolCall*`, `Done`, `Error`); token usage is carried on `Done` via
-  `AssistantMessage`, not as a separate stream event.
-- **`test_support::MockProvider`** — builder-style mock for integration tests
-  (used by `opi-agent` and `opi-coding-agent`).
+| Module | Provider id | API style |
+|--------|-------------|-----------|
+| `anthropic` | `anthropic` | Anthropic Messages SSE |
+| `openai_chat` | `openai` | OpenAI Chat Completions SSE |
+| `openai_responses` | `openai-responses` | OpenAI Responses SSE |
+| `openrouter` | `openrouter` | OpenAI-compatible OpenRouter profile |
+| `mistral` | `mistral` | OpenAI-compatible Mistral profile |
+| `gemini` | `gemini` | Gemini `streamGenerateContent?alt=sse` |
+
+Each provider maps native wire events into `AssistantStreamEvent`, including text deltas, thinking deltas when available, tool-call deltas, terminal completion, and errors.
+
+## Core API
+
+- `Provider`: backend trait with `id()`, `models()`, and `stream(Request) -> EventStream`.
+- `Request`: model, system prompt, messages, tools, token limits, temperature, thinking config, metadata, and cancellation token.
+- `AssistantStreamEvent`: 12 provider-neutral stream variants for start/text/thinking/tool/done/error.
+- `message`: `Message`, `AssistantMessage`, `UserMessage`, `ToolResultMessage`, `ToolDef`, `ToolCall`, and content variants.
+- `registry::ProviderRegistry`: resolves `provider:model` specs and exposes model capabilities.
+- `retry`: retry config, exponential backoff, and retry-after header parsing.
+- `Usage`, `CumulativeUsage`, `Pricing`, `CostBreakdown`, `calculate_cost`: token and cost helpers.
+- `test_support::MockProvider`: builder-style mock provider used by downstream tests.
 
 ## Usage
 
 ```rust
+use futures_util::StreamExt;
 use opi_ai::anthropic::AnthropicProvider;
 use opi_ai::message::{InputContent, Message, UserMessage};
 use opi_ai::provider::{Provider, Request, ThinkingConfig};
 use tokio_util::sync::CancellationToken;
-use futures_util::StreamExt;
 
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 let provider = AnthropicProvider::new(
     std::env::var("ANTHROPIC_API_KEY")?,
-    None, // default base URL
+    None,
 );
 
 let request = Request {
-    model: "claude-sonnet-4".into(),
+    model: "claude-sonnet-4-5-20250514".into(),
     system: Some("You are concise.".into()),
     messages: vec![Message::User(UserMessage {
         content: vec![InputContent::Text { text: "Hi".into() }],
@@ -78,15 +79,20 @@ while let Some(event) = stream.next().await {
 
 | Module | Purpose |
 |--------|---------|
-| `provider` | `Provider` trait, `Request`, `EventStream`, `ModelInfo`, `ProviderError`, `ProviderKind` |
-| `anthropic` | Anthropic SSE provider, SSE parser, event mapper |
-| `registry` | `provider:model` spec resolution and capability lookup |
-| `message` | LLM message types and tool-call types |
-| `stream` | `AssistantStreamEvent`, `StopReason`, `Usage` |
-| `model` | `Model` re-export |
-| `config` | `Config` and `Error` (shared with downstream crates) |
-| `test_support` | Mock provider for tests (`#[doc(hidden)]`) |
+| `provider` | `Provider`, `Request`, `EventStream`, `ModelInfo`, `ProviderError`, `ProviderKind` |
+| `message` | Provider-facing messages and tool-call content |
+| `stream` | Stream events, stop reasons, usage, cumulative usage, pricing helpers |
+| `registry` | `provider:model` resolution and capability lookup |
+| `retry` | Retry/backoff/rate-limit helpers |
+| `anthropic` | Anthropic Messages provider and SSE mapper |
+| `openai_chat` | OpenAI-compatible Chat Completions provider and compatibility profile adapter |
+| `openai_responses` | OpenAI Responses provider |
+| `openrouter` | OpenRouter provider profile |
+| `mistral` | Mistral provider profile |
+| `gemini` | Gemini provider |
+| `config` | Shared config error type |
+| `test_support` | Hidden mock provider for tests |
 
 ## License
 
-MIT — see workspace [`LICENSE`](../../LICENSE).
+MIT. See the workspace [LICENSE](../../LICENSE).

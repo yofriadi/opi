@@ -3,103 +3,213 @@
 [![CI](https://github.com/OdradekAI/opi/actions/workflows/ci.yml/badge.svg)](https://github.com/OdradekAI/opi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> AI agent toolkit in Rust — a port of [earendil-works/pi](https://github.com/earendil-works/pi) focused on a minimal terminal coding agent.
+> AI agent toolkit in Rust, reimplementing ideas from [earendil-works/pi](https://github.com/earendil-works/pi) as a terminal-first coding agent and reusable agent crates.
 
-[简体中文](README.zh.md) · [Changelog](CHANGELOG.md) · [Spec](docs/opi-spec.md)
-
----
+[Simplified Chinese](README.zh.md) | [Changelog](CHANGELOG.md) | [Spec](docs/opi-spec.md)
 
 ## Status
 
-Phase 1 MVP (`v0.2.0`). Functional Anthropic-based coding assistant with six built-in tools, a ratatui-based TUI, TOML configuration, and a mock-provider test harness (248 unit/integration tests). Other LLM providers, sub-agents, sessions, MCP transport, and the web UI are not implemented yet — see [Roadmap](#roadmap).
+Current workspace version: `0.3.0`.
+
+`opi` now has a working coding-agent binary, six built-in tools, a ratatui TUI, non-interactive stdout and NDJSON modes, TOML configuration, multi-provider streaming, session persistence, context compaction, retry/backoff support, configurable keybindings/themes, usage accumulation, and best-effort cost tracking.
+
+The web UI crate still exists as a reserved placeholder and is not published to crates.io.
 
 ## Workspace
 
-Cargo workspace with **lockstep versioning** — every crate shares the same version from `[workspace.package]`.
+Cargo workspace with lockstep versioning: every crate inherits `version`, `edition`, `license`, `repository`, and `authors` from `[workspace.package]`.
 
-| Crate | crates.io | Description |
+| Crate | Published | Description |
 |-------|-----------|-------------|
-| [`opi-ai`](crates/opi-ai) | published | Provider abstraction + Anthropic SSE streaming |
-| [`opi-agent`](crates/opi-agent) | published | Agent runtime: tool calling, hooks, queue polling |
-| [`opi-tui`](crates/opi-tui) | published | Terminal UI widgets (message list, editor, markdown, status bar, tool view) |
-| [`opi-coding-agent`](crates/opi-coding-agent) | published | The `opi` binary — interactive & non-interactive coding agent |
-| [`opi-web-ui`](crates/opi-web-ui) | `publish = false` | Reserved namespace; not implemented |
+| [`opi-ai`](crates/opi-ai) | yes | Multi-provider LLM API, streaming events, registry, retry, usage, cost helpers |
+| [`opi-agent`](crates/opi-agent) | yes | Agent loop, tool execution, hooks, events, sessions, compaction, transport trait |
+| [`opi-tui`](crates/opi-tui) | yes | Ratatui widgets, diff view, themes, keybindings |
+| [`opi-coding-agent`](crates/opi-coding-agent) | yes | The `opi` binary and embeddable coding harness |
+| [`opi-web-ui`](crates/opi-web-ui) | no (`publish = false`) | Reserved web chat component crate |
 
-Dependency order (also the publish order):
+Internal dependency flow:
 
-```
-opi-ai      ─┬─→ opi-agent ─┐
-             │              ├─→ opi-coding-agent  ──╮
-opi-tui ─────┴──────────────┘                       │
-opi-web-ui ──→ opi-ai                               │
-                                                    └→  opi  binary
+```text
+opi-ai
+  -> opi-agent
+  -> opi-web-ui
+
+opi-tui
+
+opi-ai + opi-agent + opi-tui
+  -> opi-coding-agent
+     -> opi binary
 ```
 
 ## Install
 
-The binary is named `opi`, produced by the `opi-coding-agent` crate.
+The executable is named `opi` and is produced by the `opi-coding-agent` crate.
 
 ```sh
 cargo install opi-coding-agent
 opi --version
 ```
 
-Pre-built binaries for Linux, macOS, and Windows (x64 + arm64) are attached to each [GitHub Release](https://github.com/OdradekAI/opi/releases).
+Pre-built binaries for Linux, macOS, and Windows (x64 and arm64) are attached to each [GitHub Release](https://github.com/OdradekAI/opi/releases).
 
-## Quick start
+## Quick Start
+
+Set an API key for the provider you want to use:
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
+# or OPENAI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, GEMINI_API_KEY
+```
 
-# Interactive TUI
+Run the interactive TUI:
+
+```sh
 opi
-
-# Non-interactive (positional prompt → stdout → exit)
-opi "List the Rust files in this directory."
 ```
 
-Only `anthropic:<model>` specs work in v0.2.0. The default is `anthropic:claude-sonnet-4`. Override per invocation:
+Run a single prompt and print assistant text to stdout:
 
 ```sh
-opi -m anthropic:claude-opus-4 "Explain src/main.rs"
+opi "List the Rust crates in this workspace."
 ```
 
-Or via `OPI_MODEL`, `--config`, a project `.opi/config.toml`, or a user config file. Model precedence: **`--model` > `OPI_MODEL` (only without `--config`) > `--config` file > project > user > defaults** (see [`opi-coding-agent`](crates/opi-coding-agent/README.md)).
-
-## Built-in tools
-
-The agent ships with six tools, exposed via the `Tool` trait from `opi-agent`:
-
-| Tool | Purpose | Mutating? |
-|------|---------|-----------|
-| `read` | Read file content with optional line range | no |
-| `glob` | List files matching a glob (gitignore-aware) | no |
-| `grep` | Search file contents (gitignore-aware) | no |
-| `write` | Create or overwrite a file | yes |
-| `edit` | Apply an exact string replacement | yes |
-| `bash` | Execute a shell command with a timeout | yes |
-
-In non-interactive mode, mutating tools require `--allow-mutating` (or `defaults.allow_mutating_tools = true` in config). In interactive mode, the TUI prompts for confirmation.
-
-## Build from source
-
-Workspace is on **Rust edition 2024**, so you need a toolchain ≥ 1.85.
+Emit newline-delimited JSON events for automation:
 
 ```sh
-# build everything
+opi --json "Summarize the latest session state."
+```
+
+Pick a model with `provider:model` syntax:
+
+```sh
+opi -m anthropic:claude-sonnet-4-5-20250514 "Explain crates/opi-agent/src/lib.rs"
+opi -m openai:gpt-4o "Review the public API shape."
+opi -m openai-responses:gpt-4o-mini "Find small documentation gaps."
+opi -m openrouter:openai/gpt-4o-mini "List TODO comments."
+opi -m mistral:codestral-latest "Explain the tool modules."
+opi -m gemini:gemini-2.5-flash "Summarize the README files."
+```
+
+## Supported Providers
+
+Provider support is implemented in `opi-ai` and wired into `opi-coding-agent`.
+
+| Provider spec prefix | API key env default | Notes |
+|----------------------|---------------------|-------|
+| `anthropic:` | `ANTHROPIC_API_KEY` | Anthropic Messages API with thinking support |
+| `openai:` | `OPENAI_API_KEY` | OpenAI Chat Completions compatible streaming |
+| `openai-responses:` | `OPENAI_API_KEY` | OpenAI Responses API streaming |
+| `openrouter:` | `OPENROUTER_API_KEY` | OpenAI-compatible OpenRouter profile |
+| `mistral:` | `MISTRAL_API_KEY` | OpenAI-compatible Mistral profile |
+| `gemini:` | `GEMINI_API_KEY` | Gemini `streamGenerateContent` SSE |
+
+## Built-in Tools
+
+Tools are implemented by `opi-coding-agent` and exposed through the `opi-agent::Tool` trait.
+
+| Tool | Args | Execution | Mutating |
+|------|------|-----------|----------|
+| `read` | `path`, optional `offset`, `limit` | parallel | no |
+| `glob` | `pattern` | parallel | no |
+| `grep` | `pattern` | parallel | no |
+| `write` | `path`, `content` | sequential | yes |
+| `edit` | `path`, `old_string`, `new_string` | sequential | yes |
+| `bash` | `command`, optional `timeout_secs` | sequential | yes |
+
+All paths are constrained to the harness workspace root. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
+
+## Configuration
+
+Config resolution merges user config, project config, and explicit config files. Model precedence is:
+
+1. `--model`
+2. `OPI_MODEL` when `--config` was not passed
+3. `model` in `--config <FILE>`
+4. `<CWD>/.opi/config.toml`
+5. User config (`%APPDATA%\opi\config.toml` on Windows, `~/.config/opi/config.toml` on Unix)
+6. Built-in defaults
+
+Example:
+
+```toml
+[defaults]
+model = "anthropic:claude-sonnet-4-5-20250514"
+max_iterations = 50
+tool_timeout_ms = 30000
+theme = "default"
+allow_mutating_tools = false
+
+[thinking]
+enabled = true
+budget_tokens = 10000
+
+[retry]
+max_attempts = 3
+initial_delay_ms = 1000
+max_delay_ms = 60000
+
+[compaction]
+enabled = true
+threshold_tokens = 100000
+
+[keybindings]
+submit = "enter"
+abort = "escape"
+new_line = "alt+enter"
+
+[providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+# base_url = "https://api.anthropic.com"
+
+[providers.openai]
+api_key_env = "OPENAI_API_KEY"
+
+[providers.openai_responses]
+api_key_env = "OPENAI_API_KEY"
+
+[providers.openrouter]
+api_key_env = "OPENROUTER_API_KEY"
+# referer = "https://example.com"
+
+[providers.mistral]
+api_key_env = "MISTRAL_API_KEY"
+
+[providers.gemini]
+api_key_env = "GEMINI_API_KEY"
+```
+
+## Sessions
+
+Sessions are JSONL files written automatically by the coding harness.
+
+Default location:
+
+- Windows: `%LOCALAPPDATA%\opi\sessions\`
+- Unix: `~/.local/share/opi/sessions/`
+
+Override with `OPI_SESSIONS_DIR`.
+
+```sh
+opi --list-sessions
+opi --resume <session-id> "Continue from this session."
+opi --delete-session <session-id>
+```
+
+Session files store a header plus message, compaction, and leaf entries. Resume reconstructs the active branch and honors compaction summaries. `--json` emits session events, retry events, compaction events, and a final session summary with token totals and optional cost totals.
+
+## Build From Source
+
+The workspace uses Rust edition 2024, requiring Rust 1.85 or newer.
+
+```sh
 cargo build
 cargo build --release
 
-# run the CLI without installing
 cargo run -p opi-coding-agent -- --help
 
-# run the test suite (248 tests across the workspace)
 cargo test --workspace --all-targets
-
-# single crate
 cargo test -p opi-ai
 
-# the gates CI enforces
 cargo fmt --check --all
 cargo clippy --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
@@ -107,58 +217,65 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 ## Architecture
 
-The `opi` binary picks one of two paths at startup:
+`opi` chooses a mode at startup:
 
-- **Non-interactive** (non-empty positional `[PROMPT]...`, or `--non-interactive`): builds a provider, runs `NonInteractiveRunner::run()`, prints captured stdout/stderr, exits with a numeric code (`0` success, `1` runtime, `2` config, `3` auth, `4` provider, `5` tool, `130` interrupted).
-- **Interactive** (default): builds a `CodingHarness` with `InteractiveCodingHooks` and runs the ratatui TUI.
+- Non-interactive: positional prompt, `--non-interactive`, or `--json`; builds a provider and runs `NonInteractiveRunner`.
+- Interactive: default with no prompt; builds `CodingHarness` with interactive hooks and launches the ratatui TUI.
+- Session commands: `--list-sessions`, `--resume`, and `--delete-session` are handled before provider construction.
 
-Both paths drive the same core loop in `opi-agent::agent_loop`:
+Both interactive and non-interactive modes use the same agent loop:
 
-```
-transform_context → convert_to_llm → provider.stream(Request) → SSE/tool events
-   → validate args (jsonschema) → before_tool_call → execute (parallel/sequential)
-   → after_tool_call → should_stop_after_turn → poll steering / follow-up → repeat
+```text
+transform_context
+  -> convert_to_llm
+  -> provider.stream(Request)
+  -> accumulate assistant stream events
+  -> detect tool calls
+  -> validate JSON Schema args
+  -> before_tool_call
+  -> execute tools in parallel or sequential batches
+  -> after_tool_call
+  -> should_stop_after_turn
+  -> prepare_next_turn
+  -> poll steering/follow-up queues
 ```
 
 Key abstractions:
 
-- **`opi_ai::Provider`** — `stream(Request) -> EventStream` of `AssistantStreamEvent`s; cancellation via `tokio_util::sync::CancellationToken`.
-- **`opi_agent::Tool`** — `definition()` returns a JSON Schema; `execute()` runs the tool; `execution_mode()` controls parallel-vs-sequential batching.
-- **`opi_agent::AgentHooks`** — six hook methods: `transform_context`, `convert_to_llm`, `before_tool_call`, `after_tool_call`, `should_stop_after_turn`, `prepare_next_turn`.
-- **`opi_agent::Transport`** — placeholder trait for stdio/SSE tool transport; not wired into the loop yet.
+- `opi_ai::Provider`: streaming LLM backend interface.
+- `opi_ai::AssistantStreamEvent`: provider-neutral stream event model for text, thinking, tool calls, completion, and errors.
+- `opi_agent::Tool`: JSON Schema based tool contract with parallel/sequential execution modes.
+- `opi_agent::AgentHooks`: lifecycle hooks around message conversion, tool policy, tool results, stopping, and next-turn preparation.
+- `opi_agent::SessionWriter` / `SessionReader`: append-only JSONL session storage with crash recovery.
+- `opi_agent::CompactionEngine`: threshold/manual/overflow compaction support.
+- `opi_agent::Transport`: stdio/SSE transport abstraction reserved for external tool servers; not wired into the main loop yet.
 
-The full specification lives in [`docs/opi-spec.md`](docs/opi-spec.md).
+## Still Not Implemented
 
-## Roadmap
-
-Phase 1 (✅ shipped in 0.2.0):
-- Anthropic provider, `Tool` + `AgentHooks` traits, agent loop, six tools, basic TUI, TOML config.
-
-Not yet implemented:
-- Other providers (OpenAI, Google, Mistral, Bedrock, Azure) — `ProviderKind` / `ApiKind` are reserved on the registry and message types; only Anthropic is wired up.
-- Persistent sessions, branching, compaction.
-- Sub-agents, skills, prompt templates, MCP transport.
-- `opi-web-ui` (currently a stub with `publish = false`).
-- Subscription / OAuth flows (`/login`).
+- Sub-agents and skills.
+- Prompt template registry.
+- MCP tool server integration through `Transport`.
+- OAuth or subscription login flows.
+- Real web UI widgets in `opi-web-ui`.
 
 ## Releasing
 
-Releases publish to both **GitHub Releases** and **crates.io** in a single workflow driven by the `opi-release` skill (`.claude/skills/opi-release/skill.md`). Highlights:
+Releases publish to GitHub Releases and crates.io with the `opi-release` skill (`.claude/skills/opi-release/skill.md`).
 
-- All crates publish at the same version, in dependency order, computed dynamically from `cargo metadata`.
-- Tag push (`v*`) triggers [`release.yml`](.github/workflows/release.yml), which builds six platform targets and uploads them to the release.
-- Rollback is performed via `git revert` + tag deletion; never `git reset --hard` + `git push --force`.
+- All publishable crates use the same version.
+- Publish order follows internal dependencies.
+- Pushing a `v*` tag triggers `.github/workflows/release.yml`.
+- Rollback uses `git revert` and tag deletion, never history rewriting.
 
 ## Contributing
 
-Project conventions:
+- Use Conventional Commits.
+- Keep crate metadata inherited from `[workspace.package]`.
+- Run `cargo fmt --check --all`, `cargo clippy --workspace --all-targets -- -D warnings`, tests, and docs as appropriate.
+- See `AGENTS.md` for the repository working rules used by humans and agents.
 
-- Conventional Commits (`feat:` → Added, `fix:` → Fixed, `feat!:` / `BREAKING CHANGE` → Breaking).
-- Each crate inherits `description`, `license`, and `repository` from `[workspace.package]` — don't duplicate per crate.
-- See [`CLAUDE.md`](CLAUDE.md) for the rules followed by both humans and agents working in this repo.
-
-Bug reports and PRs welcome at <https://github.com/OdradekAI/opi/issues>.
+Bug reports and PRs are welcome at <https://github.com/OdradekAI/opi/issues>.
 
 ## License
 
-MIT © OdradekAI. See [`LICENSE`](LICENSE).
+MIT (c) OdradekAI. See [LICENSE](LICENSE).

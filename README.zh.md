@@ -3,103 +3,213 @@
 [![CI](https://github.com/OdradekAI/opi/actions/workflows/ci.yml/badge.svg)](https://github.com/OdradekAI/opi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> Rust 编写的 AI Agent 工具包 —— [earendil-works/pi](https://github.com/earendil-works/pi) 的精简移植，目标是一个最小化的终端编码 Agent。
+> Rust 编写的 AI Agent 工具包，将 [earendil-works/pi](https://github.com/earendil-works/pi) 的思路重新实现为终端优先的编程 Agent 与可复用 Agent crate。
 
-[English](README.md) · [更新日志](CHANGELOG.md) · [技术规范](docs/opi-spec.zh.md)
-
----
+[English](README.md) | [更新日志](CHANGELOG.md) | [技术规范](docs/opi-spec.zh.md)
 
 ## 当前状态
 
-Phase 1 MVP（`v0.2.0`）。已完成基于 Anthropic 的可用编码助手，自带六个内置工具、基于 ratatui 的 TUI、TOML 配置体系，以及一套 Mock Provider 测试夹具（覆盖 248 个单测/集成测试）。其他 LLM 提供方、子 Agent、会话持久化、MCP 传输、Web UI 等尚未实现，详见下方 [路线图](#路线图)。
+当前 workspace 版本：`0.3.0`。
 
-## 工作区布局
+`opi` 现在包含可用的编程 Agent 二进制、6 个内置工具、ratatui TUI、非交互 stdout 模式、NDJSON 模式、TOML 配置、多 Provider 流式接入、会话持久化、上下文压缩、retry/backoff、可配置按键与主题、用量累计，以及尽力而为的费用估算。
 
-Cargo workspace，所有 crate 在 `[workspace.package]` 中**统一版本号**。
+`opi-web-ui` 仍是预留占位 crate，不会发布到 crates.io。
 
-| Crate | crates.io | 说明 |
-|-------|-----------|------|
-| [`opi-ai`](crates/opi-ai) | 已发布 | Provider 抽象 + Anthropic SSE 流式接入 |
-| [`opi-agent`](crates/opi-agent) | 已发布 | Agent 运行时：工具调用、Hook、消息队列轮询 |
-| [`opi-tui`](crates/opi-tui) | 已发布 | 终端 UI 组件（消息列表、编辑器、Markdown、状态栏、工具视图） |
-| [`opi-coding-agent`](crates/opi-coding-agent) | 已发布 | `opi` 二进制 —— 交互式 / 非交互式编码 Agent |
-| [`opi-web-ui`](crates/opi-web-ui) | `publish = false` | 占位 crate，尚未实现 |
+## 工作区
 
-依赖关系（同时也是 crates.io 发布顺序）：
+Cargo workspace 采用锁步版本：所有 crate 都从 `[workspace.package]` 继承 `version`、`edition`、`license`、`repository` 和 `authors`。
 
-```
-opi-ai      ─┬─→ opi-agent ─┐
-             │              ├─→ opi-coding-agent  ──╮
-opi-tui ─────┴──────────────┘                       │
-opi-web-ui ──→ opi-ai                               │
-                                                    └→  opi  二进制
+| Crate | 是否发布 | 说明 |
+|-------|----------|------|
+| [`opi-ai`](crates/opi-ai) | 是 | 多 Provider LLM API、流式事件、注册表、重试、用量与费用工具 |
+| [`opi-agent`](crates/opi-agent) | 是 | Agent 主循环、工具执行、hooks、事件、会话、压缩、transport trait |
+| [`opi-tui`](crates/opi-tui) | 是 | Ratatui 组件、diff 视图、主题、按键绑定 |
+| [`opi-coding-agent`](crates/opi-coding-agent) | 是 | `opi` 二进制与可嵌入的编程 harness |
+| [`opi-web-ui`](crates/opi-web-ui) | 否（`publish = false`） | 预留的 Web 聊天组件 crate |
+
+内部依赖关系：
+
+```text
+opi-ai
+  -> opi-agent
+  -> opi-web-ui
+
+opi-tui
+
+opi-ai + opi-agent + opi-tui
+  -> opi-coding-agent
+     -> opi binary
 ```
 
 ## 安装
 
-可执行文件名为 `opi`，由 `opi-coding-agent` crate 构建产出。
+可执行文件名是 `opi`，由 `opi-coding-agent` crate 产出。
 
 ```sh
 cargo install opi-coding-agent
 opi --version
 ```
 
-每个 [GitHub Release](https://github.com/OdradekAI/opi/releases) 都附带了 Linux、macOS、Windows（x64 + arm64）的预编译二进制。
+每个 [GitHub Release](https://github.com/OdradekAI/opi/releases) 都附带 Linux、macOS、Windows 的 x64 与 arm64 预编译二进制。
 
-## 快速上手
+## 快速开始
+
+先设置要使用的 Provider API key：
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
-
-# 交互式 TUI
-opi
-
-# 非交互模式（位置参数提示词 → 输出到 stdout → 退出）
-opi "列出当前目录下的 Rust 文件。"
+# 或 OPENAI_API_KEY、OPENROUTER_API_KEY、MISTRAL_API_KEY、GEMINI_API_KEY
 ```
 
-v0.2.0 只支持 `anthropic:<model>` 形式的 model spec，默认值为 `anthropic:claude-sonnet-4`。可按需覆盖：
+启动交互式 TUI：
 
 ```sh
-opi -m anthropic:claude-opus-4 "解释一下 src/main.rs"
+opi
 ```
 
-也可以通过 `OPI_MODEL`、`--config`、项目级 `.opi/config.toml`、用户级配置文件来设置。模型优先级：**`--model` > `OPI_MODEL`（未传 `--config` 时）> `--config` 文件 > 项目配置 > 用户配置 > 内置默认**（详见 [`opi-coding-agent`](crates/opi-coding-agent/README.zh.md)）。
+运行单次提示词，并把助手文本输出到 stdout：
+
+```sh
+opi "列出这个 workspace 里的 Rust crate。"
+```
+
+为自动化流程输出 newline-delimited JSON 事件：
+
+```sh
+opi --json "总结最新会话状态。"
+```
+
+使用 `provider:model` 语法指定模型：
+
+```sh
+opi -m anthropic:claude-sonnet-4-5-20250514 "解释 crates/opi-agent/src/lib.rs"
+opi -m openai:gpt-4o "检查公共 API 形态。"
+opi -m openai-responses:gpt-4o-mini "找出小的文档缺口。"
+opi -m openrouter:openai/gpt-4o-mini "列出 TODO 注释。"
+opi -m mistral:codestral-latest "解释工具模块。"
+opi -m gemini:gemini-2.5-flash "总结 README 文件。"
+```
+
+## 支持的 Provider
+
+Provider 在 `opi-ai` 中实现，并已接入 `opi-coding-agent`。
+
+| Provider spec 前缀 | 默认 API key 环境变量 | 说明 |
+|--------------------|-----------------------|------|
+| `anthropic:` | `ANTHROPIC_API_KEY` | Anthropic Messages API，支持 thinking |
+| `openai:` | `OPENAI_API_KEY` | OpenAI Chat Completions 兼容流式接口 |
+| `openai-responses:` | `OPENAI_API_KEY` | OpenAI Responses API 流式接口 |
+| `openrouter:` | `OPENROUTER_API_KEY` | OpenAI-compatible OpenRouter profile |
+| `mistral:` | `MISTRAL_API_KEY` | OpenAI-compatible Mistral profile |
+| `gemini:` | `GEMINI_API_KEY` | Gemini `streamGenerateContent` SSE |
 
 ## 内置工具
 
-Agent 通过 `opi-agent` 的 `Tool` trait 暴露 6 个工具：
+工具由 `opi-coding-agent` 实现，并通过 `opi-agent::Tool` trait 暴露。
 
-| 工具 | 用途 | 是否修改文件系统 |
-|------|------|------------------|
-| `read` | 读取文件，支持指定行区间 | 否 |
-| `glob` | 按 glob 列出文件（遵循 .gitignore） | 否 |
-| `grep` | 在文件内容中搜索（遵循 .gitignore） | 否 |
-| `write` | 新建或覆盖文件 | 是 |
-| `edit` | 精确字符串替换 | 是 |
-| `bash` | 在限定超时内执行 shell 命令 | 是 |
+| 工具 | 参数 | 执行模式 | 是否修改 |
+|------|------|----------|----------|
+| `read` | `path`，可选 `offset`、`limit` | 并行 | 否 |
+| `glob` | `pattern` | 并行 | 否 |
+| `grep` | `pattern` | 并行 | 否 |
+| `write` | `path`、`content` | 串行 | 是 |
+| `edit` | `path`、`old_string`、`new_string` | 串行 | 是 |
+| `bash` | `command`，可选 `timeout_secs` | 串行 | 是 |
 
-非交互模式下，修改性工具需要显式 `--allow-mutating`（或在配置文件里设置 `defaults.allow_mutating_tools = true`）；交互模式下，TUI 会在调用前弹出确认。
+所有路径都被限制在 harness 的 workspace 根目录下。修改性工具需要 `--allow-mutating`，或配置 `defaults.allow_mutating_tools = true`。
 
-## 源码构建
+## 配置
 
-工作区使用 **Rust edition 2024**，需要 ≥ 1.85 的工具链。
+配置会合并用户配置、项目配置和显式配置文件。模型优先级如下：
+
+1. `--model`
+2. 未传入 `--config` 时的 `OPI_MODEL`
+3. `--config <FILE>` 中的 `model`
+4. `<CWD>/.opi/config.toml`
+5. 用户配置（Windows：`%APPDATA%\opi\config.toml`；Unix：`~/.config/opi/config.toml`）
+6. 内置默认值
+
+示例：
+
+```toml
+[defaults]
+model = "anthropic:claude-sonnet-4-5-20250514"
+max_iterations = 50
+tool_timeout_ms = 30000
+theme = "default"
+allow_mutating_tools = false
+
+[thinking]
+enabled = true
+budget_tokens = 10000
+
+[retry]
+max_attempts = 3
+initial_delay_ms = 1000
+max_delay_ms = 60000
+
+[compaction]
+enabled = true
+threshold_tokens = 100000
+
+[keybindings]
+submit = "enter"
+abort = "escape"
+new_line = "alt+enter"
+
+[providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+# base_url = "https://api.anthropic.com"
+
+[providers.openai]
+api_key_env = "OPENAI_API_KEY"
+
+[providers.openai_responses]
+api_key_env = "OPENAI_API_KEY"
+
+[providers.openrouter]
+api_key_env = "OPENROUTER_API_KEY"
+# referer = "https://example.com"
+
+[providers.mistral]
+api_key_env = "MISTRAL_API_KEY"
+
+[providers.gemini]
+api_key_env = "GEMINI_API_KEY"
+```
+
+## 会话
+
+编程 harness 会自动把会话写成 JSONL 文件。
+
+默认位置：
+
+- Windows：`%LOCALAPPDATA%\opi\sessions\`
+- Unix：`~/.local/share/opi/sessions/`
+
+可以用 `OPI_SESSIONS_DIR` 覆盖。
 
 ```sh
-# 构建全部 crate
+opi --list-sessions
+opi --resume <session-id> "从这个会话继续。"
+opi --delete-session <session-id>
+```
+
+会话文件保存 header，以及 message、compaction、leaf 条目。Resume 会重建活跃分支，并保留压缩摘要语义。`--json` 会输出 session 事件、retry 事件、compaction 事件，以及包含 token 总量和可选费用总量的最终 session summary。
+
+## 从源码构建
+
+Workspace 使用 Rust edition 2024，需要 Rust 1.85 或更新版本。
+
+```sh
 cargo build
 cargo build --release
 
-# 不安装直接运行 CLI
 cargo run -p opi-coding-agent -- --help
 
-# 运行测试套件（共 248 个测试）
 cargo test --workspace --all-targets
-
-# 指定单个 crate
 cargo test -p opi-ai
 
-# CI 强制执行的检查项
 cargo fmt --check --all
 cargo clippy --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
@@ -107,58 +217,65 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 ## 架构
 
-`opi` 二进制启动时根据参数选择路径：
+`opi` 启动时会选择运行模式：
 
-- **非交互**（非空位置参数 `[PROMPT]...`，或 `--non-interactive`）：构造 provider → 运行 `NonInteractiveRunner::run()` → 输出 stdout/stderr → 按退出码退出（`0` 成功，`1` 运行时错误，`2` 配置错误，`3` 鉴权失败，`4` provider 失败，`5` 工具失败，`130` 被中断）。
-- **交互**（默认）：构造带 `InteractiveCodingHooks` 的 `CodingHarness`，进入 ratatui TUI。
+- 非交互：位置参数提示词、`--non-interactive` 或 `--json`；构建 Provider 并运行 `NonInteractiveRunner`。
+- 交互式：无提示词时的默认模式；构建带交互 hooks 的 `CodingHarness` 并启动 ratatui TUI。
+- 会话命令：`--list-sessions`、`--resume`、`--delete-session` 会在 Provider 构建之前处理。
 
-两种路径都走同一份 `opi-agent::agent_loop`：
+交互和非交互模式共用同一个 Agent 主循环：
 
-```
-transform_context → convert_to_llm → provider.stream(Request) → SSE / 工具事件
-   → JSON Schema 校验 → before_tool_call → 工具执行（并行 / 串行）
-   → after_tool_call → should_stop_after_turn → 拉取 steering / follow-up 队列 → 进入下一轮
+```text
+transform_context
+  -> convert_to_llm
+  -> provider.stream(Request)
+  -> 累积 assistant stream events
+  -> 检测工具调用
+  -> 校验 JSON Schema 参数
+  -> before_tool_call
+  -> 并行或串行批量执行工具
+  -> after_tool_call
+  -> should_stop_after_turn
+  -> prepare_next_turn
+  -> 轮询 steering/follow-up 队列
 ```
 
 关键抽象：
 
-- **`opi_ai::Provider`** —— `stream(Request) -> EventStream`，事件类型为 `AssistantStreamEvent`，通过 `tokio_util::sync::CancellationToken` 取消。
-- **`opi_agent::Tool`** —— `definition()` 返回 JSON Schema；`execute()` 执行；`execution_mode()` 决定该批工具串行还是并行。
-- **`opi_agent::AgentHooks`** —— 六个 Hook 方法：`transform_context` / `convert_to_llm` / `before_tool_call` / `after_tool_call` / `should_stop_after_turn` / `prepare_next_turn`。
-- **`opi_agent::Transport`** —— 为 stdio / SSE 工具传输预留的 trait，尚未接入主循环。
+- `opi_ai::Provider`：流式 LLM 后端接口。
+- `opi_ai::AssistantStreamEvent`：Provider 无关的流式事件模型，覆盖文本、thinking、工具调用、完成与错误。
+- `opi_agent::Tool`：基于 JSON Schema 的工具契约，支持并行或串行执行模式。
+- `opi_agent::AgentHooks`：围绕消息转换、工具策略、工具结果、停止条件、下一轮准备的生命周期 hooks。
+- `opi_agent::SessionWriter` / `SessionReader`：append-only JSONL 会话存储，带崩溃恢复。
+- `opi_agent::CompactionEngine`：支持阈值、手动、溢出触发的上下文压缩。
+- `opi_agent::Transport`：为外部工具服务器预留的 stdio/SSE transport 抽象；尚未接入主循环。
 
-完整规范请参考 [`docs/opi-spec.zh.md`](docs/opi-spec.zh.md)。
+## 尚未实现
 
-## 路线图
+- 子 Agent 与 skills。
+- Prompt template registry。
+- 通过 `Transport` 接入 MCP 工具服务器。
+- OAuth 或订阅登录流程。
+- `opi-web-ui` 中真实的 Web UI 组件。
 
-Phase 1（✅ 已在 0.2.0 发布）：
-- Anthropic provider、`Tool` + `AgentHooks` trait、agent 主循环、6 个工具、基础 TUI、TOML 配置。
+## 发布
 
-待实现：
-- 其他 provider（OpenAI、Google、Mistral、Bedrock、Azure）—— `ProviderKind` / `ApiKind` 已在注册层与消息类型中预留，但只接入了 Anthropic。
-- 持久化会话、分支、上下文压缩。
-- 子 Agent、Skills、Prompt 模板、MCP transport。
-- `opi-web-ui`（目前是 `publish = false` 的占位 crate）。
-- 订阅 / OAuth 登录流程（`/login`）。
+发布由 `opi-release` skill（`.claude/skills/opi-release/skill.md`）统一编排到 GitHub Releases 与 crates.io。
 
-## 发布流程
-
-GitHub Release 与 crates.io 的发布由 `opi-release` skill（`.claude/skills/opi-release/skill.md`）统一编排：
-
-- 所有 crate 使用同一版本号，按依赖顺序（由 `cargo metadata` 动态计算）发布。
-- 推送 `v*` tag 会触发 [`release.yml`](.github/workflows/release.yml)，自动构建 6 个平台目标并上传到 Release。
-- 回滚通过 `git revert` + 删除 tag 完成；**严禁** `git reset --hard` + `git push --force`。
+- 所有可发布 crate 使用同一个版本号。
+- 发布顺序遵循内部依赖关系。
+- 推送 `v*` tag 会触发 `.github/workflows/release.yml`。
+- 回滚使用 `git revert` 与删除 tag，不改写历史。
 
 ## 参与贡献
 
-项目约定：
-
-- Conventional Commits（`feat:` → Added，`fix:` → Fixed，`feat!:` / `BREAKING CHANGE` → Breaking）。
-- 每个 crate 的 `description`、`license`、`repository` 都从 `[workspace.package]` 继承，**不要在 crate 内重复声明**。
-- 仓库针对人和 Agent 都有统一的协作规则，详见 [`CLAUDE.md`](CLAUDE.md)。
+- 使用 Conventional Commits。
+- crate 元数据保持从 `[workspace.package]` 继承。
+- 按变更范围运行 `cargo fmt --check --all`、`cargo clippy --workspace --all-targets -- -D warnings`、测试和文档检查。
+- 仓库的人类与 Agent 协作规则见 `AGENTS.md`。
 
 欢迎在 <https://github.com/OdradekAI/opi/issues> 提交 Issue / PR。
 
 ## 许可证
 
-MIT © OdradekAI，详见 [`LICENSE`](LICENSE)。
+MIT (c) OdradekAI。详见 [LICENSE](LICENSE)。

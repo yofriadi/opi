@@ -3,21 +3,15 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-coding-agent.svg)](https://crates.io/crates/opi-coding-agent)
 [![Docs.rs](https://docs.rs/opi-coding-agent/badge.svg)](https://docs.rs/opi-coding-agent)
 
-> The `opi` binary — a minimal terminal coding agent. Produced by this crate, built on [`opi-ai`](https://crates.io/crates/opi-ai), [`opi-agent`](https://crates.io/crates/opi-agent), and [`opi-tui`](https://crates.io/crates/opi-tui).
+> The `opi` binary: an interactive and non-interactive terminal coding agent built on `opi-ai`, `opi-agent`, and `opi-tui`.
 
-[简体中文](README.zh.md) · [← opi](../../README.md)
+[Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
----
+## Status
 
-## Status (v0.2.0)
+Current crate version: `0.3.0`.
 
-Phase 1 MVP. The interactive TUI and non-interactive (positional prompt or
-`--non-interactive`) modes both work end-to-end against Anthropic. Six built-in
-tools, TOML configuration, exit codes, and a high-risk-tool safety policy are in
-place.
-
-Not yet implemented: other providers, persistent sessions, sub-agents,
-skills, slash commands, `/login` / OAuth.
+This crate produces the `opi` CLI and also exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output mode, multi-provider construction, built-in file/shell tools, session persistence, resume/list/delete session commands, context compaction, configurable keybindings/themes, retry, token usage totals, and best-effort cost summaries.
 
 ## Install
 
@@ -26,53 +20,74 @@ cargo install opi-coding-agent
 opi --version
 ```
 
-Or download the pre-built binary for your platform from a
-[GitHub Release](https://github.com/OdradekAI/opi/releases).
+Or download a pre-built binary from a [GitHub Release](https://github.com/OdradekAI/opi/releases).
 
-## Quick start
+## Quick Start
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# Interactive (ratatui TUI)
+# Interactive TUI
 opi
 
-# Non-interactive — positional prompt to stdout, exit
-opi "Find every TODO in this repo."
+# Single prompt, assistant text to stdout
+opi "Find all TODO comments in this repository."
 
-# Pick a different model
-opi -m anthropic:claude-opus-4 "Explain src/main.rs"
+# NDJSON event stream for automation
+opi --json "Summarize this workspace."
 
-# Allow write/edit/bash in non-interactive mode
-opi "Add a CHANGELOG entry for the latest commit." --allow-mutating
+# Pick a provider/model
+opi -m openai:gpt-4o "Explain crates/opi-coding-agent/src/main.rs"
+
+# Allow mutating tools such as write/edit/bash
+opi --allow-mutating "Update the README."
 ```
 
-## CLI flags
+## CLI Flags
 
 | Flag / arg | Description |
 |------------|-------------|
 | `[PROMPT]...` | Positional prompt text; non-empty args select non-interactive mode |
-| `-m, --model <SPEC>` | Model spec (e.g. `anthropic:claude-sonnet-4`) |
-| `-c, --config <FILE>` | Path to a TOML config file (must exist) |
-| `-s, --system <FILE>` | System prompt file (prepended to the built-in prompt) |
-| `--non-interactive` | Force non-interactive mode (prompt text still required) |
-| `--allow-mutating` | Allow `write` / `edit` / `bash` in non-interactive mode |
+| `-m, --model <SPEC>` | Model spec such as `anthropic:claude-sonnet-4-5-20250514` |
+| `-c, --config <FILE>` | Explicit TOML config file; must exist |
+| `-s, --system <FILE>` | User system prompt file appended to the built-in coding prompt |
+| `--non-interactive` | Force non-interactive mode; prompt text is still required |
+| `--json` | Output NDJSON events to stdout; also uses non-interactive mode |
+| `--allow-mutating` | Allow `write`, `edit`, and `bash` |
+| `--list-sessions` | List stored sessions and exit |
+| `--resume <ID>` | Resume a stored session by id |
+| `--delete-session <ID>` | Delete a stored session by id and exit |
 | `-v, --verbose` | Enable debug tracing |
+
+## Providers
+
+`opi-coding-agent` builds a provider from the configured model prefix.
+
+| Prefix | Provider | Default API key env |
+|--------|----------|---------------------|
+| `anthropic:` | `AnthropicProvider` | `ANTHROPIC_API_KEY` |
+| `openai:` | `OpenAiChatProvider` | `OPENAI_API_KEY` |
+| `openai-responses:` | `OpenAiResponsesProvider` | `OPENAI_API_KEY` |
+| `openrouter:` | OpenRouter profile | `OPENROUTER_API_KEY` |
+| `mistral:` | Mistral profile | `MISTRAL_API_KEY` |
+| `gemini:` | `GeminiProvider` | `GEMINI_API_KEY` |
+
+Environment variable names and base URLs can be overridden in config.
 
 ## Configuration
 
-TOML files merge **user → project → `--config`** (later layers override earlier keys).
+Config layers merge in this order: user config, project config, explicit `--config` file. Later layers override earlier fields.
 
-**Model** resolution (highest → lowest):
+Model precedence:
 
-1. `--model` (CLI)
-2. `OPI_MODEL` — only when `--config` was **not** passed
-3. `model` in `--config <file>`
-4. Project — `<CWD>/.opi/config.toml`
-5. User — `%APPDATA%\opi\config.toml` (Windows) or `~/.config/opi/config.toml` (Unix)
+1. `--model`
+2. `OPI_MODEL` only when `--config` was not passed
+3. `model` in `--config <FILE>`
+4. `<CWD>/.opi/config.toml`
+5. User config
 6. Built-in defaults
 
-`.opi/config.toml` shape (every field is optional; values shown are defaults):
+Full shape with defaults:
 
 ```toml
 [defaults]
@@ -86,57 +101,107 @@ allow_mutating_tools = false
 enabled = true
 budget_tokens = 10000
 
+[retry]
+max_attempts = 3
+initial_delay_ms = 1000
+max_delay_ms = 60000
+
+[compaction]
+enabled = true
+threshold_tokens = 100000
+
+[keybindings]
+submit = "enter"
+abort = "escape"
+new_line = "alt+enter"
+
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
-# base_url = "https://api.anthropic.com"  # override only if needed
+# base_url = "https://api.anthropic.com"
+
+[providers.openai]
+api_key_env = "OPENAI_API_KEY"
+# base_url = "https://api.openai.com"
+
+[providers.openai_responses]
+api_key_env = "OPENAI_API_KEY"
+# base_url = "https://api.openai.com"
+
+[providers.openrouter]
+api_key_env = "OPENROUTER_API_KEY"
+# base_url = "https://openrouter.ai/api"
+# referer = "https://example.com"
+
+[providers.mistral]
+api_key_env = "MISTRAL_API_KEY"
+# base_url = "https://api.mistral.ai"
+
+[providers.gemini]
+api_key_env = "GEMINI_API_KEY"
+# base_url = "https://generativelanguage.googleapis.com"
 ```
 
-Set `defaults.allow_mutating_tools = true` to skip `--allow-mutating` on every
-non-interactive invocation.
+## Built-in Tools
 
-## Built-in tools
-
-Tools live in [`src/tool/`](src/tool):
+Tools live in `src/tool/`.
 
 | Tool | Args | Notes |
 |------|------|-------|
-| `read` | `path`, optional `offset` + `limit` | 1-based line range |
-| `glob` | `pattern`, optional `path` | gitignore-aware |
-| `grep` | `pattern`, optional `glob` / `path` | gitignore-aware, regex |
-| `write` | `path`, `content` | mutating; needs `--allow-mutating` non-interactively |
-| `edit` | `path`, `old_string`, `new_string` | exact-match replacement; mutating |
-| `bash` | `command`, optional `timeout_secs` | uses `cmd.exe` on Windows, `sh` on Unix |
+| `read` | `path`, optional `offset`, `limit` | 1-based line offset; parallel |
+| `glob` | `pattern` | Gitignore-aware file discovery; parallel |
+| `grep` | `pattern` | Gitignore-aware regex search; parallel |
+| `write` | `path`, `content` | Creates parent dirs; sequential; mutating |
+| `edit` | `path`, `old_string`, `new_string` | Replaces first exact match and records before/after details; sequential; mutating |
+| `bash` | `command`, optional `timeout_secs` | Runs in workspace root via `cmd /C` on Windows or `sh -c` on Unix; sequential; mutating |
 
-All paths are resolved relative to (and constrained within) the workspace root
-passed to `CodingHarness::new` (the CLI uses the current working directory).
+All file paths are validated against the harness workspace root. Mutating tools are denied unless `--allow-mutating` or `defaults.allow_mutating_tools = true` is set.
+
+## Sessions
+
+Sessions are persisted automatically through `SessionCoordinator`.
+
+Default storage:
+
+- Windows: `%LOCALAPPDATA%\opi\sessions\`
+- Unix: `~/.local/share/opi/sessions/`
+
+Override with `OPI_SESSIONS_DIR`.
+
+```sh
+opi --list-sessions
+opi --resume <session-id> "Continue the work."
+opi --delete-session <session-id>
+```
+
+Resume reconstructs the active branch from session JSONL entries. If a session contains compaction markers, the resumed context includes the compaction summary and kept tail.
 
 ## Modes
 
-### Non-interactive
+### Interactive
 
-`NonInteractiveRunner::run()` captures assistant text to `stdout`, diagnostics
-to `stderr`, and returns one of these exit codes:
+With no prompt args, `opi` starts the ratatui TUI. It uses `opi-tui` widgets for transcript rendering, input editing, status, markdown, tool calls, edit diffs, themes, and keybindings.
+
+### Text non-interactive
+
+With prompt args or `--non-interactive`, `NonInteractiveRunner::run()` captures assistant text to stdout and diagnostics to stderr.
+
+Exit codes:
 
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
 | `1` | Runtime failure |
 | `2` | Config error |
-| `3` | Auth failure (missing or invalid API key) |
+| `3` | Auth failure |
 | `4` | Provider failure |
 | `5` | Tool failure |
-| `130` | Interrupted (Ctrl+C) |
+| `130` | Interrupted |
 
-### Interactive
+### JSON non-interactive
 
-`CodingHarness` + `InteractiveCodingHooks` drives a ratatui TUI built from
-`opi-tui` widgets. Streaming text deltas update the live transcript, tool
-calls render with status, and mutating tools surface confirmation.
+`--json` emits NDJSON to stdout. The first line is a schema header, followed by serialized session/agent events and a final `session_summary` with token totals and optional cost totals.
 
-## Library use
-
-`opi-coding-agent` is also a regular library crate. The `harness` and
-`runner` modules let you embed the same loop in your own Rust app:
+## Library Use
 
 ```rust
 use opi_coding_agent::config::OpiConfig;
@@ -150,10 +215,12 @@ let mut harness = CodingHarness::new(
     config,
     std::env::current_dir()?,
 );
-let _messages = harness.prompt("Hello!").await?;
+let _messages = harness.prompt("Hello").await?;
 # Ok(()) }
 ```
 
+Use `new_with_hooks`, `new_with_hooks_and_resume`, `subscribe`, `cancel`, and `session` when embedding the runtime in a custom application.
+
 ## License
 
-MIT — see workspace [`LICENSE`](../../LICENSE).
+MIT. See the workspace [LICENSE](../../LICENSE).

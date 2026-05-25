@@ -3,57 +3,84 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-tui.svg)](https://crates.io/crates/opi-tui)
 [![Docs.rs](https://docs.rs/opi-tui/badge.svg)](https://docs.rs/opi-tui)
 
-> Terminal UI widgets used by [opi](https://github.com/OdradekAI/opi)'s interactive coding agent. A Rust port of [pi](https://github.com/earendil-works/pi)'s TUI library.
+> Ratatui-based terminal UI widgets used by [opi](https://github.com/OdradekAI/opi)'s interactive coding agent.
 
-[简体中文](README.zh.md) · [← opi](../../README.md)
+[Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
----
+## Status
 
-## Status (v0.2.0)
+Current crate version: `0.3.0`.
 
-Phase 1 widgets are functional and used by the `opi` binary's interactive
-mode. Built on [`ratatui`](https://crates.io/crates/ratatui) and
-[`crossterm`](https://crates.io/crates/crossterm). No async runtime is
-required at the library level — `opi-tui` is purely a synchronous widget
-toolkit; the consuming application owns the event loop and tokio runtime.
+`opi-tui` is a synchronous widget library. The application owns the event loop and async runtime. The crate provides transcript, editor, status, markdown, tool-call, diff, theme, and keybinding primitives used by `opi-coding-agent`.
 
-## Widgets
+## Widgets and UI Primitives
 
-| Widget | Purpose |
-|--------|---------|
-| `Shell` | Top-level layout composing the message list, status bar, and input editor |
+| Item | Purpose |
+|------|---------|
+| `Shell` | Top-level layout composing transcript, status bar, editor, and optional tool call view |
 | `MessageList` | Scrollable conversation transcript with role styling |
-| `InputEditor` | Multi-line text input with cursor + insertion helpers |
-| `StatusBar` | App state, model id, and live status (`idle`, `thinking…`, `streaming…`, `executing tool…`) |
-| `ToolCallView` | Per-tool-call line showing name, args, and `ToolCallStatus` |
-| `MarkdownView` / `CodeBlock` | Markdown rendering with fenced code-block highlighting |
+| `InputEditor` | Multi-line input buffer with cursor/edit helpers |
+| `StatusBar` | App state, model, token/cost status, and live activity |
+| `ToolCallView` | Tool-call line with name, args, and status |
+| `MarkdownView` / `CodeBlock` | Markdown rendering and fenced code-block presentation |
+| `DiffView` | Unified diff rendering for before/after file edits |
+| `Theme` / `resolve_theme` | Semantic palettes; built-in `default` and `monokai` |
+| `Keybindings` / `KeyCombo` | Configurable semantic actions: submit, abort, new line |
 
-## Public types
+## Public Types
 
 ```rust
-pub enum Role  { User, Assistant, System, Tool }
-pub struct Message { pub role: Role, pub content: String }
+pub enum Role { User, Assistant, System, Tool }
 
-pub enum AppState  { Idle, Thinking, Streaming, ToolExecuting }
+pub struct Message {
+    pub role: Role,
+    pub content: String,
+    pub diff: Option<DiffPayload>,
+}
+
+pub struct DiffPayload {
+    pub path: String,
+    pub before: String,
+    pub after: String,
+}
+
+pub enum AppState { Idle, Thinking, Streaming, ToolExecuting }
 pub enum ToolCallStatus { Running, Success, Error(String) }
-
 pub enum TuiError { Terminal(String), Render(String) }
 ```
 
-`Message::new(role, content)` and a `Display` impl on `AppState` /
-`ToolCallStatus` keep the call sites short.
+`Message::new(role, content)` builds normal transcript messages. `Message::diff(path, before, after)` builds a tool-role message rendered through `DiffView`.
 
-## Integration shape
+## Keybindings
 
-The `opi` binary uses `opi-tui` like this (see
-[`crates/opi-coding-agent/src/interactive.rs`](../opi-coding-agent/src/interactive.rs)):
+Default bindings:
 
-1. Build a `Shell` per frame, passing the current `MessageList`,
-   `InputEditor`, `StatusBar`, and (optional) `ToolCallView`.
-2. Drive the render loop at ~20 FPS from your tokio task.
-3. Update a shared `TuiState` from `AgentEvent` callbacks emitted by
-   `opi-agent`.
+| Action | Default |
+|--------|---------|
+| submit | `enter` |
+| abort | `escape` |
+| new line | `alt+enter` |
+
+`KeyCombo` parses lowercase strings such as `enter`, `escape`, `ctrl+c`, `alt+enter`, and `shift+tab`. Invalid config falls back to defaults in the `opi` binary.
+
+## Themes
+
+`Theme` exposes semantic color fields for message roles, status bar, editor, markdown/code, diff view, and tool status. `resolve_theme(name)` currently recognizes:
+
+- `default`
+- `monokai`
+
+Unknown names resolve to `default`.
+
+## Integration Shape
+
+The `opi` binary uses this crate from `crates/opi-coding-agent/src/interactive.rs`:
+
+1. Keep application state in the caller.
+2. Update that state from `opi_agent::AgentEvent` callbacks.
+3. Resolve a `Theme` and `Keybindings`.
+4. Build a `Shell` each frame and render it with ratatui.
 
 ## License
 
-MIT — see workspace [`LICENSE`](../../LICENSE).
+MIT. See the workspace [LICENSE](../../LICENSE).

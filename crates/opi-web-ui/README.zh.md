@@ -1,22 +1,35 @@
 # opi-web-ui
 
-> [opi](https://github.com/OdradekAI/opi) workspace 中的占位 crate，为后续的 AI 聊天界面 Web 组件预留命名。未来会承载 [pi](https://github.com/earendil-works/pi) `pi-web-ui` 包的 Rust 移植版本。
+> [opi](https://github.com/OdradekAI/opi) workspace 中预留的 Web UI 组件 crate。
 
-[English](README.md) · [← opi](../../README.zh.md)
+[English](README.md) | [opi workspace](../../README.zh.md)
 
----
+## 当前状态
 
-## 当前状态（v0.2.0）
+当前 crate 版本：`0.3.0`。
 
-**未实现，也不会发布到 crates.io** —— `Cargo.toml` 中显式声明了 `publish = false`。本 crate 当前只用于占位，保持工作区与上游 `pi` 的结构一致。
+`opi-web-ui` 仍是占位 crate，不会发布到 crates.io（`publish = false`）。它用于保持 workspace 边界稳定，并为后续可复用 Web 聊天组件预留包边界。
 
-源码目录里实际存在的东西：
+当前源码内容：
 
-- `lib.rs` —— 导出一个占位结构体 `ChatWidget`。
-- `components.rs` —— `ChatWidget::new()` / `Default` 实现，仅此而已。
+- `lib.rs`：声明模块并重新导出 `ChatWidget`。
+- `components.rs`：空的 `ChatWidget` 类型，带 `new()` 和 `Default`。
 
-目前没有任何组件、渲染、HTTP 集成或测试。后续进展请关注 [项目 CHANGELOG](../../CHANGELOG.md) 与 [opi 规范文档](../../docs/opi-spec.zh.md)。
+目前还没有真实 widget、渲染适配、HTTP 集成、浏览器绑定或测试。该 crate 依赖 `opi-ai`、`serde`、`serde_json` 和 `thiserror`，但占位实现尚未实质使用这些依赖。
+
+## 公共 API
+
+```rust
+use opi_web_ui::ChatWidget;
+
+let widget = ChatWidget::new();
+let default_widget = ChatWidget::default();
+```
+
+## 边界说明
+
+只有面向 Web 的可复用组件实现后，相关功能才应进入这里。终端编程 Agent 位于 `opi-coding-agent`；Provider 和消息类型位于 `opi-ai`。
 
 ## 许可证
 
-MIT —— 见 workspace 根目录 [`LICENSE`](../../LICENSE)。
+MIT。详见 workspace [LICENSE](../../LICENSE)。
