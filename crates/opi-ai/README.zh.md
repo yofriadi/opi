@@ -32,6 +32,7 @@
 - `Request`：模型、系统提示词、消息、工具、token 限制、temperature、thinking 配置、metadata、取消 token。
 - `AssistantStreamEvent`：12 种 Provider 无关流式事件，覆盖 start/text/thinking/tool/done/error。
 - `message`：`Message`、`AssistantMessage`、`UserMessage`、`ToolResultMessage`、`ToolDef`、`ToolCall` 与内容变体。
+- `Model`：轻量描述符 `{ id, provider, context_window }`，由 registry/能力查询返回。
 - `registry::ProviderRegistry`：解析 `provider:model` spec，并暴露模型能力查询。
 - `retry`：retry 配置、指数退避和 retry-after header 解析。
 - `Usage`、`CumulativeUsage`、`Pricing`、`CostBreakdown`、`calculate_cost`：token 与费用辅助工具。
@@ -84,6 +85,7 @@ while let Some(event) = stream.next().await {
 | `stream` | 流式事件、停止原因、用量、累计用量、费用辅助工具 |
 | `registry` | `provider:model` 解析与能力查询 |
 | `retry` | retry/backoff/rate-limit 辅助 |
+| `model` | `Model` 描述符（`id`、`provider`、`context_window`） |
 | `anthropic` | Anthropic Messages Provider 与 SSE mapper |
 | `openai_chat` | OpenAI-compatible Chat Completions Provider 与兼容 profile adapter |
 | `openai_responses` | OpenAI Responses Provider |

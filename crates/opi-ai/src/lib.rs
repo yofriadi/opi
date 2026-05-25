@@ -1,7 +1,8 @@
 //! Unified multi-provider LLM API with streaming support.
 //!
-//! Provides a standardized interface for interacting with multiple LLM providers
-//! including OpenAI, Anthropic, Google Gemini, Mistral, AWS Bedrock, and Azure OpenAI.
+//! Provides a standardized interface for interacting with multiple LLM providers:
+//! Anthropic, OpenAI Chat Completions, OpenAI Responses, Google Gemini, plus
+//! OpenAI-compatible profiles for OpenRouter and Mistral.
 
 pub mod anthropic;
 pub mod config;

@@ -1,7 +1,9 @@
 //! Terminal User Interface library with differential rendering.
 //!
-//! Phase 1 components: [`MessageList`], [`InputEditor`], [`StatusBar`],
-//! [`ToolCallView`], composed by [`Shell`].
+//! Synchronous ratatui widget library used by `opi-coding-agent`. Core widgets:
+//! [`MessageList`], [`InputEditor`], [`StatusBar`], [`ToolCallView`],
+//! [`MarkdownView`], [`CodeBlock`], [`DiffView`], composed by [`Shell`].
+//! Themes via [`Theme`]/[`resolve_theme`] and configurable [`Keybindings`].
 
 pub mod diff_view;
 pub mod editor;

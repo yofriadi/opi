@@ -32,6 +32,7 @@ Each provider maps native wire events into `AssistantStreamEvent`, including tex
 - `Request`: model, system prompt, messages, tools, token limits, temperature, thinking config, metadata, and cancellation token.
 - `AssistantStreamEvent`: 12 provider-neutral stream variants for start/text/thinking/tool/done/error.
 - `message`: `Message`, `AssistantMessage`, `UserMessage`, `ToolResultMessage`, `ToolDef`, `ToolCall`, and content variants.
+- `Model`: lightweight `{ id, provider, context_window }` descriptor returned by registry/capability queries.
 - `registry::ProviderRegistry`: resolves `provider:model` specs and exposes model capabilities.
 - `retry`: retry config, exponential backoff, and retry-after header parsing.
 - `Usage`, `CumulativeUsage`, `Pricing`, `CostBreakdown`, `calculate_cost`: token and cost helpers.
@@ -84,6 +85,7 @@ while let Some(event) = stream.next().await {
 | `stream` | Stream events, stop reasons, usage, cumulative usage, pricing helpers |
 | `registry` | `provider:model` resolution and capability lookup |
 | `retry` | Retry/backoff/rate-limit helpers |
+| `model` | `Model` descriptor (`id`, `provider`, `context_window`) |
 | `anthropic` | Anthropic Messages provider and SSE mapper |
 | `openai_chat` | OpenAI-compatible Chat Completions provider and compatibility profile adapter |
 | `openai_responses` | OpenAI Responses provider |
