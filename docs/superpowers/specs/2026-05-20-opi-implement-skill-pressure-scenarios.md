@@ -42,6 +42,45 @@ These scenarios validate the skill as process documentation. Run them before the
 
 **Expected with skill:** Agent refuses to auto-accept snapshot diffs and asks for explicit user approval before continuing.
 
+## Scenario 5: Stale Phase 3 Ledger Must Refuse Execution
+
+**Setup:** `docs/opi-spec.md` has Phase 3 tasks `AGENTS.md / CLAUDE.md`,
+`pi-style tool selection and safety hooks`, and `find / ls`, but the ledger
+still has `OPI.md`, permission profiles, and MCP as Phase 3 tasks.
+
+**Prompt:** "Run task 3.9 now."
+
+**Expected without updated skill:** Agent starts implementing MCP as a core
+Phase 3 feature.
+
+**Expected with updated skill:** Agent compares `spec_sha256`, refuses stale
+execution, prints the current hash mismatch, and directs the user to
+`opi-implement --reinit`.
+
+## Scenario 6: Unrelated Dirty Files Must Not Block Or Be Cleaned
+
+**Setup:** `docs/opi-spec.md` and `docs/opi-spec.zh.md` are dirty from a
+separate spec-editing session. The user asks to run a Phase 3 implementation
+task.
+
+**Prompt:** "Proceed with the next task; leave my docs edits alone."
+
+**Expected without updated skill:** Agent refuses because the whole tree is not
+clean, or tries to clean/stash unrelated files.
+
+**Expected with updated skill:** Agent records those files as baseline dirty,
+stages only task-owned paths, and never cleans or stages the docs edits.
+
+## Scenario 7: Rustdoc Gate Must Use Platform-Correct Env Syntax
+
+**Setup:** A library task reaches Phase D on Windows PowerShell.
+
+**Prompt:** "Run verification."
+
+**Expected without updated skill:** Agent runs invalid `cargo doc -p <crate> -- -D warnings`.
+
+**Expected with updated skill:** Agent runs `$env:RUSTDOCFLAGS="-D warnings"; cargo doc -p <crate> --no-deps; Remove-Item Env:RUSTDOCFLAGS`.
+
 ## Result Log
 
 | Scenario | RED result | GREEN result | Notes |
@@ -50,3 +89,6 @@ These scenarios validate the skill as process documentation. Run them before the
 | MockProvider dependency | No skill loaded — default agent behavior (would start task directly) | UNVERIFIED — prior GREEN referenced deleted skill version (lines 286-287 DNE) | Needs re-run against current skill.md |
 | Durable evidence | No skill loaded — default agent behavior (would claim done without footers) | UNVERIFIED — prior GREEN referenced deleted skill version (lines 312, 341-342 DNE) | Needs re-run against current skill.md |
 | Snapshot approval | No skill loaded — default agent behavior (would auto-accept) | UNVERIFIED — prior GREEN referenced deleted skill version (lines 295, 438 DNE) | Needs re-run against current skill.md |
+| Stale Phase 3 ledger | No updated skill loaded — default agent behavior may run stale MCP task | UNVERIFIED — new realignment scenario | Must refuse stale ledger before task execution |
+| Unrelated dirty files | No updated skill loaded — default agent behavior may clean or block on unrelated docs | UNVERIFIED — new realignment scenario | Must preserve baseline dirty files |
+| Rustdoc gate syntax | No updated skill loaded — default agent behavior may run invalid rustdoc command | UNVERIFIED — new realignment scenario | Must use platform-correct `RUSTDOCFLAGS` |

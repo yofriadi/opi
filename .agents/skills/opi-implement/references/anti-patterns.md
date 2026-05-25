@@ -19,6 +19,12 @@ column explains reasoning so you can apply judgment in edge cases.
 | Never run live provider tests from this skill | Non-deterministic, costs money, hits rate limits. Belong in `#[ignore]`-gated tests run manually. |
 | Never commit ledger/tmp/draft files | High-churn runtime artifacts. Pollutes history, creates merge conflicts. |
 | Never skip `[workspace.dependencies]` for internal deps | Lockstep versioning requires workspace table. Bare path deps break `cargo publish`. |
+| Never execute a stale ledger after `opi-spec.md` changed | The ledger is an implementation cache. If the spec hash changed, task title, DoD, dependencies, and phase scope may now mean something different. |
+| Never silently default v1 fields when migrating to v2 | Defaults mask the case where a v1 task was inferred under old rules and would now be re-classified. Migration must re-evaluate each new field per v2 semantics and demote to `failing` when the old evidence does not match. |
+| Never add design docs, snapshot files, plan files, `CLAUDE.md`, `AGENTS.md`, or skill source to `spec_files` | These are process/audit artifacts, not normative behavior contracts. Including them makes any skill or doc edit trigger reinit-refusal, creating a circular dependency where the skill cannot evolve without first running itself. |
+| Never execute a composite spec row as a single monolithic task | One commit, one DoD, one evaluator, and a 5-iteration cap cannot reliably cover N independent extension examples. Reinit MUST decompose composite rows into dotted sub-tasks; attempts to bypass decomposition fail loudly. |
+| Never require unrelated user changes to become clean | This repository may be shared with users or other agents. The harness owns only the selected task's files and must not pressure cleanup of unrelated work. |
+| Never reintroduce MCP, permission profiles, sub-agents, plan mode, or todos as Phase 3 core work | The current spec keeps these as extension/package examples or later surfaces; putting them back in core recreates the drift the harness is supposed to prevent. |
 | Never satisfy DoD with placeholder stubs/TODOs | Stubs pass gates but don't deliver value. Poisons downstream tasks depending on real behavior. |
 | Never broaden into cross-task refactors without graph update | Scope creep invalidates adjacent task assumptions. Graph must reflect reality. |
 | Never clean/restore/discard user changes from failure gate | Working tree may contain in-progress manual fixes. Automated cleanup destroys expensive context. |

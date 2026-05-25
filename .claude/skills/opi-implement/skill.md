@@ -12,6 +12,15 @@ This is a **harness**, not a coding assistant. It encodes opinions about state,
 evidence, failure recovery, and escalation. It does NOT edit `opi-spec.md`,
 push commits, publish crates, or make network calls to providers.
 
+**Spec alignment rule:** Before executing any task whose `phase >= current_phase`,
+compare each entry in the ledger `spec_files_sha256` map with the current hash
+of the corresponding file in `spec_files`. If any entry differs, refuse task
+execution and direct the user to `opi-implement --reinit`. Status-only commands
+(`--status`) remain available. Phase 1/2 retries that fall below `current_phase`
+are allowed because their `Opi-DoD-SHA256` commit footers are the authoritative
+contract for shipped work. Do not run stale ledger tasks whose title or DoD
+contradicts the current spec.
+
 ## Invocation
 
 ```text
@@ -72,12 +81,18 @@ E is the only phase that mutates git **during normal task execution**.
 
 2. **Phase B: Plan-the-task**
    - B.1 Print task DoD + verification tier + parallelize plan
-   - B.2 User gate: "proceed with task `<id>`?"
+   - B.2 User gate: "proceed with task `<id>` and create the one task commit if verification passes?"
    - B.3 If confirmed: mark `in_progress`, record `start_commit`, write ledger
 
 3. **Phase C: Implement**
    - C.1 Invoke `superpowers:test-driven-development` (red→green→refactor)
      - If `parallelize` non-empty → `superpowers:dispatching-parallel-agents`
+   - C.1a If implementation requires modifying files outside
+     `tasks[].task_owned_paths`, the harness MUST append the new glob to
+     `task_owned_paths` and record an `inference_notes` entry
+     (`field = "task_owned_paths"`, `reason = "<why>"`) via the atomic ledger
+     write BEFORE the file is edited. Append is the only Phase C mutation of a
+     const field; it never silently expands ownership.
    - C.2 Iteration cap 3 → invoke `superpowers:systematic-debugging`
    - C.3 Total cap 5 → failure decision gate
 
@@ -97,6 +112,15 @@ E is the only phase that mutates git **during normal task execution**.
    - F.1 If all phase tasks passing → run phase-exit evaluator
    - F.2 Print phase-complete report; no auto-release
    - F.3 Else → print "next unblocked: X.Y" hint
+   - F.4 If F.1 passed, run the archive gate:
+     - F.4a User gate: "Archive phase `<N>` ledger to
+       `docs/snapshots/phase<N>/opi-impl-state.json` and compact `tasks` array
+       into `phase_exit[<N>].task_summary`?"
+     - F.4b If confirmed: write snapshot file, mutate ledger via atomic
+       protocol (move completed tasks into `task_summary`, set `snapshot_path`,
+       remove from active `tasks` array), commit ONLY the new snapshot file
+       with message `chore: archive opi-implement phase <N> ledger snapshot`.
+     - F.4c If declined: leave tasks array intact; no snapshot written.
 
 **When init/reinit runs:** Read `references/initializer.md` for the full flow.
 
@@ -173,6 +197,9 @@ Commit scope is the crate name. Example: `feat(opi-agent): implement agent_loop`
 - Temp: `.opi-impl-state.json.tmp` (gitignored)
 - Draft: `.opi-impl-state.draft.json` (gitignored)
 - All writes use structured JSON APIs, never string concatenation
+- Shared-workspace rule: capture the pre-task baseline dirty file set at Phase B.
+  Verification and commit gates must stage only task-owned files and must not
+  require unrelated pre-existing user changes to be cleaned.
 - **When ledger manipulation needed:** Read `references/ledger-schema.md`
 
 ## Platform Detection
@@ -233,7 +260,9 @@ Print a summary table of all tasks:
 - Building cross-platform binaries
 - Network calls to any provider API
 - Opening GitHub issues, PRs, or releases
-- Reading/writing `~/.config/opi/` or session storage
+- Reading/writing user runtime data such as `~/.config/opi/`, real auth files,
+  or real session storage. Editing source code for config/session behavior is
+  allowed only when the selected spec task owns that behavior.
 
 ## Design Spec
 

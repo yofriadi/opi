@@ -17,7 +17,9 @@ Tests added but failing: <list>
 Files modified: <list>
 Smallest failing assertion: <quote from test output>
 Start commit: <tasks[].start_commit>
+Baseline dirty files at Phase B: <tasks[].baseline_dirty_files>
 Dirty status: <git status --short>
+Task-owned dirty files: <files matched by tasks[].task_owned_paths and changed since start_commit>
 Reproduction commands: <exact commands>
 ```
 
@@ -31,8 +33,10 @@ Reproduction commands: <exact commands>
 | (d) Drop to manual | Print reproduction commands, touched files, suggested cleanup. Do NOT run cleanup. User finishes manually, then `--resume-from-manual`. |
 
 **No "auto-revert" option.** MUST NOT run `git restore`, `git clean`,
-`git reset`, or equivalent. If cleanup needed, print candidate commands
-scoped to files changed since `start_commit` and exit.
+`git reset`, or equivalent. If cleanup is needed, print candidate commands
+scoped only to task-owned files changed since `start_commit`. Never include
+files that were already dirty in `baseline_dirty_files` unless the task also
+modified them and the user explicitly confirms they are task-owned.
 
 ## Meta-Warning
 

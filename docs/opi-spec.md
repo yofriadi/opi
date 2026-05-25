@@ -7,12 +7,12 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Spec version | 0.2-draft |
-| Last updated | 2026-05-20 |
+| Spec version | 0.3-draft |
+| Last updated | 2026-05-25 |
 | Repository | `https://github.com/OdradekAI/opi` |
 | Upstream studied | `pi` 0.75.3 at `.repo/pi-0.75.3/` |
-| Current implementation | `opi` 0.1.0 scaffolding |
-| Next milestone | 0.2.0 Phase 1 MVP |
+| Current implementation | `opi` 0.3.0, Phase 2 complete |
+| Next milestone | 0.4.0 Phase 3 pi-aligned hardening |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
 
@@ -32,7 +32,7 @@ Opi mirrors pi's package structure with five Rust crates:
 - `opi-coding-agent`: the `opi` CLI binary.
 - `opi-web-ui`: unpublished future web UI placeholder.
 
-The repository is currently a 0.1.0 scaffolding release. Workspace layout, CI, release workflow, crate boundaries, and the binary name exist; functional implementations do not. Phase 1 turns these placeholders into a useful Anthropic-based coding assistant with six tools, a basic TUI, TOML config, and mock-provider integration tests.
+The repository has completed Phase 2: the `opi` binary is usable, multi-provider streaming works, sessions persist as JSONL, compaction and JSON mode exist, and the TUI has daily-use basics. Phase 3 should harden the CLI-first coding-agent experience without turning the core into a general integration platform.
 
 The central design rule:
 
@@ -42,7 +42,7 @@ The central design rule:
 
 | Principle | pi 0.75.3 | opi design |
 |---|---|---|
-| Minimal core | `CONTRIBUTING.md` says features outside core belong in extensions | Phase 1-3 avoid plugin/MCP/web scope creep |
+| Minimal core | `CONTRIBUTING.md` and coding-agent docs keep workflow-specific features outside core | Phase 1-3 avoid MCP, dynamic plugin, web UI, sub-agent, plan-mode, todo, and background-bash scope creep |
 | Layered runtime | `agentLoop` -> `Agent` -> `AgentHarness` / `AgentSession` | `agent_loop` -> `Agent` -> `Harness` / `CodingHarness` |
 | Streaming first | `AssistantMessageEventStream` and agent event streams | `Stream<Item = Result<Event, Error>>` with terminal events |
 | Provider agnostic | API, provider, and model are separate concepts | `Provider` trait, registry, provider adapters |
@@ -60,7 +60,17 @@ Opi is not API-compatible with pi. TypeScript declaration merging, `jiti` extens
 
 Opi is not required to read pi config or pi session files in Phase 1. A migration command MAY be added later, but runtime compatibility is not assumed.
 
-Opi is not an extensibility platform in its MVP. MCP is a later protocol adapter after core tools and permissions are stable; WASM plugins, subprocess plugins, RPC, multi-agent orchestration, and web UI work are later extension surfaces.
+Opi is not an extensibility platform in its MVP. MCP is not a built-in core feature in the pi design; it MAY be provided later as an extension or package after the extension API is stable. Built-in sub-agents, plan mode, todo systems, background bash, permanent permission-popup workflows, WASM plugins, subprocess plugin runtimes, and web UI work are outside Phase 1-3 core scope.
+
+### 2.2 pi Design Boundaries
+
+Pi 0.75.3 is a minimal terminal coding harness. Opi should preserve these boundaries unless a later design explicitly chooses to depart:
+
+- CLI/TUI remains the primary product surface.
+- Core ships useful defaults, not workflow-heavy opinions.
+- MCP, sub-agents, plan mode, permission gates, and todos belong in extensions, packages, or external tools rather than built-in core.
+- Tool safety is primarily controlled through tool selection, visibility, containers/sandboxes, and extension hooks.
+- RPC and SDK surfaces support composition without making the terminal product secondary.
 
 ## 3. Relationship to pi
 
@@ -104,47 +114,48 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 | provider streaming | Phase 1 | semantic parity |
 | Anthropic provider | Phase 1 | semantic parity |
 | `agentLoop` / `Agent` | Phase 1 | semantic parity |
-| read/write/edit/bash/glob/grep tools | Phase 1 | behavior parity |
+| read/write/edit/bash plus file search/list tools | Phase 1/3 | behavior parity; keep `glob` as an opi-native search tool, add `find`/`ls` parity before stable CLI claims |
 | interactive TUI | Phase 1 | user-facing parity |
 | OpenAI-compatible/OpenRouter/OpenAI/Gemini/Mistral | Phase 2 | provider contract parity |
 | sessions/resume | Phase 2 | opi format |
 | compaction | Phase 2 | semantic parity |
 | JSON event mode | Phase 2 | versioned opi NDJSON |
 | image support | Phase 3 | semantic parity |
-| permissions | Phase 3 | opi UX |
-| MCP client adapter | Phase 3 | protocol adapter after core tools and permissions |
-| extensions/RPC/web UI | Phase 4 | opi-specific design |
+| tool selection and safety hooks | Phase 3 | pi-style allowlists and extension-mediated confirmation, not a core permission-popup subsystem |
+| RPC/SDK/extensions/skills/packages | Phase 4 | pi-style composition and customization |
+| MCP adapter | Phase 4+ | optional extension/package example, not built into core |
+| web UI | Phase 4+ | deferred opi-specific design |
 
 ## 4. Current Baseline
 
-### 4.1 Version 0.1.0
+### 4.1 Version 0.3.0
 
 | Area | Current state |
 |---|---|
 | Workspace | five crates under one Cargo workspace |
-| Versioning | lockstep `0.1.0` |
+| Versioning | lockstep `0.3.0` |
 | Edition | Rust 2024 |
 | Internal dependencies | `opi-agent -> opi-ai`, `opi-web-ui -> opi-ai`, `opi-coding-agent -> opi-ai + opi-agent + opi-tui` |
-| External dependencies | `tokio`, `serde`, `serde_json`, `thiserror`, `async-trait` |
-| Binary | `opi` supports `--version` and `--help` |
+| External dependencies | Rust-native async, HTTP/SSE, schema, config, TUI, search, tracing, and test stacks from workspace dependencies |
+| Binary | `opi` supports interactive TUI, non-interactive text mode, `--json`, session commands, `--version`, and `--help` |
 | CI | `fmt`, `clippy`, `test`, `doc` |
 | Release CI | six platform binary workflow |
-| crates.io | deferred until real implementations exist |
+| crates.io | publishable crates are quality-gated; `opi-web-ui` remains unpublished |
 
-### 4.2 Stub API Drift
+### 4.2 Pre-Stable API Notes
 
-Current APIs are placeholders and MAY be broken before 0.2.0.
+Phase 0 placeholders have been replaced, but 0.x public APIs remain unstable
+unless explicitly documented otherwise. Phase 3 should harden the existing
+surfaces rather than introduce broad new platform scope.
 
-| Crate | Current placeholder | Target |
+| Crate | Current surface | Next target |
 |---|---|---|
-| `opi-ai` | `Provider::complete(&[Value]) -> Vec<StreamEvent>` | `Provider::stream(Request) -> EventStream` |
-| `opi-ai` | simple `StreamEvent` enum | start/delta/end/done/error protocol |
-| `opi-agent` | `Tool::execute(Value) -> Value` | schema validation, cancellation, updates, execution modes |
-| `opi-agent` | `AgentState` struct with raw values | `Agent`, queues, state enum, subscribers |
-| `opi-agent` | `transport` stub | reserve for Phase 4 or remove before stable API |
-| `opi-tui` | empty renderer/editor stubs | ratatui components |
-| `opi-coding-agent` | minimal handwritten CLI | `clap` CLI and runtime wiring |
-| `opi-web-ui` | placeholder `ChatWidget` | deferred unpublished crate |
+| `opi-ai` | provider streaming, model registry, usage/cost, retry/backoff | enterprise providers, image input/output, shared HTTP client/proxy hardening |
+| `opi-agent` | agent loop, hooks, queues, tools, sessions, compaction | keep core runtime narrow; reserve protocol adapters for extension surfaces |
+| `opi-agent` | `transport` stub | reserve for Phase 4 RPC/proxy or remove before stable API |
+| `opi-tui` | ratatui components, markdown/code, diff, themes, keybindings | image rendering and fuzzy pickers |
+| `opi-coding-agent` | `clap` CLI, TOML config, built-in tools, sessions, JSON mode | pi-style context files, tool selection, shell completions, provider wiring |
+| `opi-web-ui` | placeholder crate with `publish = false` | deferred unpublished crate |
 
 ### 4.3 Phase 0 Completion
 
@@ -223,7 +234,7 @@ phase additions over broad defaults.
 | serialization | `serde`, `serde_json` | present | provider/session protocols |
 | library errors | `thiserror` | present | typed error handling for library crates |
 | application errors | `anyhow` | Phase 1 | top-level error aggregation in `opi-coding-agent`; library crates MUST NOT use `anyhow` in public APIs |
-| async traits | `async-trait` | present, remove before 0.2.0 | not a target public API dependency; dyn traits use explicit boxed future/stream returns; internal non-dyn traits may use native async fn |
+| async traits | `async-trait` | present, keep internal or remove before API stabilization | not a target public API dependency; dyn traits use explicit boxed future/stream returns; internal non-dyn traits may use native async fn |
 | HTTP/SSE | `reqwest` with `rustls-tls` | Phase 1, narrow features | provider streaming without OpenSSL; use `default-features = false` and enable only required HTTP/JSON/stream features |
 | SSE parsing | hand-written line parser or `eventsource-stream` | Phase 1 | `reqwest-eventsource` is excluded (does not support POST); Anthropic uses POST-based streaming |
 | streams | `futures-core`, internal stream helpers as needed | Phase 1 | public stream APIs should expose `futures-core::Stream`; keep helpers such as `futures-util` internal |
@@ -269,7 +280,7 @@ Requirements:
 
 ```text
 opi-coding-agent
-  CLI, built-in tools, config, prompts, permissions, app-level session UX
+  CLI, built-in tools, config, prompts, tool selection, app-level session UX
 
 CodingHarness / Harness
   session persistence, compaction, app hooks, model/thinking state, queues
@@ -291,7 +302,7 @@ opi-ai Provider
 Pi 0.75.3 has both reusable `AgentHarness` code and the coding agent's `AgentSession`. Opi should not accidentally duplicate that split.
 
 - `opi-agent` SHOULD own generic harness primitives needed by non-CLI consumers.
-- `opi-coding-agent` SHOULD own coding-specific behavior: built-in file tools, project context, permission prompts, CLI config, and app-level session commands.
+- `opi-coding-agent` SHOULD own coding-specific behavior: built-in file tools, project context, tool allowlists, CLI config, and app-level session commands.
 - If a feature is required by both library consumers and the CLI, it belongs in `opi-agent`; otherwise it stays in `opi-coding-agent`.
 
 ### 6.3 Runtime Flow
@@ -607,7 +618,7 @@ pub async fn agent_loop(
 
 `Agent` wraps the loop with state, prompt/continue methods, abort, steering and follow-up queues, subscriber management, and idle settlement. Continuing requires the last context message to be user or tool result.
 
-The current `transport` stub is reserved for Phase 4 RPC/proxy transport. Before 0.2.0 it must either be hidden as unstable or removed.
+The current `transport` stub is reserved for Phase 4 RPC/proxy transport. Before any stable public API claim it must either be hidden as unstable or removed.
 
 ### 8.3 `opi-tui`
 
@@ -630,7 +641,7 @@ Phase 1 should remain a minimal usable TUI: streaming messages, prompt input, st
 
 ### 8.4 `opi-coding-agent`
 
-The binary owns CLI parsing, config loading, provider registry construction, built-in tools, system prompt construction, session UX, permission prompts, and runtime modes.
+The binary owns CLI parsing, config loading, provider registry construction, built-in tools, system prompt construction, session UX, tool selection, and runtime modes.
 
 | Tool | Mode | Phase | Scope |
 |---|---|---:|---|
@@ -640,14 +651,21 @@ The binary owns CLI parsing, config loading, provider registry construction, bui
 | `bash` | sequential | 1 | subprocess command with timeout and streamed output |
 | `glob` | parallel | 1 | gitignore-aware file discovery by glob |
 | `grep` | parallel | 1 | gitignore-aware regex search over file contents |
+| `find` | parallel | 3 | pi-compatible file discovery alias with gitignore-aware behavior |
+| `ls` | parallel | 3 | pi-compatible directory listing with bounded output |
 
 Phase 1 MUST include a minimal safety boundary for high-risk tools. `write`,
 `edit`, and `bash` must show the proposed path or command, effective cwd,
 environment policy, timeout, and whether the target is inside the workspace
-before execution. Interactive mode SHOULD require confirmation for these
-high-risk operations. Non-interactive mode MUST provide an explicit opt-in
-policy before running mutating file tools or shell commands. Full reusable
-permission profiles remain Phase 3 scope.
+before execution. Non-interactive mode MUST provide an explicit opt-in policy
+before running mutating file tools or shell commands. Interactive confirmation
+MAY exist as a narrow starter safeguard, but reusable permission profiles and
+permission popups are not core parity with pi; richer gates should be built via
+tool allowlists, hooks, extensions, packages, containers, or external wrappers.
+
+Tool selection flags SHOULD follow pi's shape before stable CLI claims:
+`--tools <list>` for an allowlist, `--no-tools` to disable all tools, and
+`--no-builtin-tools` once extension/custom tools exist.
 
 CLI target:
 
@@ -673,9 +691,11 @@ Prompt layers:
 1. base coding-agent instructions;
 2. tool descriptions from `ToolDef`;
 3. user system prompt file;
-4. `OPI.md` project context, starting Phase 3;
+4. project context files, starting Phase 3: `AGENTS.md` and `CLAUDE.md` from global config and cwd ancestors, matching pi;
 5. compaction summaries, starting Phase 2;
 6. skills/prompt fragments, starting Phase 4.
+
+`OPI.md` is not the default context-file name because pi and the broader coding-agent ecosystem already use `AGENTS.md` and `CLAUDE.md`. A future compatibility alias MAY be added, but it must not replace those names.
 
 ### 8.5 `opi-web-ui`
 
@@ -790,7 +810,7 @@ Results MUST record summary, `first_kept_entry_id`, tokens before/after, reason,
 
 ## 10. CLI and Runtime Surfaces
 
-Interactive mode is the default when stdin is a TTY. It owns terminal initialization, rendering, input editing, cancellation keys, and permission prompts.
+Interactive mode is the default when stdin is a TTY. It owns terminal initialization, rendering, input editing, cancellation keys, tool-selection UX, and any extension-provided prompts.
 
 Non-interactive mode takes one prompt from argv or stdin, streams assistant text to stdout, writes diagnostics to stderr, and exits with explicit status.
 
@@ -808,7 +828,7 @@ Suggested exit codes:
 
 JSON mode is Phase 2 scope. It emits one `AgentSessionEvent` JSON object per line to stdout after the event schema has contract tests. Human-readable logs go to stderr. Phase 2 JSON mode SHOULD stay close to pi's event model but MUST include an opi schema version.
 
-RPC mode is Phase 4. It should use strict JSONL framing: one command per line on stdin, correlated responses by optional `id`, and async events on stdout.
+RPC mode is an early Phase 4 extensibility surface. It should use strict JSONL framing: one command per line on stdin, correlated responses by optional `id`, and async events on stdout. RPC and SDK composition should precede dynamic plugin runtimes because they match pi's process-integration model without expanding core policy.
 
 ## 11. Cross-Cutting Runtime Concerns
 
@@ -901,12 +921,12 @@ Opi runs local tools with the user's privileges. The main risks are dangerous lo
 - Sessions MUST be documented as sensitive.
 - `bash` MUST have timeout, cwd control, environment policy, cancellation behavior, and visible command text.
 - File tools MUST resolve paths deliberately and record whether paths are inside or outside the workspace.
-- Path traversal MAY be allowed, but permission policy SHOULD be able to restrict it.
+- Path traversal MAY be allowed, but tool allowlists or extension hooks SHOULD be able to restrict it.
 - Provider HTTP MUST use TLS by default.
-- Phase 1 MUST include minimal confirmation and auditability for `write`, `edit`, and `bash`; richer reusable permission profiles are Phase 3 scope.
-- Permission prompts MUST exist before high-risk tools are considered production ready.
+- Phase 1 MUST include auditability for `write`, `edit`, and `bash`; mutating tools and shell execution must be visible, bounded, and explicitly controllable in non-interactive mode.
+- Opi core SHOULD NOT grow a permanent permission-popup subsystem as a Phase 3 goal. Users who need environment-specific gates should use containers, read-only tool allowlists, hooks, extensions, or packages.
 
-Structured arguments reduce shell injection risk, but invoking a shell still executes model-supplied command text. The mitigation is permission, auditability, timeout, cwd/env control, and careful command construction.
+Structured arguments reduce shell injection risk, but invoking a shell still executes model-supplied command text. The mitigation is visibility, auditability, tool allowlists, timeout, cwd/env control, extension hooks, and careful command construction.
 
 ### 13.3 Risk Register
 
@@ -915,11 +935,12 @@ Structured arguments reduce shell injection risk, but invoking a shell still exe
 | Provider API drift | high | medium | fixture tests and narrow adapters |
 | Anthropic-only MVP disappoints parity expectations | medium | medium | publish clear phase scope |
 | Session schema stabilizes too early | high | medium | keep v1 unstable until contract tests pass |
-| Bash tool performs destructive actions | high | high | sequential mode, permissions, visible command, timeout |
+| Bash tool performs destructive actions | high | high | sequential mode, visible command, timeout, tool allowlists, extension hooks |
 | Secrets leak to logs/session | high | medium | redaction tests and secret types |
 | Windows TUI issues | medium | medium | crossterm tests and Windows smoke checks |
 | Premature crates.io publish | high | medium | gate first publish on real implementation, docs, and contract tests; defer crates.io if those gates miss 0.2.0 |
 | Extension scope bloats core | medium | high | minimal-core rule |
+| MCP becomes core scope creep | medium | medium | keep MCP as an extension/package example after extension API stabilizes |
 | Duplicate session stacks | high | medium | explicit Harness vs CodingHarness ownership |
 
 ## 14. Release and Versioning
@@ -1048,9 +1069,9 @@ Target: 0.4.0+.
 | 3.4 | image input | `opi-ai` |
 | 3.5 | image tool results | `opi-agent` |
 | 3.6 | terminal image rendering | `opi-tui` |
-| 3.7 | `OPI.md` context loading | `opi-coding-agent` |
-| 3.8 | reusable permission profiles and policy system | `opi-coding-agent` |
-| 3.9 | MCP client adapter | `opi-agent` |
+| 3.7 | `AGENTS.md` / `CLAUDE.md` context loading | `opi-coding-agent` |
+| 3.8 | pi-style tool selection and safety hooks | `opi-coding-agent` |
+| 3.9 | `find` / `ls` built-in tool parity | `opi-coding-agent` |
 | 3.10 | shell completions | `opi-coding-agent` |
 | 3.11 | fuzzy model/session picker | `opi-tui` |
 | 3.12 | proxy support | `opi-ai` |
@@ -1058,23 +1079,23 @@ Target: 0.4.0+.
 
 Cross-platform binary releases are not listed here because release CI is already part of Phase 0.
 
-Exit criteria: enterprise providers work, risky tools have permissions, release artifacts are repeatable, and interactive UX is robust for daily use.
+Exit criteria: enterprise providers work, image and terminal-image flows work, project context loading matches pi, risky tools are visible and controllable through pi-style tool selection/hooks, release artifacts are repeatable, and interactive UX is robust for daily use.
 
 ### Phase 4 - Extensibility
 
 | # | Task | Crate |
 |---|---|---|
-| 4.1 | extension trait design | `opi-agent` |
-| 4.2 | extension loading strategy | `opi-coding-agent` |
-| 4.3 | session branching UI | `opi-agent` / `opi-tui` |
-| 4.4 | multi-agent orchestration | `opi-agent` |
-| 4.5 | skills and prompt fragments | `opi-coding-agent` |
-| 4.6 | web UI implementation | `opi-web-ui` |
-| 4.7 | RPC JSONL mode | `opi-coding-agent` |
-| 4.8 | WASM or subprocess plugin runtime | `opi-agent` or a new plugin crate after interface review |
-| 4.9 | streaming proxy | `opi-agent` or new crate |
+| 4.1 | RPC JSONL mode | `opi-coding-agent` |
+| 4.2 | SDK embedding surface | `opi-coding-agent` / `opi-agent` |
+| 4.3 | extension trait design | `opi-agent` |
+| 4.4 | extension loading strategy | `opi-coding-agent` |
+| 4.5 | skills, prompt fragments, themes, and packages | `opi-coding-agent` |
+| 4.6 | extension examples: permission gate, sub-agent, plan mode, todo, MCP adapter | examples / package template |
+| 4.7 | session branching UI | `opi-agent` / `opi-tui` |
+| 4.8 | streaming proxy | `opi-agent` or new crate |
+| 4.9 | web UI implementation | `opi-web-ui` |
 
-Exit criteria: third parties can extend opi without patching core crates.
+Exit criteria: third parties can compose and extend opi through RPC, SDK, extensions, skills, prompt fragments, themes, and packages without patching core crates. MCP, sub-agents, plan mode, todos, and permission gates should be demonstrable as extensions or packages, not core features.
 
 ## 16. Decision Log
 
@@ -1094,10 +1115,12 @@ Exit criteria: third parties can extend opi without patching core crates.
 | ADR-012 | Session format | opi tree JSONL | branch semantics without TS format lock-in |
 | ADR-013 | Config format | TOML | comments and Rust ecosystem fit |
 | ADR-014 | TUI | ratatui/crossterm | cross-platform Rust terminal stack |
-| ADR-015 | Plugin strategy | MCP adapter before dynamic plugins | protocol integration is lower risk than arbitrary runtime extension |
+| ADR-015 | Extension strategy | RPC/SDK and extension API before protocol adapters | matches pi's composition model; MCP is an extension/package candidate, not a core Phase 3 feature |
 | ADR-016 | Web UI | unpublished until core stable | avoids premature WASM commitment |
 | ADR-017 | Transport stub | reserve for Phase 4 or remove | avoids undocumented public surface |
 | ADR-018 | crates.io timing | quality-gated first publish | publish only after placeholder APIs are hidden or replaced and release gates pass |
+| ADR-019 | Tool safety | allowlists, visibility, and hooks over core permission profiles | pi explicitly avoids built-in permission popups; environment-specific gates belong in extensions/packages or external sandboxes |
+| ADR-020 | Context files | `AGENTS.md` / `CLAUDE.md` before `OPI.md` | preserves pi behavior and ecosystem convention |
 
 ## 17. Non-Functional Requirements
 
@@ -1129,7 +1152,7 @@ Maintainability requirements:
 
 ## 18. Future Considerations
 
-The architecture should not preclude MCP tools, remote tool execution, streaming proxy services, editor integrations, pi session migration, plugin runtimes, or web chat surfaces. These are not MVP requirements.
+The architecture should not preclude MCP tools, remote tool execution, streaming proxy services, editor integrations, pi session migration, plugin runtimes, or web chat surfaces. These are not core Phase 1-3 requirements and should generally arrive through RPC, SDK, extensions, packages, or later reviewed plugin runtimes.
 
 ## 19. Glossary
 

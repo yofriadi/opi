@@ -45,7 +45,8 @@ engineering posts:
 
 ## 2. Non-Goals
 
-- Pi session-file migration (deferred to Phase 2/3 of opi-spec).
+- Pi session-file migration. A future migration command may be added, but it is
+  not Phase 1-3 core work in the current opi-spec.
 - Cross-compilation, binary distribution, crates.io publishing — owned by
   `opi-release`.
 - PR creation and merge/blocking repository review — manual. The risk evaluator
@@ -59,6 +60,9 @@ engineering posts:
   reads it, never writes to it.
 - Decision-making about phase boundaries — phase exit reports only; the human
   decides when to invoke `opi-release`.
+- Reintroducing MCP, permission profiles, sub-agents, plan mode, or todos as
+  Phase 3 core work. The current opi-spec keeps these as Phase 4+ extension or
+  package examples.
 
 ## 3. Core Decisions
 
@@ -77,7 +81,9 @@ option from a multi-choice grill.
 | Phase exit | Stop and report; no auto-release. |
 | Commit policy | One conventional commit per task; type derived from ledger `commit_type` field. |
 | Evidence policy | Runtime ledger is gitignored; successful task evidence is recoverable from the task commit footer. |
+| Spec alignment | Refuse task execution for any task whose `phase >= current_phase` when any file in `spec_files_sha256` has drifted from its current hash; require reviewed `--reinit`. |
 | Task graph review | Inferred `depends_on`, tier, and commit metadata MUST be explicitly reviewed; no silent graph rewrites. |
+| Shared workspace | Capture baseline dirty files at Phase B; stage only task-owned files and never require unrelated user changes to be cleaned. |
 | Independent evaluation | Task-level risk evaluator for `cli-runtime`, `tui`, cross-crate/public-protocol tasks; separate Phase F evaluator for phase exits. |
 | Sub-agent dispatch | Opt-in via per-task `parallelize:` field; invokes `superpowers:dispatching-parallel-agents`. |
 | Name | `opi-implement`. |
@@ -126,7 +132,7 @@ Phase A: Bootstrap        (every invocation)
 
 Phase B: Plan-the-task
   B.1  Print task DoD + verification tier + parallelize plan
-  B.2  User gate: "proceed with task <id>?"
+  B.2  User gate: "proceed with task <id> and create the one task commit if verification passes?"
   B.3  If confirmed, mark task `in_progress` and record `start_commit`
 
 Phase C: Implement
@@ -164,7 +170,7 @@ is replaced by an extended initializer:
 
 ```text
 Phase A.init:
-  A.init.1  Pre-flight: confirm git clean, on main, opi-spec.md present
+  A.init.1  Pre-flight: record baseline dirty files, current branch, and opi-spec.md presence
   A.init.2  Parse opi-spec.md §15 roadmap tables; for each task row, extract:
               - id, title, crate, DoD string when present, phase number
               - infer tier from crate + task description
@@ -172,9 +178,13 @@ Phase A.init:
               - infer depends_on from numeric ordering + DoD references
               - attach inference_notes for every non-verbatim field
               - infer evaluator_required from risk rules
-            Rows without a DoD are rendered as deferred spec rows, not
-            executable ledger tasks, unless a reviewed JSON draft supplies a
-            concrete DoD.
+            Rows without explicit DoD:
+              - Phase 1 rows with a Definition of done column use it verbatim.
+              - Phase 2+ rows may receive draft DoD inferred from roadmap row,
+                feature matrix, crate section, security requirements, and phase
+                exit criteria.
+              - Every inferred DoD includes source-section inference notes.
+              - The row remains non-executable until review gate confirmation.
   A.init.3  Task-graph review gate. Render the complete draft as a table
             with id, title, tier, commit_type, depends_on, execution order,
             evaluator_required, and inference_notes.
@@ -236,6 +246,22 @@ When `--reinit` runs against an existing ledger:
    If no tracked file changed, do not create an empty commit. The runtime
    ledger and draft file remain gitignored.
 
+#### Changed Task Meaning
+
+If a task ID is present in both old and new graphs but the title or DoD changes
+substantively, the skill shows a row-level diff and defaults to preserving
+runtime history in `session_notes` while keeping `status = failing`. The user
+may preserve a passing status only when the old evidence still satisfies the
+new DoD. When a new task intentionally supersedes an old one under the same ID,
+record an inference note with `field = "replaces"`.
+
+The 2026-05-25 spec adjustment is the canonical example:
+
+- `3.7 OPI.md context loading` became `3.7 AGENTS.md / CLAUDE.md context loading`;
+- `3.8 permission profiles and policy system` became `3.8 pi-style tool selection and safety hooks`;
+- `3.9 MCP client adapter` became `3.9 find / ls built-in tool parity`;
+- MCP moved to Phase 4 as an extension/package example, not a Phase 3 core task.
+
 ## 5. JSON Ledger Schema
 
 Path: `.opi-impl-state.json` at repository root. Gitignored — runtime artifact,
@@ -255,6 +281,8 @@ not source. Atomic writes via `.opi-impl-state.json.tmp` + rename.
       "title": "agent_loop",
       "crate": "opi-agent",
       "definition_of_done": "mock tests cover no-tool and tool-use turns",
+      "definition_source": "verbatim",
+      "replaces": null,
       "status": "failing",
       "depends_on": ["1.1", "1.2", "1.5"],
       "inference_notes": [
@@ -281,6 +309,7 @@ not source. Atomic writes via `.opi-impl-state.json.tmp` + rename.
       "iteration_count": 0,
       "max_iterations": 5,
       "start_commit": null,
+      "baseline_dirty_files": [],
       "last_attempt": null,
       "verified_at_commit": null,
       "evidence": null,
@@ -312,6 +341,8 @@ not source. Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | `tasks[].title` | string | const | Spec row title, free text. |
 | `tasks[].crate` | string | const | One of opi's five crates, or `workspace`. |
 | `tasks[].definition_of_done` | string | const | Verbatim from spec; reinit may flag changes. |
+| `tasks[].definition_source` | enum | const | `verbatim`, `inferred`, or `draft-reviewed`; inferred values require review gate confirmation. |
+| `tasks[].replaces` | string/null | const | Prior task title/meaning superseded during reinit, when a spec change repurposes the same task ID. |
 | `tasks[].status` | enum | runtime | `failing` / `in_progress` / `passing` / `blocked` / `archived`. |
 | `tasks[].depends_on` | array | const | Other task IDs that must be `passing`. |
 | `tasks[].inference_notes` | array | const | Human-reviewed reasons for inferred tier, dependencies, commit type, evaluator flag, or execution-order changes. Empty only when every field is verbatim. |
@@ -323,6 +354,7 @@ not source. Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | `tasks[].iteration_count` | int | runtime | Attempts since first `in_progress` flip. Reset on success. |
 | `tasks[].max_iterations` | int | const | Default 5; per-task override allowed. |
 | `tasks[].start_commit` | string/null | runtime | HEAD at the moment Phase B confirms proceed and marks the task `in_progress`. Used for diff, chain, and cleanup diagnostics. |
+| `tasks[].baseline_dirty_files` | array | runtime | Files already dirty at Phase B start; used to avoid cleaning or staging unrelated user work. |
 | `tasks[].last_attempt` | object/null | runtime | Last attempt status: `{attempt, started_at, ended_at, outcome, failing_gate, touched_files}`. |
 | `tasks[].verified_at_commit` | string | runtime | Set in Phase E.2 on success. |
 | `tasks[].evidence` | object/null | runtime | Mirror of the parseable `Opi-*` evidence footers in the success commit. |
@@ -382,17 +414,18 @@ Write sequence:
 
 On next invocation, if a task has `status = in_progress` AND
 `verified_at_commit = null`, inspect both `last_attempt` and the working tree.
-If the working tree is clean, prompt:
+If no task-owned files are dirty beyond `baseline_dirty_files`, prompt:
 
 > "Task X was marked `in_progress` but no commit was recorded. Was the prior
 > session interrupted? Reset to `failing` and retry, or investigate first?"
 
-If the working tree is dirty, the skill MUST NOT reset, restore, clean, or
+If task-owned files are dirty, the skill MUST NOT reset, restore, clean, or
 discard files. It prints:
 
 - `start_commit`
+- `baseline_dirty_files`
 - current `git status --short`
-- files changed since `start_commit`
+- task-owned files changed since `start_commit`
 - last failing gate and reproduction commands
 
 Then it offers only: continue investigation, mark blocked with blocker text, or
@@ -406,8 +439,8 @@ table. All tiers also run the **cross-cutting gates** at the bottom.
 
 ### 6.1 `workspace`
 
-Tasks: 1.0 (deps), 1.17 (integration harness), and any future task whose
-crate field is `workspace`.
+Use for dependency graph changes, cross-crate integration harnesses, and tasks
+whose primary crate is `workspace` or `cross-crate`.
 
 Gates:
 - `cargo fmt --check --all`
@@ -418,7 +451,8 @@ Gates:
 
 ### 6.2 `library`
 
-Tasks: 1.1–1.8 (`opi-ai`, `opi-agent` internals).
+Use for focused `opi-ai`, `opi-agent`, or `opi-tui` library changes that do not
+add provider wire formats, CLI runtime behavior, or visual snapshot surfaces.
 
 Gates:
 - TDD red→green produced new or changed tests in `crates/<crate>/tests/` OR
@@ -427,14 +461,17 @@ Gates:
   `#[test]`, async test attributes, or changed assertion bodies.
 - `cargo test -p <crate>` green.
 - `cargo clippy -p <crate> -- -D warnings` green.
-- `cargo doc -p <crate> -- -D warnings` green.
+- Docs with warnings denied green:
+  - Unix shell: `RUSTDOCFLAGS="-D warnings" cargo doc -p <crate> --no-deps`
+  - PowerShell: `$env:RUSTDOCFLAGS="-D warnings"; cargo doc -p <crate> --no-deps; Remove-Item Env:RUSTDOCFLAGS`
 - Workspace `cargo build --workspace` green (catches breaking-API changes).
 - No `unwrap`/`expect` in non-test code (grep check; allow-list configurable
   via `.opi-impl-allow-unwrap` if ever needed).
 
 ### 6.3 `cli-tool`
 
-Tasks: 1.9 (`read`/`write`/`edit`/`bash`), 1.10 (`glob`/`grep`).
+Use for built-in tools such as `read`, `write`, `edit`, `bash`, `glob`,
+`grep`, `find`, and `ls`.
 
 Gates: `library` gates above, plus:
 - Behavioral tests in `crates/opi-coding-agent/tests/` that use the `tempfile`
@@ -447,8 +484,8 @@ Gates: `library` gates above, plus:
 
 ### 6.4 `cli-runtime`
 
-Tasks: 1.11 (system prompt), 1.14 (interactive wiring), 1.15
-(non-interactive), 1.16 (config).
+Use for CLI parsing, config, prompt/context loading, session commands, JSON
+mode, tool selection flags, shell completions, and binary subprocess behavior.
 
 Gates: `library` gates plus:
 - End-to-end test that boots a `MockProvider` and runs the `opi` binary in a
@@ -474,7 +511,8 @@ is reshaped after human approval.
 
 ### 6.5 `tui`
 
-Tasks: 1.12 (TUI shell), 1.13 (markdown/code rendering).
+Use for ratatui rendering, keybindings, themes, fuzzy pickers, diff rendering,
+terminal image rendering, and snapshot surfaces.
 
 Gates: `library` gates plus:
 - Ratatui snapshot tests at fixed sizes (80×24 and 120×40). Snapshots use
@@ -482,7 +520,35 @@ Gates: `library` gates plus:
   skill refuses to auto-accept snapshot changes — they require explicit user
   approval in Phase B.
 
-### 6.6 Cross-Cutting Gates (every tier)
+### 6.6 Provider-Contract Addendum
+
+Apply to enterprise providers and HTTP client work: Bedrock, Azure OpenAI,
+Vertex, proxy support, and connection pooling.
+
+Additional gates:
+
+- Fixture or `wiremock` tests cover success, streamed deltas, tool calls when
+  applicable, usage, provider errors, and error mapping.
+- Credential precedence tests never require live cloud credentials.
+- Secret redaction tests assert API keys, OAuth tokens, proxy credentials, and
+  cloud credentials do not appear in logs, errors, session files, or snapshots.
+- No live provider tests run unless they are `#[ignore]` and explicitly invoked
+  outside this skill.
+- Shared HTTP client/proxy behavior is tested without real network calls.
+
+### 6.7 Multimodal Addendum
+
+Apply to image input, image tool results, and terminal image rendering.
+
+Additional gates:
+
+- Serialization tests cover image metadata, MIME type, size limits, and provider
+  capability rejection.
+- Tool-result tests cover text-only fallback and non-UTF-8/binary-safe handling.
+- TUI tests use deterministic snapshots or golden terminal protocol output; no
+  visual snapshot is accepted without explicit user approval.
+
+### 6.8 Cross-Cutting Gates (every tier)
 
 Run after the tier-specific gates:
 
@@ -490,27 +556,29 @@ Run after the tier-specific gates:
 - `cargo clippy --workspace --all-targets -- -D warnings` exits 0.
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` exits 0.
 - `bash scripts/opi-impl-smoke.sh` exits 0.
+- Capture `baseline_dirty_files` at Phase B before implementation starts.
 - Before commit-stage, `git status --porcelain --untracked-files=all` may
-  contain only intentional files for the active task. Gitignored ledger/draft
-  files do not appear in this output by default and are checked separately by
-  path. The skill prints the status and stages only reviewed task files;
-  unrelated user changes are never staged or cleaned.
+  include only files already present in `baseline_dirty_files` and unchanged by
+  this task, or intentional task files listed in the task evidence.
+- Stage only intentional task files with explicit paths. Never use `git add -A`
+  or `git add .`.
 - Immediately before creating the task commit, `HEAD` must still equal
-  `tasks[].start_commit`. If an intermediate manual commit exists, the skill
-  refuses normal Phase E and requires `--resume-from-manual`.
-- After the task commit, `git status --porcelain` must be clean. Gitignored
-  runtime ledger/draft files may still exist, but they are checked by path and
-  are not part of porcelain cleanliness. `HEAD^` must equal
-  `tasks[].start_commit`.
+  `tasks[].start_commit` unless the only new commit is a reviewed manual task
+  commit handled by `--resume-from-manual`.
+- After the task commit, `HEAD^` must equal `tasks[].start_commit`; unrelated
+  baseline dirty files may still be dirty, but no task-owned files may remain
+  unstaged or uncommitted.
 - The commit message must include the `Opi-*` evidence footers from §5.2.
 
 For `--resume-from-manual`, the skill skips commit creation only if there is
-exactly one candidate manual commit for the task since `start_commit`, the
-working tree is clean, Phase D passes, and that commit message already contains
-the required `Opi-*` footers. If the footer is missing, the skill prints the
-required footer text and stops; it does not amend the user's commit.
+exactly one candidate manual commit for the task since `start_commit`, no
+task-owned dirty files remain outside the candidate manual commit, Phase D
+passes, and that commit message already contains the required `Opi-*` footers.
+Unrelated baseline dirty files are allowed and must not be staged. If a footer
+is missing, the skill prints the required footer text and stops; it does not
+amend the user's commit.
 
-### 6.7 Risk Evaluator Gate
+### 6.9 Risk Evaluator Gate
 
 Mechanical gates are necessary but not sufficient for tasks that change public
 behavior, cross crate boundaries, or user-facing runtime flows. A task has
@@ -518,8 +586,9 @@ behavior, cross crate boundaries, or user-facing runtime flows. A task has
 
 - tier is `cli-runtime` or `tui`;
 - task touches multiple crates or a public protocol/data model;
-- task changes tool safety, permissions, config loading, session storage, JSON
-  framing, provider event semantics, or release-critical behavior.
+- task changes tool safety, tool selection, allowlists, extension hooks, config
+  loading, session storage, JSON framing, provider event semantics, or
+  release-critical behavior.
 
 `evaluator_required` is a static task field confirmed during init/reinit. Phase
 D MUST NOT dynamically promote a task to evaluator-required merely because it is
@@ -545,16 +614,20 @@ For phase exit, the evaluator checks the phase's exit criteria from
 phase is reported complete only when the evaluator finds no blocking gap. The
 report is advisory for release; `opi-release` remains a separate human action.
 
-### 6.8 Phase 2/3/4 Tiers
+### 6.10 Phase 3/4 Task Fit
 
-This document covers Phase 1 tiers in detail. Phase 2 will introduce:
-- `session-storage` tier (round-trip tests, fuzz harness).
-- `provider-contract` tier (SSE fixture tests for each new provider).
-- `json-contract` tier (NDJSON schema tests, line framing).
+Phase 3 tasks SHOULD be mapped onto the reusable tiers plus addenda above:
 
-Phase 2 tier definitions and DoDs SHOULD be added to the skill implementation
-or reviewed ledger draft at `--reinit` time when the corresponding tasks are
-first encountered, NOT silently inferred from roadmap rows that lack DoD text.
+- enterprise providers, proxy support, and connection pooling use
+  `provider-contract`;
+- image input/tool results use `library` plus the multimodal addendum;
+- terminal image rendering and fuzzy pickers use `tui`;
+- context-file loading, tool selection, shell completions, and `find`/`ls`
+  use `cli-runtime` or `cli-tool` as appropriate.
+
+Phase 4 extensibility work uses reviewed inferred DoDs from the current spec.
+MCP, sub-agents, plan mode, todos, and permission gates are extension/package
+examples in that phase, not Phase 3 core tasks.
 
 ## 7. Failure Decision Gate
 
@@ -576,7 +649,9 @@ Tests added but failing: <list>
 Files modified: <list>
 Smallest failing assertion: <quote from test output>
 Start commit: <tasks[].start_commit>
+Baseline dirty files at Phase B: <tasks[].baseline_dirty_files>
 Dirty status: <git status --short>
+Task-owned dirty files: <files changed since start_commit excluding baseline-only changes>
 Reproduction commands: <exact commands>
 ```
 
@@ -592,8 +667,9 @@ Reproduction commands: <exact commands>
 There is intentionally no "auto-revert" option. The skill MUST NOT run
 `git restore`, `git clean`, `git reset`, or equivalent destructive cleanup from
 the failure gate. If abandoning an attempt requires cleanup, the skill prints
-candidate commands scoped to files changed since `start_commit` and exits for a
-human to decide.
+candidate commands scoped only to task-owned files changed since `start_commit`.
+It never includes files that were already dirty in `baseline_dirty_files` unless
+the task also modified them and the user explicitly confirms they are task-owned.
 
 ### 7.3 Stuck-On-Many-Tasks Meta-Warning
 
@@ -630,6 +706,9 @@ blindly.
 | Never run live provider tests from this skill. | Live API calls are non-deterministic, cost money, and can hit rate limits. They belong in `#[ignore]`-gated integration tests run manually, not in an automated harness. |
 | Never commit `.opi-impl-state.json`, `.opi-impl-state.json.tmp`, or `.opi-impl-state.draft.json`. | These are high-churn runtime artifacts. Committing them pollutes history with noise and creates merge conflicts on every invocation. |
 | Never skip `[workspace.dependencies]` when adding internal crate deps. | Lockstep versioning requires all internal deps to flow through the workspace table. Bare path deps break `cargo publish` and version coherence. |
+| Never execute a stale ledger after `opi-spec.md` changed. | The ledger is an implementation cache. If the spec hash changed, task title, DoD, dependencies, and phase scope may now mean something different. |
+| Never require unrelated user changes to become clean. | This repository may be shared with users or other agents. The harness owns only the selected task's files and must not pressure cleanup of unrelated work. |
+| Never reintroduce MCP, permission profiles, sub-agents, plan mode, or todos as Phase 3 core work. | The current spec keeps these as extension/package examples or later surfaces; putting them back in core recreates the drift the harness is supposed to prevent. |
 | Never satisfy a DoD with placeholder stubs, TODOs, or display-only behavior unless the DoD explicitly asks for scaffolding. | Stubs pass mechanical gates but don't deliver value. A "passing" task with stub internals poisons downstream tasks that depend on real behavior. |
 | Never broaden a task into cross-task refactors without updating the task graph and returning to the review gate. | Scope creep in one task invalidates the assumptions of adjacent tasks. The graph must reflect reality before work continues. |
 | Never clean, restore, or discard user changes from a failure gate. | The user's working tree may contain in-progress manual fixes or debugging state. Automated cleanup destroys context that's expensive to reconstruct. |
@@ -774,8 +853,9 @@ explicit boundary lines the skill MUST NOT cross:
 - Building cross-platform binaries.
 - Making network calls to Anthropic, OpenAI, or any provider API.
 - Opening GitHub issues, PRs, or releases.
-- Reading or writing `~/.config/opi/` or session storage paths — those are
-  runtime concerns of the `opi` binary, not the implementation skill.
+- Reading or writing user runtime data such as `~/.config/opi/`, real auth
+  files, or real session storage. Editing source code for config/session
+  behavior is allowed only when the selected spec task owns that behavior.
 
 ## 16. References
 

@@ -5,7 +5,9 @@
 Triggered when `.opi-impl-state.json` is absent OR `--reinit` is passed.
 
 ### A.init.1 Pre-flight
-- Confirm git clean, on main, `opi-spec.md` present
+- Record current branch, baseline dirty files, and `opi-spec.md` presence.
+  Refuse only when dirty files would be overwritten by init/reinit outputs;
+  do not require unrelated user changes to be cleaned.
 
 ### A.init.2 Parse Spec
 Parse `opi-spec.md` §15 roadmap tables. For each task row extract:
@@ -13,12 +15,44 @@ Parse `opi-spec.md` §15 roadmap tables. For each task row extract:
 - **Infer:** tier (from crate + description), commit_type (from task verbs),
   depends_on (from ordering + DoD references), evaluator_required (from risk rules)
 - Attach `inference_notes` for every non-verbatim field
-- Rows without DoD → deferred spec rows (not executable) unless a reviewed
-  draft supplies a concrete DoD
+- Rows without explicit DoD:
+  - Phase 1 rows with a "Definition of done" column use that text verbatim.
+  - Phase 2+ rows may receive a draft `definition_of_done` inferred from the
+    roadmap row, feature parity matrix, relevant crate section, security
+    requirements, and phase exit criteria.
+  - Every inferred DoD MUST include `inference_notes` with source section names.
+  - The task remains non-executable until the task-graph review gate confirms
+    the inferred DoD.
+
+### A.init.2a Composite Row Detection
+
+Some spec roadmap rows describe N independent deliverables in one line
+(e.g. `4.6 | extension examples: permission gate, sub-agent, plan mode, todo, MCP adapter`).
+These rows MUST NOT become a single ledger task.
+
+Trigger heuristic: the row title contains `:` followed by ≥ 2
+comma-separated items, OR a leading `examples:` / `task family:` marker.
+
+For each composite row:
+
+- Generate sub-tasks with IDs `<row>.1`, `<row>.2`, ..., `<row>.N`.
+- Set `parent_spec_row = "<row>"` on each.
+- Independent draft DoD per item, drawn from the item phrase plus relevant
+  spec sections.
+- Each sub-task inherits the parent's `depends_on` unless review-gate narrows.
+- Each sub-task inherits the parent's `crate` (or `"package-template"` /
+  `"examples"` when the row's crate column is non-standard).
+- `definition_source = "inferred"` for every sub-task (composite rows never
+  produce verbatim DoDs).
+- The composite row itself does NOT produce a parent task; there is no
+  placeholder entry with id `<row>`.
+- The task-graph review gate MUST surface composite decompositions in a
+  dedicated section so the user reviews them as a unit before confirmation.
 
 ### A.init.3 Task-Graph Review Gate
 
-Render complete draft as table with: id, title, tier, commit_type, depends_on,
+Render complete draft as table with: id, title, tier, `task_owned_paths`
+(default derived from `crate`, editable), commit_type, depends_on,
 execution order, evaluator_required, inference_notes.
 
 Gate options:
@@ -53,11 +87,28 @@ infrastructure (smoke script + .gitignore), not task implementation code.
 ### A.init.7 Print Summary
 - Success message + next-task hint
 
+## Schema Version Migration
+
+On every invocation (not just `--reinit`), inspect `schema_version` from the
+ledger before any other step.
+
+- `schema_version == 2` (current): proceed.
+- `schema_version == 1`: refuse normal task execution. Print
+  "Ledger is v1; running v1 → v2 migration as part of `--reinit`." If the
+  invocation is not `--reinit`, exit and instruct the user to run
+  `opi-implement --reinit`. If `--reinit`: apply the v1 → v2 migration
+  documented in `ledger-schema.md`, then continue with the rest of reinit
+  reconciliation below.
+- `schema_version > 2` or missing: refuse with an explicit message identifying
+  the offending value.
+
 ## Reinit Reconciliation
 
 When `--reinit` runs against an existing ledger:
 
-1. Recompute `spec_sha256`. If unchanged → refuse, suggest `--status`.
+1. For each path in `spec_files`, recompute its SHA-256 and compare with
+   `spec_files_sha256`. If every entry matches → refuse, suggest `--status`.
+   If any differs → proceed.
 2. Re-parse spec into fresh ledger.
 3. Reconcile field-by-field:
    - **Both:** preserve `status`, `verified_at_commit`, `iteration_count`,
@@ -68,10 +119,29 @@ When `--reinit` runs against an existing ledger:
      or demote-to-failing (substantive)
    - **depends_on/tier/commit_type/evaluator_required changed:** re-run
      task-graph review gate with row-level diff, require confirmation
-4. Update `spec_sha256` after confirmation.
+4. Update every entry in `spec_files_sha256` to the freshly recomputed hash
+   after confirmation.
 5. If tracked files changed (.gitignore, smoke): commit with
    `chore: reconcile opi-implement harness files with opi-spec.md changes`
 6. If no tracked file changed: no empty commit. Ledger/draft remain gitignored.
+
+### Changed Task Meaning
+
+If a task ID is present in both old and new graphs but the title or DoD changes
+substantively, show a row-level diff and default to:
+
+- preserve runtime history in `session_notes`;
+- keep `status = failing` unless the user explicitly confirms the old passing
+  evidence still satisfies the new DoD;
+- record an `inference_notes` entry with `field = "replaces"` when the new task
+  intentionally supersedes an old one under the same ID.
+
+Examples from the 2026-05-25 spec adjustment:
+
+- `3.7 OPI.md context loading` becomes `3.7 AGENTS.md / CLAUDE.md context loading`;
+- `3.8 permission profiles and policy system` becomes `3.8 pi-style tool selection and safety hooks`;
+- `3.9 MCP client adapter` becomes `3.9 find / ls built-in tool parity`;
+- MCP moves to Phase 4 as an extension/package example, not a Phase 3 core task.
 
 ## Draft Export/Import
 
