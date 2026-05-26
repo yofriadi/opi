@@ -11,6 +11,14 @@ fn main() {
 
     let cli = Cli::parse();
 
+    // Handle shell completion generation early — no config/provider needed.
+    if let Some(shell) = cli.generate_completion {
+        let mut cmd = <Cli as clap::CommandFactory>::command();
+        let shell: clap_complete::Shell = shell.into();
+        clap_complete::generate(shell, &mut cmd, "opi", &mut std::io::stdout());
+        return;
+    }
+
     if cli.verbose {
         eprintln!("opi {} - debug mode", env!("CARGO_PKG_VERSION"));
     }

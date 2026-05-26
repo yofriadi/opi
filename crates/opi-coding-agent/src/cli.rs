@@ -2,7 +2,30 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+
+/// Supported shells for completion generation.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ShellName {
+    Bash,
+    Zsh,
+    Fish,
+    #[clap(name = "powershell")]
+    PowerShell,
+    Elvish,
+}
+
+impl From<ShellName> for clap_complete::Shell {
+    fn from(s: ShellName) -> Self {
+        match s {
+            ShellName::Bash => clap_complete::Shell::Bash,
+            ShellName::Zsh => clap_complete::Shell::Zsh,
+            ShellName::Fish => clap_complete::Shell::Fish,
+            ShellName::PowerShell => clap_complete::Shell::PowerShell,
+            ShellName::Elvish => clap_complete::Shell::Elvish,
+        }
+    }
+}
 
 /// opi — AI coding agent.
 #[derive(Debug, Parser)]
@@ -43,6 +66,10 @@ pub struct Cli {
     /// Delete a session by ID.
     #[arg(long)]
     pub delete_session: Option<String>,
+
+    /// Generate shell completions to stdout.
+    #[arg(long, value_name = "SHELL")]
+    pub generate_completion: Option<ShellName>,
 
     /// Enable debug tracing.
     #[arg(short = 'v', long)]
