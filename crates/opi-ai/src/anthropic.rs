@@ -1,9 +1,12 @@
 //! Anthropic Messages SSE provider (S8.1).
 
+use std::sync::Arc;
+
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::http::HttpClient;
 use crate::message::{AssistantContent, AssistantMessage, ToolCall};
 use crate::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
 use crate::stream::{AssistantStreamEvent, StopReason, Usage};
@@ -586,10 +589,16 @@ pub struct AnthropicProvider {
     #[allow(dead_code)] // used by HTTP streaming path
     base_url: String,
     models: Vec<ModelInfo>,
+    client: Arc<HttpClient>,
 }
 
 impl AnthropicProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
+        Self::with_client(api_key, base_url, Arc::new(HttpClient::new()))
+    }
+
+    /// Create with a shared HTTP client for connection pooling.
+    pub fn with_client(api_key: String, base_url: Option<String>, client: Arc<HttpClient>) -> Self {
         let base_url = base_url.unwrap_or_else(|| "https://api.anthropic.com".into());
         let models = vec![
             ModelInfo {
@@ -621,7 +630,13 @@ impl AnthropicProvider {
             api_key,
             base_url,
             models,
+            client,
         }
+    }
+
+    /// Access the shared HTTP client (for testing client reuse).
+    pub fn http_client(&self) -> &Arc<HttpClient> {
+        &self.client
     }
 
     /// Build the Anthropic Messages API request body.
@@ -708,13 +723,13 @@ impl AnthropicProvider {
 
     /// Real HTTP streaming: POST to Anthropic Messages API and parse SSE from the byte stream.
     async fn stream_http(
+        client: reqwest::Client,
         api_key: String,
         base_url: String,
         body: &serde_json::Value,
         cancel: CancellationToken,
         tx: &tokio::sync::mpsc::Sender<Result<AssistantStreamEvent, ProviderError>>,
     ) -> Result<(), ProviderError> {
-        let client = reqwest::Client::new();
         let response = client
             .post(format!("{base_url}/v1/messages"))
             .header("x-api-key", &api_key)
@@ -947,11 +962,14 @@ impl Provider for AnthropicProvider {
         let base_url = self.base_url.clone();
         let body = self.build_request_body(&request);
         let cancel = request.cancel.clone();
+        let http_client = self.client.client().clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
 
         tokio::spawn(async move {
-            if let Err(e) = Self::stream_http(api_key, base_url, &body, cancel, &tx).await {
+            if let Err(e) =
+                Self::stream_http(http_client, api_key, base_url, &body, cancel, &tx).await
+            {
                 let _ = tx.send(Err(e)).await;
             }
         });

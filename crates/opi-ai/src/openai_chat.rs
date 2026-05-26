@@ -4,10 +4,13 @@
 //! SSE lines (no `event:` prefix). Exposes [`CompatConfig`] so downstream profiles
 //! (OpenRouter, Mistral) can override role mapping, max_tokens field naming, etc.
 
+use std::sync::Arc;
+
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::http::HttpClient;
 use crate::message::{AssistantContent, AssistantMessage, OutputContent, ToolCall};
 use crate::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
 use crate::stream::{AssistantStreamEvent, StopReason, Usage};
@@ -592,6 +595,7 @@ pub struct OpenAiChatProvider {
     compat: CompatConfig,
     provider_id: String,
     extra_headers: Vec<(String, String)>,
+    client: Arc<HttpClient>,
 }
 
 impl OpenAiChatProvider {
@@ -603,6 +607,42 @@ impl OpenAiChatProvider {
         api_key: String,
         base_url: Option<String>,
         compat: CompatConfig,
+    ) -> Self {
+        Self::with_client_and_compat(
+            api_key,
+            base_url,
+            compat,
+            "openai".into(),
+            vec![],
+            Arc::new(HttpClient::new()),
+        )
+    }
+
+    /// Create with a shared HTTP client.
+    pub fn with_client(
+        api_key: String,
+        base_url: Option<String>,
+        provider_id: String,
+        extra_headers: Vec<(String, String)>,
+        client: Arc<HttpClient>,
+    ) -> Self {
+        Self::with_client_and_compat(
+            api_key,
+            base_url,
+            CompatConfig::default(),
+            provider_id,
+            extra_headers,
+            client,
+        )
+    }
+
+    fn with_client_and_compat(
+        api_key: String,
+        base_url: Option<String>,
+        compat: CompatConfig,
+        provider_id: String,
+        extra_headers: Vec<(String, String)>,
+        client: Arc<HttpClient>,
     ) -> Self {
         let base_url = base_url.unwrap_or_else(|| "https://api.openai.com".into());
         let models = vec![
@@ -644,8 +684,9 @@ impl OpenAiChatProvider {
             base_url,
             models,
             compat,
-            provider_id: "openai".into(),
-            extra_headers: Vec::new(),
+            provider_id,
+            extra_headers,
+            client,
         }
     }
 
@@ -665,7 +706,13 @@ impl OpenAiChatProvider {
             compat,
             provider_id,
             extra_headers,
+            client: Arc::new(HttpClient::new()),
         }
+    }
+
+    /// Access the shared HTTP client (for testing client reuse).
+    pub fn http_client(&self) -> &Arc<HttpClient> {
+        &self.client
     }
 
     /// Build the OpenAI Chat Completions API request body.
@@ -744,7 +791,9 @@ impl OpenAiChatProvider {
     }
 
     /// Real HTTP streaming: POST to OpenAI Chat Completions API.
+    #[allow(clippy::too_many_arguments)]
     async fn stream_http(
+        http_client: reqwest::Client,
         api_key: String,
         base_url: String,
         provider_id: String,
@@ -753,8 +802,7 @@ impl OpenAiChatProvider {
         cancel: CancellationToken,
         tx: &tokio::sync::mpsc::Sender<Result<AssistantStreamEvent, ProviderError>>,
     ) -> Result<(), ProviderError> {
-        let client = reqwest::Client::new();
-        let mut req = client
+        let mut req = http_client
             .post(format!("{base_url}/v1/chat/completions"))
             .header("authorization", format!("Bearer {api_key}"))
             .header("content-type", "application/json");
@@ -1014,11 +1062,13 @@ impl Provider for OpenAiChatProvider {
         let extra_headers = self.extra_headers.clone();
         let body = self.build_request_body(&request);
         let cancel = request.cancel.clone();
+        let http_client = self.client.client().clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
 
         tokio::spawn(async move {
             if let Err(e) = Self::stream_http(
+                http_client,
                 api_key,
                 base_url,
                 provider_id,

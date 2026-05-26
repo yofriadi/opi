@@ -7,6 +7,7 @@
 pub mod anthropic;
 pub mod config;
 pub mod gemini;
+pub mod http;
 pub mod message;
 pub mod mistral;
 pub mod model;

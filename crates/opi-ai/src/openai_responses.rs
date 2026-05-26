@@ -6,10 +6,13 @@
 //! `response.output_text.delta`, `response.function_call_arguments.delta`,
 //! `response.completed`, etc.
 
+use std::sync::Arc;
+
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::http::HttpClient;
 use crate::message::{AssistantContent, AssistantMessage, OutputContent, ToolCall};
 use crate::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
 use crate::stream::{AssistantStreamEvent, StopReason, Usage};
@@ -590,10 +593,16 @@ pub struct OpenAiResponsesProvider {
     api_key: String,
     base_url: String,
     models: Vec<ModelInfo>,
+    client: Arc<HttpClient>,
 }
 
 impl OpenAiResponsesProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
+        Self::with_client(api_key, base_url, Arc::new(HttpClient::new()))
+    }
+
+    /// Create with a shared HTTP client.
+    pub fn with_client(api_key: String, base_url: Option<String>, client: Arc<HttpClient>) -> Self {
         let base_url = base_url.unwrap_or_else(|| "https://api.openai.com".into());
         let models = vec![
             ModelInfo {
@@ -633,7 +642,13 @@ impl OpenAiResponsesProvider {
             api_key,
             base_url,
             models,
+            client,
         }
+    }
+
+    /// Access the shared HTTP client.
+    pub fn http_client(&self) -> &Arc<HttpClient> {
+        &self.client
     }
 
     /// Build the OpenAI Responses API request body.
@@ -808,14 +823,14 @@ impl OpenAiResponsesProvider {
 
     /// Real HTTP streaming: POST to OpenAI Responses API.
     async fn stream_http(
+        http_client: reqwest::Client,
         api_key: String,
         base_url: String,
         body: &serde_json::Value,
         cancel: CancellationToken,
         tx: &tokio::sync::mpsc::Sender<Result<AssistantStreamEvent, ProviderError>>,
     ) -> Result<(), ProviderError> {
-        let client = reqwest::Client::new();
-        let response = client
+        let response = http_client
             .post(format!("{base_url}/v1/responses"))
             .header("authorization", format!("Bearer {api_key}"))
             .header("content-type", "application/json")
@@ -938,11 +953,14 @@ impl Provider for OpenAiResponsesProvider {
         let base_url = self.base_url.clone();
         let body = self.build_request_body(&request);
         let cancel = request.cancel.clone();
+        let http_client = self.client.client().clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
 
         tokio::spawn(async move {
-            if let Err(e) = Self::stream_http(api_key, base_url, &body, cancel, &tx).await {
+            if let Err(e) =
+                Self::stream_http(http_client, api_key, base_url, &body, cancel, &tx).await
+            {
                 let _ = tx.send(Err(e)).await;
             }
         });
