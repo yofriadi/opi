@@ -901,6 +901,28 @@ fn serialize_messages(
                         crate::message::InputContent::Text { text } => {
                             serde_json::json!({"type": "text", "text": text})
                         }
+                        crate::message::InputContent::Image { source, media_type } => {
+                            let url = match source {
+                                crate::message::ImageSource::Url { url } => url.clone(),
+                                crate::message::ImageSource::Base64 { data } => {
+                                    format!("data:{};base64,{}", media_type.as_str(), data)
+                                }
+                                crate::message::ImageSource::Bytes { data } => {
+                                    format!(
+                                        "data:{};base64,{}",
+                                        media_type.as_str(),
+                                        base64::Engine::encode(
+                                            &base64::engine::general_purpose::STANDARD,
+                                            data,
+                                        )
+                                    )
+                                }
+                            };
+                            serde_json::json!({
+                                "type": "image_url",
+                                "image_url": {"url": url}
+                            })
+                        }
                     })
                     .collect();
                 // If single text content, flatten to string

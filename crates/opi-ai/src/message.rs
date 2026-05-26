@@ -44,12 +44,55 @@ pub struct ToolResultMessage {
     pub timestamp_ms: i64,
 }
 
+/// Supported image media types for user-supplied images.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MediaType {
+    #[serde(rename = "image/png")]
+    Png,
+    #[serde(rename = "image/jpeg")]
+    Jpeg,
+    #[serde(rename = "image/gif")]
+    Gif,
+    #[serde(rename = "image/webp")]
+    WebP,
+}
+
+impl MediaType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::Gif => "image/gif",
+            Self::WebP => "image/webp",
+        }
+    }
+}
+
+/// Source of image data: URL reference, base64-encoded string, or raw bytes.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ImageSource {
+    #[serde(rename = "url")]
+    Url { url: String },
+    #[serde(rename = "base64")]
+    Base64 { data: String },
+    #[serde(rename = "bytes")]
+    Bytes { data: Vec<u8> },
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum InputContent {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "image")]
+    Image {
+        source: ImageSource,
+        media_type: MediaType,
+    },
 }
 
 #[non_exhaustive]

@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod config;
 pub mod harness;
+pub mod image;
 pub mod interactive;
 pub mod policy;
 pub mod pricing;

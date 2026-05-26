@@ -855,6 +855,42 @@ fn serialize_messages(messages: &[crate::message::Message]) -> serde_json::Value
                             crate::message::InputContent::Text { text } => {
                                 serde_json::json!({"type": "text", "text": text})
                             }
+                            crate::message::InputContent::Image { source, media_type } => {
+                                match source {
+                                    crate::message::ImageSource::Url { url } => {
+                                        serde_json::json!({
+                                            "type": "image",
+                                            "source": {
+                                                "type": "url",
+                                                "url": url,
+                                            }
+                                        })
+                                    }
+                                    crate::message::ImageSource::Base64 { data } => {
+                                        serde_json::json!({
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": media_type.as_str(),
+                                                "data": data,
+                                            }
+                                        })
+                                    }
+                                    crate::message::ImageSource::Bytes { data } => {
+                                        serde_json::json!({
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": media_type.as_str(),
+                                                "data": base64::Engine::encode(
+                                                    &base64::engine::general_purpose::STANDARD,
+                                                    data,
+                                                ),
+                                            }
+                                        })
+                                    }
+                                }
+                            }
                         })
                         .collect();
                     serde_json::json!({"role": "user", "content": content})

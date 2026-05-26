@@ -48,6 +48,10 @@ pub struct Cli {
     #[arg(short = 'v', long)]
     pub verbose: bool,
 
+    /// Attach image file(s) to the prompt.
+    #[arg(long)]
+    pub image: Vec<PathBuf>,
+
     /// Initial prompt (positional).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub prompt: Vec<String>,

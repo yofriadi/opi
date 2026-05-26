@@ -657,6 +657,28 @@ impl OpenAiResponsesProvider {
                             crate::message::InputContent::Text { text } => {
                                 serde_json::json!({"type": "input_text", "text": text})
                             }
+                            crate::message::InputContent::Image { source, media_type } => {
+                                let image_url = match source {
+                                    crate::message::ImageSource::Url { url } => url.clone(),
+                                    crate::message::ImageSource::Base64 { data } => {
+                                        format!("data:{};base64,{}", media_type.as_str(), data)
+                                    }
+                                    crate::message::ImageSource::Bytes { data } => {
+                                        format!(
+                                            "data:{};base64,{}",
+                                            media_type.as_str(),
+                                            base64::Engine::encode(
+                                                &base64::engine::general_purpose::STANDARD,
+                                                data,
+                                            )
+                                        )
+                                    }
+                                };
+                                serde_json::json!({
+                                    "type": "input_image",
+                                    "image_url": image_url,
+                                })
+                            }
                         })
                         .collect();
                     if content.len() == 1

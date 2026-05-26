@@ -492,6 +492,37 @@ impl GeminiProvider {
                             crate::message::InputContent::Text { text } => {
                                 serde_json::json!({"text": text})
                             }
+                            crate::message::InputContent::Image { source, media_type } => {
+                                match source {
+                                    crate::message::ImageSource::Url { url } => {
+                                        serde_json::json!({
+                                            "file_data": {
+                                                "file_uri": url,
+                                                "mime_type": media_type.as_str(),
+                                            }
+                                        })
+                                    }
+                                    crate::message::ImageSource::Base64 { data } => {
+                                        serde_json::json!({
+                                            "inline_data": {
+                                                "mime_type": media_type.as_str(),
+                                                "data": data,
+                                            }
+                                        })
+                                    }
+                                    crate::message::ImageSource::Bytes { data } => {
+                                        serde_json::json!({
+                                            "inline_data": {
+                                                "mime_type": media_type.as_str(),
+                                                "data": base64::Engine::encode(
+                                                    &base64::engine::general_purpose::STANDARD,
+                                                    data,
+                                                ),
+                                            }
+                                        })
+                                    }
+                                }
+                            }
                         })
                         .collect();
                     contents.push(serde_json::json!({
