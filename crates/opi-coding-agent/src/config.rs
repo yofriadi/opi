@@ -82,6 +82,7 @@ pub struct ProvidersConfig {
 pub struct AnthropicProviderConfig {
     pub api_key_env: String,
     pub base_url: Option<String>,
+    pub proxy: Option<ProviderProxyConfig>,
 }
 
 impl Default for AnthropicProviderConfig {
@@ -89,15 +90,17 @@ impl Default for AnthropicProviderConfig {
         Self {
             api_key_env: "ANTHROPIC_API_KEY".into(),
             base_url: None,
+            proxy: None,
         }
     }
 }
 
-/// Generic provider config (api_key_env + optional base_url).
+/// Generic provider config (api_key_env + optional base_url + optional proxy).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GenericProviderConfig {
     pub api_key_env: String,
     pub base_url: Option<String>,
+    pub proxy: Option<ProviderProxyConfig>,
 }
 
 /// OpenRouter-specific provider config.
@@ -106,6 +109,14 @@ pub struct OpenRouterProviderConfig {
     pub api_key_env: String,
     pub base_url: Option<String>,
     pub referer: Option<String>,
+    pub proxy: Option<ProviderProxyConfig>,
+}
+
+/// Per-provider proxy configuration from `[providers.*.proxy]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderProxyConfig {
+    pub url: String,
+    pub no_proxy: Option<String>,
 }
 
 /// `[keybindings]` section.
@@ -190,6 +201,7 @@ struct TomlProviders {
 struct TomlAnthropic {
     api_key_env: Option<String>,
     base_url: Option<String>,
+    proxy: Option<TomlProxy>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -197,6 +209,7 @@ struct TomlAnthropic {
 struct TomlGenericProvider {
     api_key_env: Option<String>,
     base_url: Option<String>,
+    proxy: Option<TomlProxy>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -205,6 +218,14 @@ struct TomlOpenRouterProvider {
     api_key_env: Option<String>,
     base_url: Option<String>,
     referer: Option<String>,
+    proxy: Option<TomlProxy>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlProxy {
+    url: Option<String>,
+    no_proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -259,11 +280,27 @@ impl TomlConfig {
         if let Some(v) = self.providers.anthropic.base_url {
             config.providers.anthropic.base_url = Some(v);
         }
+        if let Some(p) = self.providers.anthropic.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.anthropic.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
+        }
         if let Some(v) = self.providers.openai.api_key_env {
             config.providers.openai.api_key_env = v;
         }
         if let Some(v) = self.providers.openai.base_url {
             config.providers.openai.base_url = Some(v);
+        }
+        if let Some(p) = self.providers.openai.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.openai.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
         }
         if let Some(v) = self.providers.openrouter.api_key_env {
             config.providers.openrouter.api_key_env = v;
@@ -274,11 +311,27 @@ impl TomlConfig {
         if let Some(v) = self.providers.openrouter.referer {
             config.providers.openrouter.referer = Some(v);
         }
+        if let Some(p) = self.providers.openrouter.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.openrouter.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
+        }
         if let Some(v) = self.providers.mistral.api_key_env {
             config.providers.mistral.api_key_env = v;
         }
         if let Some(v) = self.providers.mistral.base_url {
             config.providers.mistral.base_url = Some(v);
+        }
+        if let Some(p) = self.providers.mistral.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.mistral.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
         }
         if let Some(v) = self.providers.openai_responses.api_key_env {
             config.providers.openai_responses.api_key_env = v;
@@ -286,11 +339,27 @@ impl TomlConfig {
         if let Some(v) = self.providers.openai_responses.base_url {
             config.providers.openai_responses.base_url = Some(v);
         }
+        if let Some(p) = self.providers.openai_responses.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.openai_responses.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
+        }
         if let Some(v) = self.providers.gemini.api_key_env {
             config.providers.gemini.api_key_env = v;
         }
         if let Some(v) = self.providers.gemini.base_url {
             config.providers.gemini.base_url = Some(v);
+        }
+        if let Some(p) = self.providers.gemini.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.gemini.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
         }
         if let Some(v) = self.keybindings.submit {
             config.keybindings.submit = v;
