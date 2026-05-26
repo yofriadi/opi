@@ -16,6 +16,7 @@ use opi_ai::provider::Provider;
 
 use crate::config::OpiConfig;
 use crate::context_files;
+use crate::policy::ToolSelection;
 use crate::prompt::SystemPromptBuilder;
 use crate::session_coordinator::{SessionCoordinator, to_wire_result};
 use crate::tool::{BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool};
@@ -57,10 +58,32 @@ impl CodingHarness {
             Box::new(CodingAgentHooks),
             None,
             Vec::new(),
+            ToolSelection::Default,
+        )
+    }
+
+    /// Create a new harness with an explicit tool selection.
+    pub fn new_with_selection(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        tool_selection: ToolSelection,
+    ) -> Self {
+        Self::new_with_hooks(
+            provider,
+            model,
+            config,
+            workspace_root,
+            Box::new(CodingAgentHooks),
+            None,
+            Vec::new(),
+            tool_selection,
         )
     }
 
     /// Create a new harness with custom hooks.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_hooks(
         provider: Box<dyn Provider>,
         model: String,
@@ -69,6 +92,7 @@ impl CodingHarness {
         hooks: Box<dyn AgentHooks>,
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
+        tool_selection: ToolSelection,
     ) -> Self {
         Self::new_with_hooks_and_resume(
             provider,
@@ -79,6 +103,7 @@ impl CodingHarness {
             user_system_prompt,
             initial_messages,
             None,
+            tool_selection,
         )
     }
 
@@ -93,8 +118,9 @@ impl CodingHarness {
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
         resume: Option<ResumeInfo>,
+        tool_selection: ToolSelection,
     ) -> Self {
-        let tools = Self::build_tools(&workspace_root);
+        let tools = Self::build_tools(&workspace_root, &tool_selection);
         let tool_defs: Vec<_> = tools.iter().map(|t| t.definition()).collect();
         let mut builder = SystemPromptBuilder::new().tools(tool_defs);
         if let Some(content) = user_system_prompt {
@@ -324,15 +350,24 @@ impl CodingHarness {
         self.session.as_ref()
     }
 
-    fn build_tools(workspace_root: &Path) -> Vec<Box<dyn Tool>> {
-        vec![
+    fn build_tools(workspace_root: &Path, selection: &ToolSelection) -> Vec<Box<dyn Tool>> {
+        let all_tools: Vec<Box<dyn Tool>> = vec![
             Box::new(ReadTool::new(workspace_root.to_path_buf())),
             Box::new(WriteTool::new(workspace_root.to_path_buf())),
             Box::new(EditTool::new(workspace_root.to_path_buf())),
             Box::new(BashTool::new(workspace_root.to_path_buf())),
             Box::new(GlobTool::new(workspace_root.to_path_buf())),
             Box::new(GrepTool::new(workspace_root.to_path_buf())),
-        ]
+        ];
+
+        match selection {
+            ToolSelection::Default => all_tools,
+            ToolSelection::Disabled | ToolSelection::NoBuiltin => Vec::new(),
+            ToolSelection::Allowlist(names) => all_tools
+                .into_iter()
+                .filter(|t| names.iter().any(|n| *n == t.definition().name))
+                .collect(),
+        }
     }
 }
 

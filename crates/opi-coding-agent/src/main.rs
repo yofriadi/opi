@@ -3,6 +3,7 @@ use clap::Parser;
 use opi_coding_agent::cli::Cli;
 use opi_coding_agent::config::{ConfigSource, resolve_config};
 use opi_coding_agent::harness::ResumeInfo;
+use opi_coding_agent::policy::{ToolFlags, ToolSelection, resolve_tool_selection};
 
 fn main() {
     // Load .env if present (for local development/testing convenience).
@@ -55,6 +56,12 @@ fn main() {
 
     let prompt_text = cli.prompt.join(" ");
 
+    let tool_selection = resolve_tool_selection(ToolFlags {
+        tools: cli.tools.clone(),
+        no_tools: cli.no_tools,
+        no_builtin_tools: cli.no_builtin_tools,
+    });
+
     if cli.non_interactive || cli.json || !prompt_text.is_empty() {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
@@ -65,7 +72,15 @@ fn main() {
         };
 
         let exit_code = rt.block_on(async {
-            run_non_interactive(&cli, &config, &prompt_text, resumed_messages, resume_info).await
+            run_non_interactive(
+                &cli,
+                &config,
+                &prompt_text,
+                resumed_messages,
+                resume_info,
+                tool_selection,
+            )
+            .await
         });
         std::process::exit(exit_code);
     } else {
@@ -77,7 +92,9 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        rt.block_on(async { run_interactive(&cli, &config, resumed_messages, resume_info).await });
+        rt.block_on(async {
+            run_interactive(&cli, &config, resumed_messages, resume_info, tool_selection).await
+        });
     }
 }
 
@@ -87,6 +104,7 @@ async fn run_non_interactive(
     prompt_text: &str,
     resumed_messages: Option<Vec<opi_agent::message::AgentMessage>>,
     resume_info: Option<ResumeInfo>,
+    tool_selection: ToolSelection,
 ) -> i32 {
     use opi_coding_agent::runner::{ExitCode, NonInteractiveRunner};
 
@@ -137,6 +155,7 @@ async fn run_non_interactive(
         user_system_prompt,
         resumed_messages.unwrap_or_default(),
         resume_info,
+        tool_selection,
     );
 
     let result = if cli.json {
@@ -160,6 +179,7 @@ async fn run_interactive(
     config: &opi_coding_agent::config::OpiConfig,
     resumed_messages: Option<Vec<opi_agent::message::AgentMessage>>,
     resume_info: Option<ResumeInfo>,
+    tool_selection: ToolSelection,
 ) {
     use opi_coding_agent::harness::{CodingHarness, InteractiveCodingHooks};
     use opi_coding_agent::interactive;
@@ -198,6 +218,7 @@ async fn run_interactive(
         user_system_prompt,
         initial_messages,
         resume_info,
+        tool_selection,
     );
 
     let model_display = config.defaults.model.clone();

@@ -20,7 +20,7 @@ use opi_ai::stream::AssistantStreamEvent;
 
 use crate::config::OpiConfig;
 use crate::harness::{CodingHarness, ResumeInfo};
-use crate::policy::is_mutating_tool;
+use crate::policy::{ToolSelection, is_mutating_tool};
 
 /// NDJSON output schema version.
 pub const NDJSON_SCHEMA_VERSION: u32 = 1;
@@ -83,6 +83,7 @@ impl NonInteractiveRunner {
             user_system_prompt,
             initial_messages,
             None,
+            ToolSelection::Default,
         )
     }
 
@@ -98,6 +99,7 @@ impl NonInteractiveRunner {
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
         resume_info: Option<ResumeInfo>,
+        tool_selection: ToolSelection,
     ) -> Self {
         let hooks = Box::new(NonInteractiveHooks { allow_mutating });
         let harness = CodingHarness::new_with_hooks_and_resume(
@@ -109,6 +111,7 @@ impl NonInteractiveRunner {
             user_system_prompt,
             initial_messages,
             resume_info,
+            tool_selection,
         );
         Self { harness }
     }
@@ -263,6 +266,11 @@ impl NonInteractiveRunner {
     /// Cancel the running operation.
     pub fn cancel(&self) {
         self.harness.cancel();
+    }
+
+    /// Return the session coordinator, if active.
+    pub fn session(&self) -> Option<&crate::session_coordinator::SessionCoordinator> {
+        self.harness.session()
     }
 
     /// Run a single prompt and return captured output.

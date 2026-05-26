@@ -48,6 +48,18 @@ pub struct Cli {
     #[arg(short = 'v', long)]
     pub verbose: bool,
 
+    /// Tool allowlist (comma-separated, e.g. "read,glob").
+    #[arg(long, value_delimiter = ',')]
+    pub tools: Option<Vec<String>>,
+
+    /// Disable all tools.
+    #[arg(long)]
+    pub no_tools: bool,
+
+    /// Disable built-in tools (reserved for Phase 4 extension tools).
+    #[arg(long)]
+    pub no_builtin_tools: bool,
+
     /// Attach image file(s) to the prompt.
     #[arg(long)]
     pub image: Vec<PathBuf>,

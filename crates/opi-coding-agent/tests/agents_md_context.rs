@@ -397,6 +397,7 @@ async fn e2e_resume_context_from_original_workspace() {
         None,
         vec![],
         Some(resume_info),
+        opi_coding_agent::policy::ToolSelection::Default,
     );
 
     let system = harness.system_prompt();
