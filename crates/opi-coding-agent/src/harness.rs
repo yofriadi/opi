@@ -19,7 +19,7 @@ use crate::context_files;
 use crate::policy::ToolSelection;
 use crate::prompt::SystemPromptBuilder;
 use crate::session_coordinator::{SessionCoordinator, to_wire_result};
-use crate::tool::{BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool};
+use crate::tool::{BashTool, EditTool, FindTool, GlobTool, GrepTool, LsTool, ReadTool, WriteTool};
 
 /// Optional pre-existing session the harness can adopt instead of creating
 /// a new JSONL file. Produced by `--resume` flows.
@@ -358,6 +358,8 @@ impl CodingHarness {
             Box::new(BashTool::new(workspace_root.to_path_buf())),
             Box::new(GlobTool::new(workspace_root.to_path_buf())),
             Box::new(GrepTool::new(workspace_root.to_path_buf())),
+            Box::new(FindTool::new(workspace_root.to_path_buf())),
+            Box::new(LsTool::new(workspace_root.to_path_buf())),
         ];
 
         match selection {

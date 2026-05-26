@@ -1,14 +1,18 @@
 mod bash;
 mod edit;
+mod find;
 mod glob;
 mod grep;
+mod ls;
 mod read;
 mod write;
 
 pub use bash::BashTool;
 pub use edit::EditTool;
+pub use find::FindTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
+pub use ls::LsTool;
 pub use read::ReadTool;
 pub use write::WriteTool;
 
