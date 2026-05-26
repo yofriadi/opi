@@ -15,6 +15,7 @@ thiserror = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tracing = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

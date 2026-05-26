@@ -18,10 +18,14 @@ use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
 use opi_ai::message::{AssistantContent, Message};
 use opi_ai::stream::AssistantStreamEvent;
+use opi_tui::terminal_image::{
+    CapabilitySource, TerminalGraphicsProtocol, detect_graphics_protocol,
+};
 use opi_tui::{
     AppState, Key, KeyCombo, Keybindings, Message as TuiMessage, Role as TuiRole, Shell, Theme,
     ToolCallStatus, resolve_theme,
 };
+use opi_tui::{ImageData, ImagePayload, MediaType as TuiMediaType};
 
 use crate::harness::CodingHarness;
 
@@ -39,6 +43,7 @@ struct TuiState {
     keybindings: Keybindings,
     total_tokens: u64,
     cost_usd: Option<f64>,
+    graphics_protocol: TerminalGraphicsProtocol,
 }
 
 pub async fn run_interactive_tui(
@@ -51,6 +56,12 @@ pub async fn run_interactive_tui(
     if theme.name != theme_name {
         eprintln!("opi: warning: unknown theme {theme_name:?}, using default");
     }
+    let graphics_protocol = detect_graphics_protocol(
+        std::env::var("TERM").ok().as_deref(),
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
+        std::env::var("TERM_FEATURES").ok().as_deref(),
+        &CapabilitySource::EnvVars,
+    );
     let state = Arc::new(Mutex::new(TuiState {
         messages: Vec::new(),
         input_text: String::new(),
@@ -62,6 +73,7 @@ pub async fn run_interactive_tui(
         keybindings,
         total_tokens: 0,
         cost_usd: None,
+        graphics_protocol,
     }));
 
     // Wire agent events into shared state before wrapping harness
@@ -123,6 +135,7 @@ pub async fn run_interactive_tui(
                 tool_name,
                 is_error,
                 details,
+                result,
                 ..
             } => {
                 // Render diff for edit tool results that have before/after details.
@@ -137,6 +150,65 @@ pub async fn run_interactive_tui(
                     let after_str = after.as_str().unwrap_or("");
                     s.messages
                         .push(TuiMessage::diff(path_str, before_str, after_str));
+                }
+                // Extract image content from tool result.
+                let protocol = s.graphics_protocol;
+                if let Some(content_arr) = result.as_array() {
+                    for item in content_arr {
+                        if item.get("type").and_then(|v| v.as_str()) == Some("image")
+                            && let Some(source) = item.get("source")
+                        {
+                                let bytes = if source.get("type").and_then(|v| v.as_str())
+                                    == Some("bytes")
+                                {
+                                    source
+                                        .get("data")
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|v| v.as_u64().map(|n| n as u8))
+                                                .collect::<Vec<u8>>()
+                                        })
+                                        .unwrap_or_default()
+                                } else if source.get("type").and_then(|v| v.as_str())
+                                    == Some("base64")
+                                {
+                                    use base64::Engine;
+                                    source
+                                        .get("data")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|d| {
+                                            base64::engine::general_purpose::STANDARD.decode(d).ok()
+                                        })
+                                        .unwrap_or_default()
+                                } else {
+                                    vec![]
+                                };
+                                if !bytes.is_empty() {
+                                    let media_type =
+                                        item.get("media_type").and_then(|v| v.as_str());
+                                    let tui_media = match media_type {
+                                        Some("image/jpeg") => TuiMediaType::Jpeg,
+                                        Some("image/gif") => TuiMediaType::Gif,
+                                        Some("image/webp") => TuiMediaType::WebP,
+                                        _ => TuiMediaType::Png,
+                                    };
+                                    let image_data = ImageData {
+                                        bytes,
+                                        media_type: tui_media,
+                                        width: None,
+                                        height: None,
+                                    };
+                                    s.messages.push(TuiMessage::image(
+                                        TuiRole::Tool,
+                                        ImagePayload {
+                                            data: image_data,
+                                            protocol,
+                                        },
+                                    ));
+                                }
+                        }
+                    }
                 }
                 if let Some((name, args, _)) = &s.active_tool
                     && name == tool_name

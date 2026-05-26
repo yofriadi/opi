@@ -12,6 +12,7 @@ pub mod markdown;
 pub mod message_list;
 pub mod render;
 pub mod status_bar;
+pub mod terminal_image;
 pub mod theme;
 pub mod tool_call;
 
@@ -22,6 +23,10 @@ pub use markdown::{CodeBlock, MarkdownView};
 pub use message_list::MessageList;
 pub use render::Shell;
 pub use status_bar::StatusBar;
+pub use terminal_image::{
+    CapabilitySource, ImageData, MediaType, TerminalGraphicsProtocol, detect_graphics_protocol,
+    iterm_escape, kitty_escape, sixel_escape, text_fallback,
+};
 pub use theme::{Theme, resolve_theme};
 pub use tool_call::ToolCallView;
 
@@ -53,6 +58,16 @@ pub struct Message {
     /// Optional structured diff payload. When present, the message is
     /// rendered with the `DiffView` widget instead of plain text.
     pub diff: Option<DiffPayload>,
+    /// Optional image payload. When present, the message renders an image
+    /// using terminal graphics protocol escape sequences or text fallback.
+    pub image: Option<ImagePayload>,
+}
+
+/// Image payload for terminal rendering.
+#[derive(Debug, Clone)]
+pub struct ImagePayload {
+    pub data: ImageData,
+    pub protocol: TerminalGraphicsProtocol,
 }
 
 /// Structured before/after content for diff rendering.
@@ -69,7 +84,25 @@ impl Message {
             role,
             content: content.into(),
             diff: None,
+            image: None,
         }
+    }
+
+    /// Build an image-only message for terminal rendering.
+    pub fn image(role: Role, payload: ImagePayload) -> Self {
+        let fallback = text_fallback(&payload.data);
+        Self {
+            role,
+            content: fallback,
+            diff: None,
+            image: Some(payload),
+        }
+    }
+
+    /// Attach an image payload to an existing text message.
+    pub fn with_image(mut self, payload: ImagePayload) -> Self {
+        self.image = Some(payload);
+        self
     }
 
     /// Build a tool-role message that renders the supplied before/after as a
@@ -91,6 +124,7 @@ impl Message {
                 before,
                 after,
             }),
+            image: None,
         }
     }
 }

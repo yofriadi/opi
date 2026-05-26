@@ -1,0 +1,29 @@
+---
+source: crates/opi-tui/tests/image_view_snapshots.rs
+assertion_line: 162
+expression: "render(widget, 80, 24)"
+---
+┌ Messages ────────────────────────────────────────────────────────────────────┐
+│You: Capture the current page                                                 │
+│Tool: Screenshot saved                                                        │
+│Tool: [Image: 1280x720 PNG]                                                   │
+│Asst: I've captured the page as shown above.                                  │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

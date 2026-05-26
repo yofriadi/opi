@@ -1616,6 +1616,7 @@ name = "opi-coding-agent"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "crossterm",
  "dotenvy",
@@ -1642,6 +1643,7 @@ dependencies = [
 name = "opi-tui"
 version = "0.3.0"
 dependencies = [
+ "base64",
  "crossterm",
  "insta",
  "ratatui",

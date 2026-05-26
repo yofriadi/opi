@@ -8,7 +8,11 @@ use ratatui::{
     widgets::{Block, Widget},
 };
 
-use crate::{DiffView, Message, Role, theme::Theme};
+use crate::{
+    DiffView, Message, Role,
+    terminal_image::{TerminalGraphicsProtocol, iterm_escape, kitty_escape, sixel_escape},
+    theme::Theme,
+};
 
 /// Number of terminal rows a single diff message reserves when rendered as a
 /// `DiffView`. Chosen to comfortably fit a small hunk plus header.
@@ -79,10 +83,18 @@ impl Widget for MessageList {
                 y += rows;
                 continue;
             }
+
+            // Role label line
             let (label, style) = self.role_label(&msg.role);
+            let display_text = if msg.image.is_some() {
+                // For image messages, content is the fallback text
+                msg.content.clone()
+            } else {
+                msg.content.clone()
+            };
             let line = Line::from(vec![
                 Span::styled(format!("{label}: "), style),
-                Span::raw(&msg.content),
+                Span::raw(&display_text),
             ]);
             line.render(
                 Rect {
@@ -92,6 +104,29 @@ impl Widget for MessageList {
                 buf,
             );
             y += 1;
+
+            // Render escape sequences for image messages (invisible in
+            // snapshots but emitted to the buffer for capable terminals)
+            if let Some(image) = &msg.image {
+                let escape = match image.protocol {
+                    TerminalGraphicsProtocol::Kitty => kitty_escape(&image.data),
+                    TerminalGraphicsProtocol::Iterm2 => iterm_escape(&image.data),
+                    TerminalGraphicsProtocol::Sixel => sixel_escape(&image.data),
+                    TerminalGraphicsProtocol::Fallback => String::new(),
+                };
+                if !escape.is_empty() && y < inner.height {
+                    // Write escape sequence as a single invisible line.
+                    // The escape chars occupy cells but render as blank space.
+                    Span::raw(&escape).render(
+                        Rect {
+                            y: inner.y + y,
+                            ..inner
+                        },
+                        buf,
+                    );
+                    y += 1;
+                }
+            }
         }
     }
 }
