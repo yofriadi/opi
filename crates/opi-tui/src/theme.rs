@@ -74,6 +74,19 @@ pub struct Theme {
     pub tool_success: Color,
     /// Failed tool call status color.
     pub tool_error: Color,
+    // -- SelectList --
+    /// SelectList border/title color.
+    pub picker_title: Color,
+    /// SelectList selected row background.
+    pub picker_selected_bg: Color,
+    /// SelectList selected row text color.
+    pub picker_selected_fg: Color,
+    /// SelectList filter input prompt color.
+    pub picker_filter: Color,
+    /// SelectList item metadata color.
+    pub picker_metadata: Color,
+    /// SelectList empty-state text color.
+    pub picker_empty: Color,
 }
 
 impl Default for Theme {
@@ -114,6 +127,13 @@ impl Default for Theme {
             tool_running: Color::Yellow,
             tool_success: Color::Green,
             tool_error: Color::Red,
+            // SelectList
+            picker_title: Color::Cyan,
+            picker_selected_bg: Color::DarkGray,
+            picker_selected_fg: Color::White,
+            picker_filter: Color::Yellow,
+            picker_metadata: Color::DarkGray,
+            picker_empty: Color::DarkGray,
         }
     }
 }
@@ -156,6 +176,13 @@ impl Theme {
             tool_running: Color::Rgb(230, 219, 116), // yellow
             tool_success: Color::Rgb(166, 226, 46),  // green
             tool_error: Color::Rgb(249, 38, 114),    // pink-red
+            // SelectList
+            picker_title: Color::Rgb(102, 217, 239), // cyan-blue
+            picker_selected_bg: Color::Rgb(73, 72, 62), // dim highlight
+            picker_selected_fg: Color::Rgb(248, 248, 242), // near-white
+            picker_filter: Color::Rgb(230, 219, 116), // yellow
+            picker_metadata: Color::Rgb(117, 113, 94), // dim
+            picker_empty: Color::Rgb(117, 113, 94),  // dim
         }
     }
 }

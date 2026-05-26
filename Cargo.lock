@@ -1630,6 +1630,7 @@ dependencies = [
  "clap_complete",
  "crossterm",
  "dotenvy",
+ "futures-util",
  "globset",
  "ignore",
  "opi-agent",

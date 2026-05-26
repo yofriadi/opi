@@ -11,6 +11,7 @@ pub mod keybindings;
 pub mod markdown;
 pub mod message_list;
 pub mod render;
+pub mod select_list;
 pub mod status_bar;
 pub mod terminal_image;
 pub mod theme;
@@ -22,6 +23,7 @@ pub use keybindings::{Key, KeyCombo, KeyComboParseError, Keybindings, Modifiers}
 pub use markdown::{CodeBlock, MarkdownView};
 pub use message_list::MessageList;
 pub use render::Shell;
+pub use select_list::{SelectItem, SelectList, SelectListState, fuzzy_match};
 pub use status_bar::StatusBar;
 pub use terminal_image::{
     CapabilitySource, ImageData, MediaType, TerminalGraphicsProtocol, detect_graphics_protocol,

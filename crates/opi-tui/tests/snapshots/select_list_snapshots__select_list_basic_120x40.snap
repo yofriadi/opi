@@ -1,0 +1,45 @@
+---
+source: crates/opi-tui/tests/select_list_snapshots.rs
+assertion_line: 86
+expression: "render(widget, 120, 40)"
+---
+┌ Models ──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Type to filter...                                                                                                     │
+│> Claude Sonnet 4.5                                                                                           Anthropi│
+│Claude Opus 4                                                                                               Anthropic │
+│GPT-4o                                                                                                         OpenAI │
+│GPT-4o Mini                                                                                                    OpenAI │
+│Gemini 2.5 Flash                                                                                               Google │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
