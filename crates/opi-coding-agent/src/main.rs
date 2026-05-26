@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use clap::Parser;
 
 use opi_coding_agent::cli::Cli;
@@ -348,6 +350,54 @@ fn build_provider(
             );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
+        "bedrock" => {
+            let bedrock_config = &config.providers.bedrock;
+
+            // Resolve credentials: config > env > profile
+            let (akid, sak, token, env_region) = resolve_bedrock_env_credentials();
+            let profile_name = bedrock_config.profile.as_deref();
+            let credentials_file = default_aws_credentials_path();
+
+            // Read secret key from configured env var
+            let secret_key = bedrock_config
+                .secret_access_key_env
+                .as_deref()
+                .and_then(|env_name| std::env::var(env_name).ok());
+
+            // Read session token from configured env var
+            let session_token = bedrock_config
+                .session_token_env
+                .as_deref()
+                .and_then(|env_name| std::env::var(env_name).ok());
+
+            let input = opi_ai::bedrock::credentials::CredentialResolutionInput {
+                config_access_key_id: bedrock_config.access_key_id.as_deref(),
+                config_secret_access_key: secret_key.as_deref(),
+                config_session_token: session_token.as_deref(),
+                config_region: bedrock_config.region.as_deref(),
+                env_access_key_id: akid.as_deref(),
+                env_secret_access_key: sak.as_deref(),
+                env_session_token: token.as_deref(),
+                env_region: env_region.as_deref(),
+                profile_name,
+                credentials_file_path: credentials_file.as_deref(),
+            };
+
+            let resolved = opi_ai::bedrock::credentials::resolve_credentials(&input);
+
+            let (bedrock_creds, _source) = resolved.ok_or_else(|| {
+                ProviderBuildError::Auth(
+                    "no AWS credentials found: set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, configure [providers.bedrock], or set up ~/.aws/credentials".into(),
+                )
+            })?;
+
+            let provider = opi_ai::bedrock::BedrockProvider::from_credentials(
+                bedrock_creds,
+                bedrock_config.base_url.clone(),
+                Arc::new(opi_ai::http::HttpClient::new()),
+            );
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
         other => Err(ProviderBuildError::Config(format!(
             "unknown provider: {other}"
         ))),
@@ -374,6 +424,30 @@ fn require_api_key(env_name: &str) -> Result<String, ProviderBuildError> {
         )));
     }
     Ok(key)
+}
+
+/// Read AWS credentials from environment variables.
+fn resolve_bedrock_env_credentials() -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    let akid = std::env::var("AWS_ACCESS_KEY_ID").ok();
+    let sak = std::env::var("AWS_SECRET_ACCESS_KEY").ok();
+    let token = std::env::var("AWS_SESSION_TOKEN").ok();
+    let region = std::env::var("AWS_REGION")
+        .ok()
+        .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok());
+    (akid, sak, token, region)
+}
+
+/// Default path for ~/.aws/credentials.
+fn default_aws_credentials_path() -> Option<std::path::PathBuf> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(|h| std::path::PathBuf::from(h).join(".aws").join("credentials"))
 }
 
 fn parse_keybindings(config: &opi_coding_agent::config::KeybindingsConfig) -> opi_tui::Keybindings {

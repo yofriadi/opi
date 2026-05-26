@@ -75,6 +75,7 @@ pub struct ProvidersConfig {
     pub mistral: GenericProviderConfig,
     pub openai_responses: GenericProviderConfig,
     pub gemini: GenericProviderConfig,
+    pub bedrock: BedrockProviderConfig,
 }
 
 /// `[providers.anthropic]` section.
@@ -109,6 +110,25 @@ pub struct OpenRouterProviderConfig {
     pub api_key_env: String,
     pub base_url: Option<String>,
     pub referer: Option<String>,
+    pub proxy: Option<ProviderProxyConfig>,
+}
+
+/// `[providers.bedrock]` section.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BedrockProviderConfig {
+    /// Explicit access key ID (overrides env var).
+    pub access_key_id: Option<String>,
+    /// Env var name for secret access key (default: AWS_SECRET_ACCESS_KEY).
+    pub secret_access_key_env: Option<String>,
+    /// Env var name for session token (default: AWS_SESSION_TOKEN).
+    pub session_token_env: Option<String>,
+    /// AWS region (default: us-east-1).
+    pub region: Option<String>,
+    /// AWS config profile name for credential file lookup.
+    pub profile: Option<String>,
+    /// Override base URL for Bedrock runtime API.
+    pub base_url: Option<String>,
+    /// Proxy configuration.
     pub proxy: Option<ProviderProxyConfig>,
 }
 
@@ -189,6 +209,7 @@ struct TomlThinking {
 #[serde(default)]
 struct TomlProviders {
     anthropic: TomlAnthropic,
+    bedrock: TomlBedrockProvider,
     openai: TomlGenericProvider,
     openrouter: TomlOpenRouterProvider,
     mistral: TomlGenericProvider,
@@ -200,6 +221,18 @@ struct TomlProviders {
 #[serde(default)]
 struct TomlAnthropic {
     api_key_env: Option<String>,
+    base_url: Option<String>,
+    proxy: Option<TomlProxy>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlBedrockProvider {
+    access_key_id: Option<String>,
+    secret_access_key_env: Option<String>,
+    session_token_env: Option<String>,
+    region: Option<String>,
+    profile: Option<String>,
     base_url: Option<String>,
     proxy: Option<TomlProxy>,
 }
@@ -284,6 +317,32 @@ impl TomlConfig {
             && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
         {
             config.providers.anthropic.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
+        }
+        if let Some(v) = self.providers.bedrock.access_key_id {
+            config.providers.bedrock.access_key_id = Some(v);
+        }
+        if let Some(v) = self.providers.bedrock.secret_access_key_env {
+            config.providers.bedrock.secret_access_key_env = Some(v);
+        }
+        if let Some(v) = self.providers.bedrock.session_token_env {
+            config.providers.bedrock.session_token_env = Some(v);
+        }
+        if let Some(v) = self.providers.bedrock.region {
+            config.providers.bedrock.region = Some(v);
+        }
+        if let Some(v) = self.providers.bedrock.profile {
+            config.providers.bedrock.profile = Some(v);
+        }
+        if let Some(v) = self.providers.bedrock.base_url {
+            config.providers.bedrock.base_url = Some(v);
+        }
+        if let Some(p) = self.providers.bedrock.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.bedrock.proxy = Some(ProviderProxyConfig {
                 url,
                 no_proxy: p.no_proxy,
             });

@@ -80,5 +80,10 @@ insta = "1"
 wiremock = "0.6"
 proptest = "1"
 
+# cryptography (SigV4 for Bedrock)
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
 # env loading
 dotenvy = "0.15"
