@@ -76,6 +76,7 @@ pub struct ProvidersConfig {
     pub openai_responses: GenericProviderConfig,
     pub gemini: GenericProviderConfig,
     pub bedrock: BedrockProviderConfig,
+    pub azure: AzureProviderConfig,
 }
 
 /// `[providers.anthropic]` section.
@@ -128,6 +129,21 @@ pub struct BedrockProviderConfig {
     pub profile: Option<String>,
     /// Override base URL for Bedrock runtime API.
     pub base_url: Option<String>,
+    /// Proxy configuration.
+    pub proxy: Option<ProviderProxyConfig>,
+}
+
+/// `[providers.azure]` section.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AzureProviderConfig {
+    /// Env var name for the Azure OpenAI API key (default: AZURE_OPENAI_API_KEY).
+    pub api_key_env: String,
+    /// Azure OpenAI endpoint (e.g. `https://myresource.openai.azure.com`).
+    pub endpoint: Option<String>,
+    /// Azure API version (default: 2024-06-01).
+    pub api_version: Option<String>,
+    /// Deployment names to advertise in --list-models.
+    pub deployments: Vec<String>,
     /// Proxy configuration.
     pub proxy: Option<ProviderProxyConfig>,
 }
@@ -215,6 +231,7 @@ struct TomlProviders {
     mistral: TomlGenericProvider,
     openai_responses: TomlGenericProvider,
     gemini: TomlGenericProvider,
+    azure: TomlAzureProvider,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -234,6 +251,16 @@ struct TomlBedrockProvider {
     region: Option<String>,
     profile: Option<String>,
     base_url: Option<String>,
+    proxy: Option<TomlProxy>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlAzureProvider {
+    api_key_env: Option<String>,
+    endpoint: Option<String>,
+    api_version: Option<String>,
+    deployments: Option<Vec<String>>,
     proxy: Option<TomlProxy>,
 }
 
@@ -343,6 +370,26 @@ impl TomlConfig {
             && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
         {
             config.providers.bedrock.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
+        }
+        if let Some(v) = self.providers.azure.api_key_env {
+            config.providers.azure.api_key_env = v;
+        }
+        if let Some(v) = self.providers.azure.endpoint {
+            config.providers.azure.endpoint = Some(v);
+        }
+        if let Some(v) = self.providers.azure.api_version {
+            config.providers.azure.api_version = Some(v);
+        }
+        if let Some(v) = self.providers.azure.deployments {
+            config.providers.azure.deployments = v;
+        }
+        if let Some(p) = self.providers.azure.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.azure.proxy = Some(ProviderProxyConfig {
                 url,
                 no_proxy: p.no_proxy,
             });

@@ -398,6 +398,32 @@ fn build_provider(
             );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
+        "azure" => {
+            let azure_config = &config.providers.azure;
+            let env_name = resolve_env_name(&azure_config.api_key_env, "AZURE_OPENAI_API_KEY");
+            let api_key = require_api_key(&env_name)?;
+
+            // Extract deployment name from model spec (azure:deployment-name)
+            let deployment = spec.split_once(':').map(|(_, id)| id).unwrap_or("");
+
+            let provider = if azure_config.deployments.is_empty() {
+                opi_ai::azure_openai::AzureOpenAIProvider::new(
+                    api_key,
+                    azure_config.endpoint.clone(),
+                    deployment.to_string(),
+                    azure_config.api_version.clone(),
+                )
+            } else {
+                opi_ai::azure_openai::AzureOpenAIProvider::from_config(
+                    api_key,
+                    azure_config.endpoint.clone(),
+                    azure_config.deployments.clone(),
+                    azure_config.api_version.clone(),
+                )
+            }
+            .with_client(Arc::new(opi_ai::http::HttpClient::new()));
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
         other => Err(ProviderBuildError::Config(format!(
             "unknown provider: {other}"
         ))),

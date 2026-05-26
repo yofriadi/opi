@@ -5,6 +5,7 @@
 //! OpenAI-compatible profiles for OpenRouter and Mistral.
 
 pub mod anthropic;
+pub mod azure_openai;
 pub mod bedrock;
 pub mod config;
 pub mod gemini;
