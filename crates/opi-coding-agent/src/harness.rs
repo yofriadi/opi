@@ -15,6 +15,7 @@ use opi_ai::message::Message;
 use opi_ai::provider::Provider;
 
 use crate::config::OpiConfig;
+use crate::context_files;
 use crate::prompt::SystemPromptBuilder;
 use crate::session_coordinator::{SessionCoordinator, to_wire_result};
 use crate::tool::{BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool};
@@ -98,6 +99,10 @@ impl CodingHarness {
         let mut builder = SystemPromptBuilder::new().tools(tool_defs);
         if let Some(content) = user_system_prompt {
             builder = builder.user_system(content);
+        }
+        let context = context_files::discover_context_files(&workspace_root, None);
+        if !context.content.is_empty() {
+            builder = builder.context_files(context.content);
         }
         let system_prompt = builder.build();
 
@@ -368,7 +373,7 @@ pub(crate) fn agent_messages_to_llm(messages: &[AgentMessage]) -> Vec<Message> {
 }
 
 /// Default hooks for the coding agent -- pass-through message conversion.
-struct CodingAgentHooks;
+pub struct CodingAgentHooks;
 
 impl AgentHooks for CodingAgentHooks {
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {

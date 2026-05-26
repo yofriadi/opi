@@ -4,6 +4,7 @@
 //! 1. Base coding-agent instructions
 //! 2. Tool descriptions from ToolDef
 //! 3. User system prompt file
+//! 4. Project context files (AGENTS.md / CLAUDE.md)
 
 use opi_ai::message::ToolDef;
 
@@ -17,6 +18,7 @@ making changes.";
 pub struct SystemPromptBuilder {
     tools: Vec<ToolDef>,
     user_system: Option<String>,
+    context_files: Option<String>,
 }
 
 impl SystemPromptBuilder {
@@ -24,6 +26,7 @@ impl SystemPromptBuilder {
         Self {
             tools: Vec::new(),
             user_system: None,
+            context_files: None,
         }
     }
 
@@ -37,6 +40,13 @@ impl SystemPromptBuilder {
     pub fn user_system(mut self, content: impl Into<String>) -> Self {
         let s = content.into();
         self.user_system = if s.is_empty() { None } else { Some(s) };
+        self
+    }
+
+    /// Add project context file content (from AGENTS.md / CLAUDE.md discovery).
+    pub fn context_files(mut self, content: impl Into<String>) -> Self {
+        let s = content.into();
+        self.context_files = if s.is_empty() { None } else { Some(s) };
         self
     }
 
@@ -64,6 +74,11 @@ impl SystemPromptBuilder {
         // Layer 3: user system prompt
         if let Some(user) = self.user_system {
             parts.push(format!("User instructions:\n{}", user));
+        }
+
+        // Layer 4: project context files (AGENTS.md / CLAUDE.md)
+        if let Some(context) = self.context_files {
+            parts.push(format!("Project context:\n{}", context));
         }
 
         parts.join("\n\n")

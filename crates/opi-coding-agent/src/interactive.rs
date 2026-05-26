@@ -158,55 +158,53 @@ pub async fn run_interactive_tui(
                         if item.get("type").and_then(|v| v.as_str()) == Some("image")
                             && let Some(source) = item.get("source")
                         {
-                                let bytes = if source.get("type").and_then(|v| v.as_str())
-                                    == Some("bytes")
-                                {
-                                    source
-                                        .get("data")
-                                        .and_then(|v| v.as_array())
-                                        .map(|arr| {
-                                            arr.iter()
-                                                .filter_map(|v| v.as_u64().map(|n| n as u8))
-                                                .collect::<Vec<u8>>()
-                                        })
-                                        .unwrap_or_default()
-                                } else if source.get("type").and_then(|v| v.as_str())
-                                    == Some("base64")
-                                {
-                                    use base64::Engine;
-                                    source
-                                        .get("data")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|d| {
-                                            base64::engine::general_purpose::STANDARD.decode(d).ok()
-                                        })
-                                        .unwrap_or_default()
-                                } else {
-                                    vec![]
+                            let bytes = if source.get("type").and_then(|v| v.as_str())
+                                == Some("bytes")
+                            {
+                                source
+                                    .get("data")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|v| v.as_u64().map(|n| n as u8))
+                                            .collect::<Vec<u8>>()
+                                    })
+                                    .unwrap_or_default()
+                            } else if source.get("type").and_then(|v| v.as_str()) == Some("base64")
+                            {
+                                use base64::Engine;
+                                source
+                                    .get("data")
+                                    .and_then(|v| v.as_str())
+                                    .and_then(|d| {
+                                        base64::engine::general_purpose::STANDARD.decode(d).ok()
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                vec![]
+                            };
+                            if !bytes.is_empty() {
+                                let media_type = item.get("media_type").and_then(|v| v.as_str());
+                                let tui_media = match media_type {
+                                    Some("image/jpeg") => TuiMediaType::Jpeg,
+                                    Some("image/gif") => TuiMediaType::Gif,
+                                    Some("image/webp") => TuiMediaType::WebP,
+                                    _ => TuiMediaType::Png,
                                 };
-                                if !bytes.is_empty() {
-                                    let media_type =
-                                        item.get("media_type").and_then(|v| v.as_str());
-                                    let tui_media = match media_type {
-                                        Some("image/jpeg") => TuiMediaType::Jpeg,
-                                        Some("image/gif") => TuiMediaType::Gif,
-                                        Some("image/webp") => TuiMediaType::WebP,
-                                        _ => TuiMediaType::Png,
-                                    };
-                                    let image_data = ImageData {
-                                        bytes,
-                                        media_type: tui_media,
-                                        width: None,
-                                        height: None,
-                                    };
-                                    s.messages.push(TuiMessage::image(
-                                        TuiRole::Tool,
-                                        ImagePayload {
-                                            data: image_data,
-                                            protocol,
-                                        },
-                                    ));
-                                }
+                                let image_data = ImageData {
+                                    bytes,
+                                    media_type: tui_media,
+                                    width: None,
+                                    height: None,
+                                };
+                                s.messages.push(TuiMessage::image(
+                                    TuiRole::Tool,
+                                    ImagePayload {
+                                        data: image_data,
+                                        protocol,
+                                    },
+                                ));
+                            }
                         }
                     }
                 }
