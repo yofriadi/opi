@@ -566,6 +566,9 @@ impl GeminiProvider {
                         .iter()
                         .map(|c| match c {
                             OutputContent::Text { text } => text.clone(),
+                            OutputContent::Image { media_type, .. } => {
+                                format!("[image: {}]", media_type.as_str())
+                            }
                         })
                         .collect();
                     contents.push(serde_json::json!({

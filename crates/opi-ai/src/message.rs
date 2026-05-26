@@ -113,6 +113,11 @@ pub enum AssistantContent {
 pub enum OutputContent {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "image")]
+    Image {
+        source: ImageSource,
+        media_type: MediaType,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -985,6 +985,9 @@ fn serialize_messages(
                     .iter()
                     .map(|c| match c {
                         OutputContent::Text { text } => text.clone(),
+                        OutputContent::Image { media_type, .. } => {
+                            format!("[image: {}]", media_type.as_str())
+                        }
                     })
                     .collect();
                 let mut tool_msg = serde_json::json!({

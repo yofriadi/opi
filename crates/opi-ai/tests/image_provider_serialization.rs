@@ -92,7 +92,9 @@ fn make_request(messages: Vec<Message>) -> Request {
 
 async fn drain_stream(mut stream: opi_ai::provider::EventStream) {
     while let Some(result) = stream.next().await {
-        if let Ok(event) = result && event.is_terminal() {
+        if let Ok(event) = result
+            && event.is_terminal()
+        {
             break;
         }
     }

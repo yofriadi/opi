@@ -931,6 +931,7 @@ fn serialize_messages(messages: &[crate::message::Message]) -> serde_json::Value
                             "tool_use_id": t.tool_call_id,
                             "content": t.content.iter().map(|c| match c {
                                 crate::message::OutputContent::Text { text } => text.clone(),
+                                crate::message::OutputContent::Image { media_type, .. } => format!("[image: {}]", media_type.as_str()),
                             }).collect::<Vec<_>>().join(""),
                         }],
                     })
