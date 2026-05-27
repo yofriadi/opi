@@ -20,7 +20,7 @@ use crate::stream::{AssistantStreamEvent, StopReason, Usage};
 // ---------------------------------------------------------------------------
 
 /// Parse SSE text into data payloads (just `data:` lines).
-fn parse_sse_data(input: &str) -> impl Iterator<Item = String> + '_ {
+pub(crate) fn parse_sse_data(input: &str) -> impl Iterator<Item = String> + '_ {
     input.split('\n').filter_map(|line| {
         let line = line.trim_end_matches('\r');
         line.strip_prefix("data: ")
@@ -108,13 +108,13 @@ struct GeminiError {
 // Parsed event type
 // ---------------------------------------------------------------------------
 
-enum ParsedEvent {
+pub(crate) enum ParsedEvent {
     Valid(GeminiEvent),
     Malformed { data: String, error: String },
 }
 
 #[derive(Debug, Clone)]
-enum GeminiEvent {
+pub(crate) enum GeminiEvent {
     TextDelta {
         text: String,
     },
@@ -132,7 +132,7 @@ enum GeminiEvent {
 }
 
 impl ParsedEvent {
-    fn from_data(data: &str) -> Vec<Self> {
+    pub(crate) fn from_data(data: &str) -> Vec<Self> {
         let resp: GenerateContentResponse = match serde_json::from_str(data) {
             Ok(r) => r,
             Err(e) => {
@@ -244,7 +244,7 @@ struct ToolCallState {
     arguments: String,
 }
 
-struct GeminiMapper {
+pub(crate) struct GeminiMapper {
     partial: AssistantMessage,
     saw_done: bool,
     text_started: bool,
@@ -252,7 +252,7 @@ struct GeminiMapper {
 }
 
 impl GeminiMapper {
-    fn new(provider: &str) -> Self {
+    pub(crate) fn new(provider: &str) -> Self {
         Self {
             partial: empty_assistant_message(provider),
             saw_done: false,
@@ -261,7 +261,7 @@ impl GeminiMapper {
         }
     }
 
-    fn process(&mut self, event: GeminiEvent) -> Vec<AssistantStreamEvent> {
+    pub(crate) fn process(&mut self, event: GeminiEvent) -> Vec<AssistantStreamEvent> {
         if self.saw_done {
             return Vec::new();
         }
@@ -765,7 +765,7 @@ impl futures_core::Stream for ReceiverStream {
 }
 
 /// Drain complete SSE events from the buffer (delimited by `\n\n`).
-fn drain_sse_data(buffer: &mut String) -> Vec<ParsedEvent> {
+pub(crate) fn drain_sse_data(buffer: &mut String) -> Vec<ParsedEvent> {
     if buffer.contains('\r') {
         *buffer = buffer.replace("\r\n", "\n").replace('\r', "\n");
     }

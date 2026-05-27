@@ -22,6 +22,7 @@ pub mod retry;
 pub mod stream;
 #[doc(hidden)]
 pub mod test_support;
+pub mod vertex;
 
 pub use config::{Config, Error};
 pub use model::Model;

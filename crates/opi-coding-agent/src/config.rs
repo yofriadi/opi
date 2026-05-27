@@ -77,6 +77,7 @@ pub struct ProvidersConfig {
     pub gemini: GenericProviderConfig,
     pub bedrock: BedrockProviderConfig,
     pub azure: AzureProviderConfig,
+    pub vertex: VertexProviderConfig,
 }
 
 /// `[providers.anthropic]` section.
@@ -144,6 +145,23 @@ pub struct AzureProviderConfig {
     pub api_version: Option<String>,
     /// Deployment names to advertise in --list-models.
     pub deployments: Vec<String>,
+    /// Proxy configuration.
+    pub proxy: Option<ProviderProxyConfig>,
+}
+
+/// `[providers.vertex]` section.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct VertexProviderConfig {
+    /// Env var name for the OAuth2 access token (default: VERTEX_ACCESS_TOKEN).
+    pub access_token_env: String,
+    /// GCP project ID.
+    pub project: Option<String>,
+    /// GCP location/region (e.g. `us-central1`).
+    pub location: Option<String>,
+    /// Model names to advertise in --list-models.
+    pub models: Vec<String>,
+    /// Override base URL for Vertex AI API.
+    pub base_url: Option<String>,
     /// Proxy configuration.
     pub proxy: Option<ProviderProxyConfig>,
 }
@@ -232,6 +250,7 @@ struct TomlProviders {
     openai_responses: TomlGenericProvider,
     gemini: TomlGenericProvider,
     azure: TomlAzureProvider,
+    vertex: TomlVertexProvider,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -261,6 +280,17 @@ struct TomlAzureProvider {
     endpoint: Option<String>,
     api_version: Option<String>,
     deployments: Option<Vec<String>>,
+    proxy: Option<TomlProxy>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlVertexProvider {
+    access_token_env: Option<String>,
+    project: Option<String>,
+    location: Option<String>,
+    models: Option<Vec<String>>,
+    base_url: Option<String>,
     proxy: Option<TomlProxy>,
 }
 
@@ -390,6 +420,29 @@ impl TomlConfig {
             && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
         {
             config.providers.azure.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
+        }
+        if let Some(v) = self.providers.vertex.access_token_env {
+            config.providers.vertex.access_token_env = v;
+        }
+        if let Some(v) = self.providers.vertex.project {
+            config.providers.vertex.project = Some(v);
+        }
+        if let Some(v) = self.providers.vertex.location {
+            config.providers.vertex.location = Some(v);
+        }
+        if let Some(v) = self.providers.vertex.models {
+            config.providers.vertex.models = v;
+        }
+        if let Some(v) = self.providers.vertex.base_url {
+            config.providers.vertex.base_url = Some(v);
+        }
+        if let Some(p) = self.providers.vertex.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.vertex.proxy = Some(ProviderProxyConfig {
                 url,
                 no_proxy: p.no_proxy,
             });

@@ -424,6 +424,37 @@ fn build_provider(
             .with_client(Arc::new(opi_ai::http::HttpClient::new()));
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
+        "vertex" => {
+            let vertex_config = &config.providers.vertex;
+            let env_name = resolve_env_name(&vertex_config.access_token_env, "VERTEX_ACCESS_TOKEN");
+            let access_token = require_api_key(&env_name)?;
+
+            let project = vertex_config.project.as_deref().ok_or_else(|| {
+                ProviderBuildError::Config("vertex provider requires project".into())
+            })?;
+            let location = vertex_config.location.as_deref().ok_or_else(|| {
+                ProviderBuildError::Config("vertex provider requires location".into())
+            })?;
+
+            let provider = if vertex_config.models.is_empty() {
+                opi_ai::vertex::VertexProvider::new(
+                    access_token,
+                    project.into(),
+                    location.into(),
+                    vertex_config.base_url.clone(),
+                )
+            } else {
+                opi_ai::vertex::VertexProvider::from_config(
+                    access_token,
+                    project.into(),
+                    location.into(),
+                    vertex_config.models.clone(),
+                    vertex_config.base_url.clone(),
+                )
+            }
+            .with_client(Arc::new(opi_ai::http::HttpClient::new()));
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
         other => Err(ProviderBuildError::Config(format!(
             "unknown provider: {other}"
         ))),
