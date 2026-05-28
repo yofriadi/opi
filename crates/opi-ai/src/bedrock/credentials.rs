@@ -1,9 +1,10 @@
 //! Bedrock credential resolution (task 3.1).
 //!
-//! Precedence: explicit config > env vars > ~/.aws/credentials profile.
+//! Precedence: explicit config > env vars > shared AWS profile files.
 //! No live AWS calls.
 
 use std::path::Path;
+use std::process::Command;
 
 /// Resolved AWS credentials for Bedrock.
 ///
@@ -33,6 +34,8 @@ pub enum CredentialSource {
     ExplicitConfig,
     Environment,
     ProfileFile,
+    ConfigFile,
+    CredentialProcess,
 }
 
 /// Input parameters for credential resolution.
@@ -47,6 +50,7 @@ pub struct CredentialResolutionInput<'a> {
     pub env_region: Option<&'a str>,
     pub profile_name: Option<&'a str>,
     pub credentials_file_path: Option<&'a Path>,
+    pub config_file_path: Option<&'a Path>,
 }
 
 impl<'a> CredentialResolutionInput<'a> {
@@ -76,12 +80,13 @@ impl<'a> CredentialResolutionInput<'a> {
             env_region,
             profile_name: None,
             credentials_file_path: None,
+            config_file_path: None,
         }
     }
 }
 
 /// Resolve Bedrock credentials with precedence:
-/// explicit config > env vars > profile file.
+/// explicit config > env vars > shared AWS profile files.
 ///
 /// Returns `None` when no credentials are found.
 pub fn resolve_credentials(
@@ -133,13 +138,47 @@ pub fn resolve_credentials(
         ));
     }
 
-    // 3. Profile file (~/.aws/credentials)
-    if let (Some(profile), Some(path)) = (input.profile_name, input.credentials_file_path)
-        && !profile.is_empty()
-        && path.exists()
-        && let Some(creds) = read_profile(path, profile)
-    {
-        return Some((creds, CredentialSource::ProfileFile));
+    // 3. Shared AWS credentials/config profiles. We intentionally keep this
+    // local-only: no IMDS, SSO browser/device flow, or web-identity network
+    // calls are attempted from opi.
+    let profile = input
+        .profile_name
+        .filter(|profile| !profile.is_empty())
+        .unwrap_or("default");
+
+    let credentials_props = input
+        .credentials_file_path
+        .filter(|path| path.exists())
+        .and_then(|path| read_profile_properties(path, profile, ProfileFileKind::Credentials));
+    let config_props = input
+        .config_file_path
+        .filter(|path| path.exists())
+        .and_then(|path| read_profile_properties(path, profile, ProfileFileKind::Config));
+
+    if credentials_props.is_some() || config_props.is_some() {
+        let merged = merge_profile_properties(credentials_props, config_props);
+        let region = first_non_empty(&[
+            input.config_region,
+            input.env_region,
+            merged.region.as_deref(),
+        ])
+        .unwrap_or("us-east-1")
+        .to_string();
+
+        if let Some(creds) = profile_properties_to_credentials(&merged, region.clone()) {
+            let source = if merged.static_source == Some(ProfileFileKind::Config) {
+                CredentialSource::ConfigFile
+            } else {
+                CredentialSource::ProfileFile
+            };
+            return Some((creds, source));
+        }
+
+        if let Some(command) = merged.credential_process.as_deref()
+            && let Some(creds) = run_credential_process(command, region)
+        {
+            return Some((creds, CredentialSource::CredentialProcess));
+        }
     }
 
     None
@@ -147,18 +186,100 @@ pub fn resolve_credentials(
 
 /// Read a specific profile from an AWS credentials INI file.
 pub fn read_profile(path: &Path, profile_name: &str) -> Option<BedrockCredentials> {
+    let props = read_profile_properties(path, profile_name, ProfileFileKind::Credentials)?;
+    profile_properties_to_credentials(
+        &props,
+        props
+            .region
+            .clone()
+            .unwrap_or_else(|| "us-east-1".to_string()),
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProfileFileKind {
+    Credentials,
+    Config,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProfileProperties {
+    access_key_id: Option<String>,
+    secret_access_key: Option<String>,
+    session_token: Option<String>,
+    region: Option<String>,
+    credential_process: Option<String>,
+    static_source: Option<ProfileFileKind>,
+}
+
+fn first_non_empty<'a>(values: &[Option<&'a str>]) -> Option<&'a str> {
+    values
+        .iter()
+        .filter_map(|value| value.and_then(|s| (!s.is_empty()).then_some(s)))
+        .next()
+}
+
+fn merge_profile_properties(
+    credentials: Option<ProfileProperties>,
+    config: Option<ProfileProperties>,
+) -> ProfileProperties {
+    let mut merged = ProfileProperties::default();
+    for props in [credentials, config].into_iter().flatten() {
+        if merged.access_key_id.is_none() {
+            merged.access_key_id = props.access_key_id;
+        }
+        if merged.secret_access_key.is_none() {
+            merged.secret_access_key = props.secret_access_key;
+        }
+        if merged.session_token.is_none() {
+            merged.session_token = props.session_token;
+        }
+        if merged.region.is_none() {
+            merged.region = props.region;
+        }
+        if merged.credential_process.is_none() {
+            merged.credential_process = props.credential_process;
+        }
+        if merged.static_source.is_none() {
+            merged.static_source = props.static_source;
+        }
+    }
+    merged
+}
+
+fn profile_properties_to_credentials(
+    props: &ProfileProperties,
+    region: String,
+) -> Option<BedrockCredentials> {
+    match (&props.access_key_id, &props.secret_access_key) {
+        (Some(a), Some(s)) if !a.is_empty() && !s.is_empty() => Some(BedrockCredentials {
+            access_key_id: a.clone(),
+            secret_access_key: s.clone(),
+            session_token: props.session_token.clone(),
+            region,
+        }),
+        _ => None,
+    }
+}
+
+fn read_profile_properties(
+    path: &Path,
+    profile_name: &str,
+    kind: ProfileFileKind,
+) -> Option<ProfileProperties> {
     let contents = std::fs::read_to_string(path).ok()?;
-    let target_header = format!("[{profile_name}]");
+    let target_header = match kind {
+        ProfileFileKind::Credentials => format!("[{profile_name}]"),
+        ProfileFileKind::Config if profile_name == "default" => "[default]".to_string(),
+        ProfileFileKind::Config => format!("[profile {profile_name}]"),
+    };
 
     let mut in_target = false;
-    let mut akid: Option<String> = None;
-    let mut sak: Option<String> = None;
-    let mut token: Option<String> = None;
-    let mut region: Option<String> = None;
+    let mut props = ProfileProperties::default();
 
     for line in contents.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
         if line.starts_with('[') {
@@ -172,24 +293,62 @@ pub fn read_profile(path: &Path, profile_name: &str) -> Option<BedrockCredential
             let key = key.trim();
             let value = value.trim().to_string();
             match key {
-                "aws_access_key_id" => akid = Some(value),
-                "aws_secret_access_key" => sak = Some(value),
-                "aws_session_token" => token = Some(value),
-                "region" => region = Some(value),
+                "aws_access_key_id" => {
+                    props.access_key_id = Some(value);
+                    props.static_source = Some(kind);
+                }
+                "aws_secret_access_key" => {
+                    props.secret_access_key = Some(value);
+                    props.static_source = Some(kind);
+                }
+                "aws_session_token" => props.session_token = Some(value),
+                "region" => props.region = Some(value),
+                "credential_process" => props.credential_process = Some(value),
                 _ => {}
             }
         }
     }
 
-    match (akid, sak) {
-        (Some(a), Some(s)) => Some(BedrockCredentials {
-            access_key_id: a,
-            secret_access_key: s,
-            session_token: token,
-            region: region.unwrap_or_else(|| "us-east-1".to_string()),
-        }),
-        _ => None,
+    (props.access_key_id.is_some()
+        || props.secret_access_key.is_some()
+        || props.session_token.is_some()
+        || props.region.is_some()
+        || props.credential_process.is_some())
+    .then_some(props)
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct CredentialProcessOutput {
+    version: u32,
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: Option<String>,
+}
+
+fn run_credential_process(command: &str, region: String) -> Option<BedrockCredentials> {
+    let output = if cfg!(windows) {
+        Command::new("powershell")
+            .args(["-NoProfile", "-Command", command])
+            .output()
+            .ok()?
+    } else {
+        Command::new("sh").args(["-c", command]).output().ok()?
+    };
+    if !output.status.success() {
+        return None;
     }
+    let parsed: CredentialProcessOutput = serde_json::from_slice(&output.stdout).ok()?;
+    if parsed.version != 1 || parsed.access_key_id.is_empty() || parsed.secret_access_key.is_empty()
+    {
+        return None;
+    }
+    Some(BedrockCredentials {
+        access_key_id: parsed.access_key_id,
+        secret_access_key: parsed.secret_access_key,
+        session_token: parsed.session_token.filter(|token| !token.is_empty()),
+        region,
+    })
 }
 
 /// Read AWS credentials from environment variables.
@@ -238,6 +397,7 @@ mod tests {
             env_region,
             profile_name: profile,
             credentials_file_path: creds_path,
+            config_file_path: None,
         }
     }
 
@@ -312,6 +472,146 @@ mod tests {
         assert_eq!(result.secret_access_key, "PROFILE_SAK");
         assert_eq!(result.region, "us-west-2");
         assert_eq!(source, CredentialSource::ProfileFile);
+    }
+
+    #[test]
+    fn default_profile_file_used_when_profile_not_explicit() {
+        let dir = tempfile::tempdir().unwrap();
+        let cred_file = dir.path().join("credentials");
+        {
+            let mut f = std::fs::File::create(&cred_file).unwrap();
+            writeln!(f, "[default]").unwrap();
+            writeln!(f, "aws_access_key_id = DEFAULT_AKID").unwrap();
+            writeln!(f, "aws_secret_access_key = DEFAULT_SAK").unwrap();
+        }
+
+        let inp = input(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(cred_file.as_path()),
+        );
+        let (result, source) = resolve_credentials(&inp).unwrap();
+        assert_eq!(result.access_key_id, "DEFAULT_AKID");
+        assert_eq!(source, CredentialSource::ProfileFile);
+    }
+
+    #[test]
+    fn shared_config_profile_region_is_used_with_credentials_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cred_file = dir.path().join("credentials");
+        let config_file = dir.path().join("config");
+        {
+            let mut f = std::fs::File::create(&cred_file).unwrap();
+            writeln!(f, "[dev]").unwrap();
+            writeln!(f, "aws_access_key_id = DEV_AKID").unwrap();
+            writeln!(f, "aws_secret_access_key = DEV_SAK").unwrap();
+        }
+        {
+            let mut f = std::fs::File::create(&config_file).unwrap();
+            writeln!(f, "[profile dev]").unwrap();
+            writeln!(f, "region = ap-northeast-1").unwrap();
+        }
+
+        let mut inp = input(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("dev"),
+            Some(cred_file.as_path()),
+        );
+        inp.config_file_path = Some(config_file.as_path());
+        let (result, source) = resolve_credentials(&inp).unwrap();
+        assert_eq!(result.access_key_id, "DEV_AKID");
+        assert_eq!(result.region, "ap-northeast-1");
+        assert_eq!(source, CredentialSource::ProfileFile);
+    }
+
+    #[test]
+    fn shared_config_static_credentials_are_supported() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_file = dir.path().join("config");
+        {
+            let mut f = std::fs::File::create(&config_file).unwrap();
+            writeln!(f, "[profile ci]").unwrap();
+            writeln!(f, "aws_access_key_id = CONFIG_AKID").unwrap();
+            writeln!(f, "aws_secret_access_key = CONFIG_SAK").unwrap();
+            writeln!(f, "region = eu-central-1").unwrap();
+        }
+
+        let mut inp = input(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("ci"),
+            None,
+        );
+        inp.config_file_path = Some(config_file.as_path());
+        let (result, source) = resolve_credentials(&inp).unwrap();
+        assert_eq!(result.access_key_id, "CONFIG_AKID");
+        assert_eq!(result.region, "eu-central-1");
+        assert_eq!(source, CredentialSource::ConfigFile);
+    }
+
+    #[test]
+    fn credential_process_from_shared_config_is_supported() {
+        let dir = tempfile::tempdir().unwrap();
+        let output_file = dir.path().join("process-output.json");
+        let config_file = dir.path().join("config");
+        std::fs::write(
+            &output_file,
+            r#"{"Version":1,"AccessKeyId":"PROC_AKID","SecretAccessKey":"PROC_SAK","SessionToken":"PROC_TOKEN"}"#,
+        )
+        .unwrap();
+        let command = if cfg!(windows) {
+            format!("Get-Content -Raw -LiteralPath '{}'", output_file.display())
+        } else {
+            format!("cat '{}'", output_file.display())
+        };
+        {
+            let mut f = std::fs::File::create(&config_file).unwrap();
+            writeln!(f, "[profile proc]").unwrap();
+            writeln!(f, "region = us-west-1").unwrap();
+            writeln!(f, "credential_process = {command}").unwrap();
+        }
+
+        let props = read_profile_properties(&config_file, "proc", ProfileFileKind::Config)
+            .expect("profile should parse");
+        assert_eq!(props.credential_process.as_deref(), Some(command.as_str()));
+        let mut inp = input(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("proc"),
+            None,
+        );
+        inp.config_file_path = Some(config_file.as_path());
+        let (result, source) = resolve_credentials(&inp).unwrap();
+        assert_eq!(result.access_key_id, "PROC_AKID");
+        assert_eq!(result.session_token.as_deref(), Some("PROC_TOKEN"));
+        assert_eq!(result.region, "us-west-1");
+        assert_eq!(source, CredentialSource::CredentialProcess);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-agent.svg)](https://crates.io/crates/opi-agent)
 [![Docs.rs](https://docs.rs/opi-agent/badge.svg)](https://docs.rs/opi-agent)
 
-> General-purpose agent runtime for [opi](https://github.com/OdradekAI/opi): streaming turns, tool calling, hooks, event emission, sessions, and context compaction.
+> General-purpose agent runtime for [opi](https://github.com/OdradekAI/opi): streaming turns, tool calling, hooks, event emission, message queues, sessions, and context compaction.
 
 [Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
@@ -11,7 +11,7 @@
 
 Current crate version: `0.3.0`.
 
-`opi-agent` provides the provider-independent runtime used by the `opi` binary. It handles the turn loop, JSON Schema validation for tools, parallel/sequential tool execution, retry-aware provider streaming, event subscriptions, steering/follow-up queues, JSONL session storage, and threshold/manual/overflow compaction primitives.
+`opi-agent` provides the provider-independent runtime used by the `opi` binary. It handles the turn loop, JSON Schema validation for tools, parallel/sequential tool execution, retry-aware provider streaming, image-capability checks, event subscriptions, steering/follow-up queues, JSONL session storage, and threshold/manual/overflow compaction primitives.
 
 The `Transport` trait is available as an abstraction for stdio/SSE tool transports, but external transport-backed tools are not wired into the main loop yet.
 
@@ -36,7 +36,7 @@ pub trait AgentHooks: Send + Sync {
 }
 ```
 
-`Agent` wraps the loop with `prompt`, `continue_`, `abort`, `subscribe`, `add_tool`, and message-buffer helpers.
+`Agent` wraps the loop with `prompt`, `prompt_with_content`, `continue_`, `abort`, `subscribe`, `steer`, `follow_up`, `add_tool`, model switching, and message-buffer helpers.
 
 ## Agent Loop
 
@@ -44,6 +44,7 @@ pub trait AgentHooks: Send + Sync {
 agent_loop
   -> transform_context
   -> convert_to_llm
+  -> validate request capabilities
   -> provider.stream(Request)
   -> emit/accumulate AssistantStreamEvent values
   -> detect tool calls
@@ -129,15 +130,15 @@ impl Tool for EchoTool {
 }
 ```
 
-Create an `Agent` with a boxed `opi_ai::Provider`, tool list, model, optional system prompt, `AgentLoopConfig`, and an `AgentHooks` implementation.
+Create an `Agent` with a boxed `opi_ai::Provider`, tool list, model, optional system prompt, `AgentLoopConfig`, and an `AgentHooks` implementation. Use `prompt_with_content` when a user turn contains text plus images.
 
 ## Modules
 
 | Module | Purpose |
 |--------|---------|
-| `agent` | `Agent` wrapper and message buffer management |
+| `agent` | Stateful `Agent` wrapper, model switching, cancellation, queues, message buffer management |
 | root `agent_loop` | Provider/tool turn loop |
-| `tool` | `Tool`, `ToolResult`, `ToolError`, `ExecutionMode` |
+| `tool` | `Tool`, `ToolResult`, `ToolError`, `ExecutionMode`, update callbacks |
 | `hooks` | Hook trait and hook context/result types |
 | `event` | Runtime event protocol |
 | `session_event` | Session-level event protocol for JSON mode |

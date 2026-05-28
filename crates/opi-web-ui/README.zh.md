@@ -15,7 +15,7 @@
 - `lib.rs`：声明模块并重新导出 `ChatWidget`。
 - `components.rs`：空的 `ChatWidget` 类型，带 `new()` 和 `Default`。
 
-目前还没有真实 widget、渲染适配、HTTP 集成、浏览器绑定或测试。该 crate 依赖 `opi-ai`、`serde`、`serde_json` 和 `thiserror`，但占位实现尚未实质使用这些依赖。
+目前还没有真实 widget、渲染适配、HTTP 集成、浏览器绑定、文档预览组件或测试。该 crate 依赖 `opi-ai`、`serde`、`serde_json` 和 `thiserror`，但占位实现尚未实质使用这些依赖。
 
 ## 公共 API
 
@@ -28,7 +28,9 @@ let default_widget = ChatWidget::default();
 
 ## 边界说明
 
-只有面向 Web 的可复用组件实现后，相关功能才应进入这里。终端编程 Agent 位于 `opi-coding-agent`；Provider 和消息类型位于 `opi-ai`。
+只有实现面向 Web 的可复用 UI 组件后，相关功能才应进入这里。终端编程 Agent 位于 `opi-coding-agent`；Provider 和消息类型位于 `opi-ai`；Agent 运行时基础能力位于 `opi-agent`。
+
+在真实组件存在之前，不应把该 crate 描述为已实现的 Web UI。
 
 ## 许可证
 

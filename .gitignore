@@ -2,7 +2,10 @@
 .repo
 
 # Claude Code local-only state
-.claude/settings.local.json
+.claude
+!.claude/skill/opi-implement
+!.claude/skill/opi-release
+.agents
 
 # Secrets / credentials (must never be committed)
 .env

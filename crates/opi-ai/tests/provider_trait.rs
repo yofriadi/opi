@@ -95,6 +95,7 @@ fn model_info_fields() {
         display_name: "Claude Sonnet 4.5".into(),
         context_window: 200000,
         max_output_tokens: 8192,
+        supports_images: true,
         supports_streaming: true,
         supports_thinking: true,
     };

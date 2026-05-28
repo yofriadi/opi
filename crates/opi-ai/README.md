@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-ai.svg)](https://crates.io/crates/opi-ai)
 [![Docs.rs](https://docs.rs/opi-ai/badge.svg)](https://docs.rs/opi-ai)
 
-> Provider-neutral LLM API for [opi](https://github.com/OdradekAI/opi), with streaming events, tool-call message types, retry helpers, usage accumulation, and cost calculation.
+> Provider-neutral LLM API for [opi](https://github.com/OdradekAI/opi), with streaming events, text/image content, tool-call message types, retry helpers, shared HTTP client support, usage accumulation, and cost calculation.
 
 [Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
@@ -11,7 +11,7 @@
 
 Current crate version: `0.3.0`.
 
-`opi-ai` exposes a common `Provider` trait and provider-neutral message/event model. It includes real streaming implementations for Anthropic, OpenAI Chat Completions, OpenAI Responses, Gemini, plus OpenAI-compatible profiles for OpenRouter and Mistral.
+`opi-ai` exposes the common `Provider` trait plus provider-neutral request, message, model, and stream event types. The crate contains real streaming implementations for Anthropic, OpenAI Chat Completions, OpenAI Responses, Gemini, AWS Bedrock Converse, Azure OpenAI, and Google Vertex AI, plus OpenAI-compatible profiles for OpenRouter and Mistral.
 
 ## Providers
 
@@ -23,20 +23,31 @@ Current crate version: `0.3.0`.
 | `openrouter` | `openrouter` | OpenAI-compatible OpenRouter profile |
 | `mistral` | `mistral` | OpenAI-compatible Mistral profile |
 | `gemini` | `gemini` | Gemini `streamGenerateContent?alt=sse` |
+| `bedrock` | `bedrock` | AWS Bedrock Converse streaming with SigV4 signing |
+| `azure_openai` | `azure` | Azure OpenAI deployment-specific Chat Completions |
+| `vertex` | `vertex` | Vertex AI Gemini streaming |
 
-Each provider maps native wire events into `AssistantStreamEvent`, including text deltas, thinking deltas when available, tool-call deltas, terminal completion, and errors.
+Each provider maps native wire events into `AssistantStreamEvent`, including text deltas, thinking deltas when available, tool-call deltas, terminal completion, usage, and errors.
 
 ## Core API
 
 - `Provider`: backend trait with `id()`, `models()`, and `stream(Request) -> EventStream`.
-- `Request`: model, system prompt, messages, tools, token limits, temperature, thinking config, metadata, and cancellation token.
-- `AssistantStreamEvent`: 12 provider-neutral stream variants for start/text/thinking/tool/done/error.
-- `message`: `Message`, `AssistantMessage`, `UserMessage`, `ToolResultMessage`, `ToolDef`, `ToolCall`, and content variants.
-- `Model`: lightweight `{ id, provider, context_window }` descriptor returned by registry/capability queries.
+- `Request`: model, system prompt, messages, tools, token limits, temperature, thinking config, stop sequences, metadata, and cancellation token.
+- `Message`: provider-facing user, assistant, and tool-result messages.
+- `InputContent` / `OutputContent`: text and image content with URL, base64, or raw-byte image sources.
+- `AssistantStreamEvent`: provider-neutral stream variants for start/text/thinking/tool/done/error.
+- `ModelInfo`: model descriptor with context window, max output tokens, image support, streaming support, and thinking support.
 - `registry::ProviderRegistry`: resolves `provider:model` specs and exposes model capabilities.
-- `retry`: retry config, exponential backoff, and retry-after header parsing.
+- `http::HttpClient`: shared `reqwest` client wrapper with connection pooling and explicit or environment-derived proxy support.
+- `retry`: retry config, exponential backoff, and `Retry-After` parsing.
 - `Usage`, `CumulativeUsage`, `Pricing`, `CostBreakdown`, `calculate_cost`: token and cost helpers.
 - `test_support::MockProvider`: builder-style mock provider used by downstream tests.
+
+## Image Support
+
+Image input is represented by `InputContent::Image` with media types `image/png`, `image/jpeg`, `image/gif`, and `image/webp`. Providers serialize this content to their native wire formats where supported. `validate_request_capabilities` rejects known text-only models before a network call.
+
+Bedrock supports byte/base64 image sources through Converse, but rejects URL-sourced images locally because the Bedrock Converse API expects image bytes.
 
 ## Usage
 
@@ -80,18 +91,22 @@ while let Some(event) = stream.next().await {
 
 | Module | Purpose |
 |--------|---------|
-| `provider` | `Provider`, `Request`, `EventStream`, `ModelInfo`, `ProviderError`, `ProviderKind` |
-| `message` | Provider-facing messages and tool-call content |
+| `provider` | `Provider`, `Request`, `EventStream`, `ModelInfo`, provider errors, capability validation |
+| `message` | Provider-facing messages, tool-call content, and image content |
 | `stream` | Stream events, stop reasons, usage, cumulative usage, pricing helpers |
 | `registry` | `provider:model` resolution and capability lookup |
+| `http` | Shared HTTP client, connection pooling, proxy config, proxy env discovery |
 | `retry` | Retry/backoff/rate-limit helpers |
-| `model` | `Model` descriptor (`id`, `provider`, `context_window`) |
+| `model` | Lightweight `Model` descriptor |
 | `anthropic` | Anthropic Messages provider and SSE mapper |
 | `openai_chat` | OpenAI-compatible Chat Completions provider and compatibility profile adapter |
 | `openai_responses` | OpenAI Responses provider |
 | `openrouter` | OpenRouter provider profile |
 | `mistral` | Mistral provider profile |
 | `gemini` | Gemini provider |
+| `bedrock` | AWS Bedrock Converse provider, event-stream parser, SigV4 signing, credential resolution |
+| `azure_openai` | Azure OpenAI deployment provider |
+| `vertex` | Google Vertex AI Gemini provider |
 | `config` | Shared config error type |
 | `test_support` | Hidden mock provider for tests |
 

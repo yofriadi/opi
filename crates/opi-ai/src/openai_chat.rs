@@ -548,7 +548,7 @@ fn empty_assistant_message(api: crate::ApiKind, provider: &str) -> AssistantMess
 }
 
 // ---------------------------------------------------------------------------
-// CompatConfig — configuration points for OpenAI-compatible profiles
+// CompatConfig  - configuration points for OpenAI-compatible profiles
 // ---------------------------------------------------------------------------
 
 /// Configuration overrides for OpenAI-compatible provider profiles.
@@ -651,6 +651,7 @@ impl OpenAiChatProvider {
                 display_name: "GPT-4o".into(),
                 context_window: 128000,
                 max_output_tokens: 16384,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },
@@ -659,6 +660,7 @@ impl OpenAiChatProvider {
                 display_name: "GPT-4o Mini".into(),
                 context_window: 128000,
                 max_output_tokens: 16384,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },
@@ -667,6 +669,7 @@ impl OpenAiChatProvider {
                 display_name: "o3".into(),
                 context_window: 200000,
                 max_output_tokens: 100000,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },
@@ -675,6 +678,7 @@ impl OpenAiChatProvider {
                 display_name: "o4-mini".into(),
                 context_window: 200000,
                 max_output_tokens: 100000,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },
@@ -708,6 +712,12 @@ impl OpenAiChatProvider {
             extra_headers,
             client: Arc::new(HttpClient::new()),
         }
+    }
+
+    /// Replace the HTTP client with a shared one (for proxy configuration
+    /// and connection pooling).
+    pub fn with_shared_client(self, client: Arc<HttpClient>) -> Self {
+        Self { client, ..self }
     }
 
     /// Access the shared HTTP client (for testing client reuse).

@@ -51,6 +51,7 @@ impl MockProvider {
                 display_name: "Mock Model".into(),
                 context_window: 100_000,
                 max_output_tokens: 4_096,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             }],
@@ -100,7 +101,7 @@ pub fn base_assistant() -> AssistantMessage {
     }
 }
 
-/// Helper: build a text-only response (Start → TextDelta → Done).
+/// Helper: build a text-only response (Start ->TextDelta ->Done).
 pub fn text_response(text: &str) -> Vec<AssistantStreamEvent> {
     let mut partial = base_assistant();
     partial
@@ -122,7 +123,7 @@ pub fn text_response(text: &str) -> Vec<AssistantStreamEvent> {
     ]
 }
 
-/// Helper: build a tool-call response (Start → ToolCallEnd → Done).
+/// Helper: build a tool-call response (Start ->ToolCallEnd ->Done).
 pub fn tool_call_response(
     tool_call_id: &str,
     tool_name: &str,
@@ -155,7 +156,7 @@ pub fn tool_call_response(
     ]
 }
 
-/// Helper: build an error response (Start → Error).
+/// Helper: build an error response (Start ->Error).
 pub fn error_response(error_message: &str) -> Vec<AssistantStreamEvent> {
     let mut partial = base_assistant();
     partial.error_message = Some(error_message.into());

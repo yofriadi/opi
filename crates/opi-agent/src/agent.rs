@@ -120,6 +120,22 @@ impl Agent {
         self.run_with_token(token).await
     }
 
+    /// Send a user message with arbitrary content (text + images) and run the
+    /// agent loop.
+    pub async fn prompt_with_content(
+        &mut self,
+        content: Vec<InputContent>,
+    ) -> Result<Vec<AgentMessage>, AgentError> {
+        self.maybe_reset_cancel();
+        let token = self.cancel.child_token();
+        self.messages
+            .push(AgentMessage::Llm(Message::User(UserMessage {
+                content,
+                timestamp_ms: 0,
+            })));
+        self.run_with_token(token).await
+    }
+
     /// Continue the conversation with an additional user message.
     ///
     /// Requires the last context message to be a user message or tool result.
@@ -153,6 +169,21 @@ impl Agent {
     /// Add an additional tool to the agent's tool set.
     pub fn add_tool(&mut self, tool: Box<dyn Tool>) {
         self.tools.push(Arc::from(tool));
+    }
+
+    /// Return the active model spec.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Change the model used by subsequent provider requests.
+    pub fn set_model(&mut self, model: String) {
+        self.model = model;
+    }
+
+    /// Return the underlying provider metadata.
+    pub fn provider(&self) -> &dyn Provider {
+        self.provider.as_ref()
     }
 
     /// Set the initial conversation messages (for session resume).

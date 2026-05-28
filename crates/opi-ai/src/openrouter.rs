@@ -1,4 +1,4 @@
-//! OpenRouter provider profile — routes through the OpenAI-compatible adapter.
+//! OpenRouter provider profile  - routes through the OpenAI-compatible adapter.
 //!
 //! OpenRouter (<https://openrouter.ai>) provides an OpenAI-compatible API that
 //! routes requests to many model providers. This module creates a pre-configured
@@ -41,6 +41,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "Claude Sonnet 4 (via OpenRouter)".into(),
             context_window: 200000,
             max_output_tokens: 64000,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: false,
         },
@@ -49,6 +50,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "Claude Haiku 4 (via OpenRouter)".into(),
             context_window: 200000,
             max_output_tokens: 8192,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: false,
         },
@@ -57,6 +59,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "GPT-4o (via OpenRouter)".into(),
             context_window: 128000,
             max_output_tokens: 16384,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: false,
         },
@@ -65,6 +68,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "GPT-4o Mini (via OpenRouter)".into(),
             context_window: 128000,
             max_output_tokens: 16384,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: false,
         },
@@ -73,6 +77,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "Gemini 2.5 Pro (via OpenRouter)".into(),
             context_window: 1048576,
             max_output_tokens: 65536,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: false,
         },
@@ -81,6 +86,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "DeepSeek R1 (via OpenRouter)".into(),
             context_window: 131072,
             max_output_tokens: 32768,
+            supports_images: false,
             supports_streaming: true,
             supports_thinking: false,
         },

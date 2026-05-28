@@ -34,6 +34,7 @@ pub struct DefaultsConfig {
     pub model: String,
     pub max_iterations: u32,
     pub tool_timeout_ms: u64,
+    pub max_image_bytes: u64,
     pub theme: String,
     pub allow_mutating_tools: bool,
 }
@@ -44,6 +45,7 @@ impl Default for DefaultsConfig {
             model: "anthropic:claude-sonnet-4".into(),
             max_iterations: 50,
             tool_timeout_ms: 30_000,
+            max_image_bytes: crate::image::DEFAULT_MAX_IMAGE_BYTES,
             theme: "default".into(),
             allow_mutating_tools: false,
         }
@@ -228,6 +230,7 @@ struct TomlDefaults {
     model: Option<String>,
     max_iterations: Option<u32>,
     tool_timeout_ms: Option<u64>,
+    max_image_bytes: Option<u64>,
     theme: Option<String>,
     allow_mutating_tools: Option<bool>,
 }
@@ -351,6 +354,9 @@ impl TomlConfig {
         }
         if let Some(v) = self.defaults.tool_timeout_ms {
             config.defaults.tool_timeout_ms = v;
+        }
+        if let Some(v) = self.defaults.max_image_bytes {
+            config.defaults.max_image_bytes = v;
         }
         if let Some(v) = self.defaults.theme {
             config.defaults.theme = v;
@@ -667,21 +673,57 @@ fn load_raw_config(path: &Path) -> Result<TomlConfig, ConfigError> {
     })
 }
 
-/// Return the platform-specific user config path.
+/// Return the platform-specific user config file path.
 pub fn user_config_path() -> PathBuf {
+    user_config_dir().join("config.toml")
+}
+
+/// Return the platform-specific user config directory.
+///
+/// This is the directory where `config.toml` and global context files
+/// (`AGENTS.md`, `CLAUDE.md`) live.
+///
+/// - Windows: `%APPDATA%\opi\`
+/// - Unix: `~/.config/opi/`
+pub fn user_config_dir() -> PathBuf {
     if cfg!(windows) {
-        // Windows: %APPDATA%\opi\config.toml
         std::env::var("APPDATA")
-            .map(|p| PathBuf::from(p).join("opi").join("config.toml"))
-            .unwrap_or_else(|_| PathBuf::from(".opi").join("config.toml"))
+            .map(|p| PathBuf::from(p).join("opi"))
+            .unwrap_or_else(|_| PathBuf::from(".opi"))
     } else {
-        // Unix: ~/.config/opi/config.toml
         dirs_home()
-            .map(|h| h.join(".config").join("opi").join("config.toml"))
-            .unwrap_or_else(|| PathBuf::from(".opi").join("config.toml"))
+            .map(|h| h.join(".config").join("opi"))
+            .unwrap_or_else(|| PathBuf::from(".opi"))
     }
 }
 
 fn dirs_home() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
+}
+
+// ---------------------------------------------------------------------------
+// HTTP client construction from proxy config
+// ---------------------------------------------------------------------------
+
+/// Build an HTTP client with optional proxy configuration.
+///
+/// When an explicit proxy config is provided, it is used directly.
+/// Otherwise, falls back to environment variable detection
+/// (`HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`).
+pub fn build_http_client(
+    proxy_config: Option<&ProviderProxyConfig>,
+) -> Result<std::sync::Arc<opi_ai::http::HttpClient>, reqwest::Error> {
+    let mut builder = opi_ai::http::HttpClientBuilder::new();
+    if let Some(proxy) = proxy_config {
+        builder = builder.proxy(opi_ai::http::ProxyConfig {
+            url: Some(proxy.url.clone()),
+            no_proxy: proxy.no_proxy.clone(),
+        });
+    } else {
+        let env_proxy = opi_ai::http::proxy_from_env();
+        if env_proxy.url.is_some() {
+            builder = builder.proxy(env_proxy);
+        }
+    }
+    builder.build().map(std::sync::Arc::new)
 }

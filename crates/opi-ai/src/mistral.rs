@@ -1,4 +1,4 @@
-//! Mistral provider profile — routes through the OpenAI-compatible adapter.
+//! Mistral provider profile  - routes through the OpenAI-compatible adapter.
 //!
 //! Mistral AI (<https://mistral.ai>) provides an OpenAI-compatible Chat
 //! Completions API at `https://api.mistral.ai/v1/chat/completions`. This
@@ -34,6 +34,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "Mistral Large".into(),
             context_window: 128000,
             max_output_tokens: 8192,
+            supports_images: false,
             supports_streaming: true,
             supports_thinking: false,
         },
@@ -42,6 +43,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "Mistral Medium".into(),
             context_window: 32000,
             max_output_tokens: 8192,
+            supports_images: false,
             supports_streaming: true,
             supports_thinking: false,
         },
@@ -50,6 +52,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "Mistral Small".into(),
             context_window: 32000,
             max_output_tokens: 8192,
+            supports_images: false,
             supports_streaming: true,
             supports_thinking: false,
         },
@@ -58,6 +61,7 @@ fn default_models() -> Vec<ModelInfo> {
             display_name: "Codestral".into(),
             context_window: 256000,
             max_output_tokens: 8192,
+            supports_images: false,
             supports_streaming: true,
             supports_thinking: false,
         },

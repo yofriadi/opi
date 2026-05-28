@@ -3,12 +3,12 @@
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
-    widgets::Widget,
+    widgets::{Clear, Widget},
 };
 
 use crate::{
-    AppState, InputEditor, Message, MessageList, StatusBar, ToolCallStatus, ToolCallView,
-    theme::Theme,
+    AppState, InputEditor, Message, MessageList, SelectList, SelectListState, StatusBar,
+    ToolCallStatus, ToolCallView, theme::Theme,
 };
 
 /// Top-level TUI shell composing all Phase 1 components.
@@ -20,6 +20,7 @@ pub struct Shell {
     token_count: Option<u64>,
     cost_usd: Option<f64>,
     active_tool: Option<ToolCallViewData>,
+    picker: Option<PickerViewData>,
     theme: Theme,
 }
 
@@ -27,6 +28,11 @@ struct ToolCallViewData {
     name: String,
     arguments: String,
     status: ToolCallStatus,
+}
+
+struct PickerViewData {
+    title: String,
+    state: SelectListState,
 }
 
 impl Shell {
@@ -39,6 +45,7 @@ impl Shell {
             token_count: None,
             cost_usd: None,
             active_tool: None,
+            picker: None,
             theme: Theme::default(),
         }
     }
@@ -74,6 +81,11 @@ impl Shell {
             arguments,
             status,
         });
+        self
+    }
+
+    pub fn picker(mut self, title: String, state: SelectListState) -> Self {
+        self.picker = Some(PickerViewData { title, state });
         self
     }
 
@@ -123,5 +135,29 @@ impl Widget for Shell {
         InputEditor::new(self.input_text)
             .theme(theme.clone())
             .render(chunks[ci], buf);
+
+        if let Some(picker) = self.picker {
+            let picker_area = centered_rect(80, 70, area);
+            Clear.render(picker_area, buf);
+            SelectList::new(&picker.state, &picker.title)
+                .theme(theme.clone())
+                .render(picker_area, buf);
+        }
     }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(area);
+    let horizontal = Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(vertical[1]);
+    horizontal[1]
 }

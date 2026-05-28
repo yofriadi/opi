@@ -56,8 +56,12 @@ impl AzureOpenAIProvider {
         endpoint: Option<String>,
         deployment: String,
         api_version: Option<String>,
-    ) -> Self {
-        let endpoint = endpoint.unwrap_or_else(|| "https://YOUR_RESOURCE.openai.azure.com".into());
+    ) -> Result<Self, ProviderError> {
+        let endpoint = endpoint.ok_or_else(|| {
+            ProviderError::RequestFailed(
+                "Azure OpenAI endpoint is required. Set it via config [providers.azure] endpoint or AZURE_OPENAI_ENDPOINT env var.".into()
+            )
+        })?;
         let api_version = api_version.unwrap_or_else(|| DEFAULT_API_VERSION.into());
         let inner = OpenAiChatProvider::new_for_profile(
             api_key.clone(),
@@ -68,14 +72,14 @@ impl AzureOpenAIProvider {
             vec![],
         );
         let _ = deployment; // stored in models if needed
-        Self {
+        Ok(Self {
             api_key,
             endpoint,
             api_version,
             models: vec![],
             inner,
             client: Arc::new(HttpClient::new()),
-        }
+        })
     }
 
     /// Create from config with explicit deployment names for the model list.
@@ -84,8 +88,12 @@ impl AzureOpenAIProvider {
         endpoint: Option<String>,
         deployments: Vec<String>,
         api_version: Option<String>,
-    ) -> Self {
-        let endpoint = endpoint.unwrap_or_else(|| "https://YOUR_RESOURCE.openai.azure.com".into());
+    ) -> Result<Self, ProviderError> {
+        let endpoint = endpoint.ok_or_else(|| {
+            ProviderError::RequestFailed(
+                "Azure OpenAI endpoint is required. Set it via config [providers.azure] endpoint or AZURE_OPENAI_ENDPOINT env var.".into()
+            )
+        })?;
         let api_version = api_version.unwrap_or_else(|| DEFAULT_API_VERSION.into());
         let models = deployments
             .iter()
@@ -94,6 +102,7 @@ impl AzureOpenAIProvider {
                 display_name: d.clone(),
                 context_window: 128000,
                 max_output_tokens: 16384,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             })
@@ -106,14 +115,14 @@ impl AzureOpenAIProvider {
             vec![],
             vec![],
         );
-        Self {
+        Ok(Self {
             api_key,
             endpoint,
             api_version,
             models,
             inner,
             client: Arc::new(HttpClient::new()),
-        }
+        })
     }
 
     /// Replace the HTTP client (for shared connection pooling).

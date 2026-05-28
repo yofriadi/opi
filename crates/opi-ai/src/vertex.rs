@@ -84,6 +84,7 @@ impl VertexProvider {
                 display_name: id.clone(),
                 context_window: 1_000_000,
                 max_output_tokens: 65536,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             })
@@ -316,6 +317,7 @@ fn default_vertex_models() -> Vec<ModelInfo> {
             display_name: "Gemini 2.5 Flash (Vertex)".into(),
             context_window: 1_000_000,
             max_output_tokens: 65536,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: false,
         },
@@ -324,6 +326,7 @@ fn default_vertex_models() -> Vec<ModelInfo> {
             display_name: "Gemini 2.5 Pro (Vertex)".into(),
             context_window: 1_000_000,
             max_output_tokens: 65536,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: false,
         },

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `opi-ai`: AWS Bedrock provider with SigV4 signing and credential resolution
+- `opi-ai`: Azure OpenAI provider with deployment URL and api-key auth
+- `opi-ai`: Google Vertex AI provider with OAuth Bearer auth
+- `opi-ai`: HTTP/HTTPS proxy support with env-var and per-provider config
+- `opi-coding-agent`: `--list-models` flag to list available models (table or NDJSON)
+- `opi-coding-agent`: `--image` flag for non-interactive image attachment
+- `opi-agent`: `prompt_with_content` method for arbitrary content (text + images)
+- `opi-coding-agent`: global context file discovery from user config directory
+- `opi-coding-agent`: proxy wiring to all provider factory paths
+
+### Fixed
+
+- `opi-ai`: Bedrock error mapping now parses Retry-After header for 429 responses
+- `opi-ai`: Azure OpenAI endpoint validation -- missing endpoint returns config error
+- `opi-ai`: Bedrock URL-sourced images rejected with clear unsupported-error message
+- `opi-coding-agent`: ls tool truncation count now correctly reports omitted entries
+- `opi-agent`: compaction summary includes image content placeholders
+
 ## [0.3.0] - 2026-05-25
 
 Phase 2 hardening: multi-provider support (6 LLM providers), session

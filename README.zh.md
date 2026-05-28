@@ -11,34 +11,28 @@
 
 当前 workspace 版本：`0.3.0`。
 
-`opi` 现在包含可用的编程 Agent 二进制、6 个内置工具、ratatui TUI、非交互 stdout 模式、NDJSON 模式、TOML 配置、多 Provider 流式接入、会话持久化、上下文压缩、retry/backoff、可配置按键与主题、用量累计，以及尽力而为的费用估算。
+`opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、8 个内置工具、图片附件、模型与会话选择器、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、token 用量累计，以及尽力而为的费用摘要。
 
-`opi-web-ui` 仍是预留占位 crate，不会发布到 crates.io。
+`opi-web-ui` 仍是 `publish = false` 的占位 crate，目前还没有真实 Web UI。
 
 ## 工作区
 
-Cargo workspace 采用锁步版本：所有 crate 都从 `[workspace.package]` 继承 `version`、`edition`、`license`、`repository` 和 `authors`。
+Cargo workspace 采用锁步版本。所有 crate 都从 `[workspace.package]` 继承 `version`、`edition`、`license`、`repository` 和 `authors`。
 
 | Crate | 是否发布 | 说明 |
 |-------|----------|------|
-| [`opi-ai`](crates/opi-ai) | 是 | 多 Provider LLM API、流式事件、注册表、重试、用量与费用工具 |
-| [`opi-agent`](crates/opi-agent) | 是 | Agent 主循环、工具执行、hooks、事件、会话、压缩、transport trait |
-| [`opi-tui`](crates/opi-tui) | 是 | Ratatui 组件、diff 视图、主题、按键绑定 |
+| [`opi-ai`](crates/opi-ai) | 是 | Provider 无关 LLM API、流式事件、图片内容、注册表、重试、HTTP 连接池/代理、用量与费用工具 |
+| [`opi-agent`](crates/opi-agent) | 是 | Agent 主循环、工具执行、hooks、事件、队列、会话、压缩、transport 抽象 |
+| [`opi-tui`](crates/opi-tui) | 是 | Ratatui 组件、对话渲染、diff 视图、选择列表、终端图片、主题、按键绑定 |
 | [`opi-coding-agent`](crates/opi-coding-agent) | 是 | `opi` 二进制与可嵌入的编程 harness |
 | [`opi-web-ui`](crates/opi-web-ui) | 否（`publish = false`） | 预留的 Web 聊天组件 crate |
 
 内部依赖关系：
 
 ```text
-opi-ai
-  -> opi-agent
-  -> opi-web-ui
-
-opi-tui
-
-opi-ai + opi-agent + opi-tui
-  -> opi-coding-agent
-     -> opi binary
+opi-ai -> opi-agent
+opi-ai -> opi-web-ui
+opi-ai + opi-agent + opi-tui -> opi-coding-agent -> opi binary
 ```
 
 ## 安装
@@ -50,15 +44,16 @@ cargo install opi-coding-agent
 opi --version
 ```
 
-每个 [GitHub Release](https://github.com/OdradekAI/opi/releases) 都附带 Linux、macOS、Windows 的 x64 与 arm64 预编译二进制。
+Linux、macOS 和 Windows 的 x64/arm64 预编译二进制附在 [GitHub Releases](https://github.com/OdradekAI/opi/releases)。
 
 ## 快速开始
 
-先设置要使用的 Provider API key：
+先设置要使用的 Provider 凭据：
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
 # 或 OPENAI_API_KEY、OPENROUTER_API_KEY、MISTRAL_API_KEY、GEMINI_API_KEY
+# 或 Bedrock 的 AWS 凭据、AZURE_OPENAI_API_KEY、VERTEX_ACCESS_TOKEN
 ```
 
 启动交互式 TUI：
@@ -70,38 +65,53 @@ opi
 运行单次提示词，并把助手文本输出到 stdout：
 
 ```sh
-opi "列出这个 workspace 里的 Rust crate。"
+opi "列出这个 workspace 中的 Rust crate。"
 ```
 
-为自动化流程输出 newline-delimited JSON 事件：
+为自动化输出 NDJSON 事件：
 
 ```sh
 opi --json "总结最新会话状态。"
 ```
 
-使用 `provider:model` 语法指定模型：
+给初始提示词附加图片：
+
+```sh
+opi --image screenshot.png "审查这个 UI。"
+opi --image before.png --image after.png "对比这两张图片。"
+```
+
+用 `provider:model` 语法选择模型：
 
 ```sh
 opi -m anthropic:claude-sonnet-4-5-20250514 "解释 crates/opi-agent/src/lib.rs"
-opi -m openai:gpt-4o "检查公共 API 形态。"
-opi -m openai-responses:gpt-4o-mini "找出小的文档缺口。"
+opi -m openai:gpt-4o "审查公共 API 形态。"
+opi -m openai-responses:gpt-4o-mini "找出文档缺口。"
 opi -m openrouter:openai/gpt-4o-mini "列出 TODO 注释。"
 opi -m mistral:codestral-latest "解释工具模块。"
 opi -m gemini:gemini-2.5-flash "总结 README 文件。"
+opi -m bedrock:anthropic.claude-sonnet-4-20250514-v2:0 "总结这个仓库。"
+opi -m azure:my-deployment "使用我的 Azure OpenAI deployment。"
+opi -m vertex:gemini-2.5-flash "使用 Vertex AI。"
 ```
 
 ## 支持的 Provider
 
-Provider 在 `opi-ai` 中实现，并已接入 `opi-coding-agent`。
+Provider 支持在 `opi-ai` 中实现，并已接入 `opi-coding-agent`。
 
-| Provider spec 前缀 | 默认 API key 环境变量 | 说明 |
-|--------------------|-----------------------|------|
-| `anthropic:` | `ANTHROPIC_API_KEY` | Anthropic Messages API，支持 thinking |
-| `openai:` | `OPENAI_API_KEY` | OpenAI Chat Completions 兼容流式接口 |
-| `openai-responses:` | `OPENAI_API_KEY` | OpenAI Responses API 流式接口 |
-| `openrouter:` | `OPENROUTER_API_KEY` | OpenAI-compatible OpenRouter profile |
-| `mistral:` | `MISTRAL_API_KEY` | OpenAI-compatible Mistral profile |
-| `gemini:` | `GEMINI_API_KEY` | Gemini `streamGenerateContent` SSE |
+| 模型前缀 | 后端 | 默认凭据 |
+|----------|------|----------|
+| `anthropic:` | Anthropic Messages SSE | `ANTHROPIC_API_KEY` |
+| `openai:` | OpenAI Chat Completions SSE | `OPENAI_API_KEY` |
+| `openai-responses:` | OpenAI Responses SSE | `OPENAI_API_KEY` |
+| `openrouter:` | OpenAI-compatible OpenRouter profile | `OPENROUTER_API_KEY` |
+| `mistral:` | OpenAI-compatible Mistral profile | `MISTRAL_API_KEY` |
+| `gemini:` | Gemini `streamGenerateContent` SSE | `GEMINI_API_KEY` |
+| `bedrock:` | AWS Bedrock Converse streaming，使用 SigV4 | AWS 环境变量或共享 AWS config/credentials |
+| `azure:` | Azure OpenAI Chat Completions deployment | `AZURE_OPENAI_API_KEY` 加配置中的 endpoint |
+| `vertex:` | Google Vertex AI Gemini streaming | `VERTEX_ACCESS_TOKEN` 加配置中的 project/location |
+
+使用 `opi --list-models` 可列出已配置 Provider 暴露的模型；加 `--json` 可输出机器可读格式。
 
 ## 内置工具
 
@@ -110,13 +120,23 @@ Provider 在 `opi-ai` 中实现，并已接入 `opi-coding-agent`。
 | 工具 | 参数 | 执行模式 | 是否修改 |
 |------|------|----------|----------|
 | `read` | `path`，可选 `offset`、`limit` | 并行 | 否 |
+| `ls` | `path`，可选 `max_entries`、`max_depth` | 并行 | 否 |
 | `glob` | `pattern` | 并行 | 否 |
+| `find` | `pattern`，可选 `path` | 并行 | 否 |
 | `grep` | `pattern` | 并行 | 否 |
 | `write` | `path`、`content` | 串行 | 是 |
 | `edit` | `path`、`old_string`、`new_string` | 串行 | 是 |
 | `bash` | `command`，可选 `timeout_secs` | 串行 | 是 |
 
-所有路径都被限制在 harness 的 workspace 根目录下。修改性工具需要 `--allow-mutating`，或配置 `defaults.allow_mutating_tools = true`。
+所有文件路径都会限制在 harness 的 workspace 根目录下。修改性工具需要 `--allow-mutating`，或配置 `defaults.allow_mutating_tools = true`。
+
+工具选择参数：
+
+```sh
+opi --tools read,grep "只读检查代码。"
+opi --no-tools "只根据对话上下文回答。"
+opi --no-builtin-tools "不加载内置工具运行。"
+```
 
 ## 配置
 
@@ -133,9 +153,10 @@ Provider 在 `opi-ai` 中实现，并已接入 `opi-coding-agent`。
 
 ```toml
 [defaults]
-model = "anthropic:claude-sonnet-4-5-20250514"
+model = "anthropic:claude-sonnet-4"
 max_iterations = 50
 tool_timeout_ms = 30000
+max_image_bytes = 20971520
 theme = "default"
 allow_mutating_tools = false
 
@@ -163,20 +184,63 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
+# base_url = "https://api.openai.com"
 
 [providers.openai_responses]
 api_key_env = "OPENAI_API_KEY"
+# base_url = "https://api.openai.com"
 
 [providers.openrouter]
 api_key_env = "OPENROUTER_API_KEY"
+# base_url = "https://openrouter.ai/api"
 # referer = "https://example.com"
 
 [providers.mistral]
 api_key_env = "MISTRAL_API_KEY"
+# base_url = "https://api.mistral.ai"
 
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"
+# base_url = "https://generativelanguage.googleapis.com"
+
+[providers.bedrock]
+region = "us-east-1"
+# profile = "default"
+# base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
+# secret_access_key_env = "AWS_SECRET_ACCESS_KEY"
+# session_token_env = "AWS_SESSION_TOKEN"
+
+[providers.azure]
+api_key_env = "AZURE_OPENAI_API_KEY"
+endpoint = "https://my-resource.openai.azure.com"
+api_version = "2024-06-01"
+deployments = ["my-deployment"]
+
+[providers.vertex]
+access_token_env = "VERTEX_ACCESS_TOKEN"
+project = "my-gcp-project"
+location = "us-central1"
+models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+
+[providers.openai.proxy]
+url = "http://proxy.example.com:8080"
+no_proxy = "localhost,127.0.0.1"
 ```
+
+如果没有为某个 Provider 配置代理，`opi` 会回退到标准的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY` 环境变量。
+
+## 交互模式
+
+没有提示词参数时，`opi` 会启动 ratatui TUI。输入框中可用的命令：
+
+| 命令 | 作用 |
+|------|------|
+| `/model` | 打开当前 Provider 的模型选择器 |
+| `/session` | 打开会话选择器并恢复已有会话 |
+| `/image <path>` | 为下一条提示词排队一张图片 |
+| `exit` 或 `quit` | 退出 TUI |
+
+默认按键是 `enter` 提交、`escape` 中止/退出、`alt+enter` 换行。可在 `[keybindings]` 中修改。
 
 ## 会话
 
@@ -195,7 +259,11 @@ opi --resume <session-id> "从这个会话继续。"
 opi --delete-session <session-id>
 ```
 
-会话文件保存 header，以及 message、compaction、leaf 条目。Resume 会重建活跃分支，并保留压缩摘要语义。`--json` 会输出 session 事件、retry 事件、compaction 事件，以及包含 token 总量和可选费用总量的最终 session summary。
+会话文件保存 header，以及 message、compaction、leaf 条目。Resume 会重建活跃分支并保留压缩摘要语义。`--json` 会输出 session 事件、retry 事件、compaction 事件、thinking-level 事件，以及带 token 总量和可选费用总量的最终 session summary。
+
+## 上下文文件
+
+编程 harness 会从 workspace 目录向上查找 `AGENTS.md` 和 `CLAUDE.md`，直到 git root，然后再查找用户配置目录。超过 128 KiB 的文件和空文件会被忽略。`OPI.md` 有意不会加载。
 
 ## 从源码构建
 
@@ -219,9 +287,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 `opi` 启动时会选择运行模式：
 
-- 非交互：位置参数提示词、`--non-interactive` 或 `--json`；构建 Provider 并运行 `NonInteractiveRunner`。
-- 交互式：无提示词时的默认模式；构建带交互 hooks 的 `CodingHarness` 并启动 ratatui TUI。
-- 会话命令：`--list-sessions`、`--resume`、`--delete-session` 会在 Provider 构建之前处理。
+- 会话、模型列表和补全生成命令会尽早处理并退出。
+- 非交互模式由提示词参数、`--non-interactive` 或 `--json` 触发；它构建 Provider 并运行 `NonInteractiveRunner`。
+- 交互模式是没有提示词参数时的默认模式；它构建带交互 hooks 的 `CodingHarness` 并启动 ratatui TUI。
 
 交互和非交互模式共用同一个 Agent 主循环：
 
@@ -252,7 +320,7 @@ transform_context
 
 ## 尚未实现
 
-- 子 Agent 与 skills。
+- 作为产品功能的子 Agent 与 skills。
 - Prompt template registry。
 - 通过 `Transport` 接入 MCP 工具服务器。
 - OAuth 或订阅登录流程。

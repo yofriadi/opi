@@ -1,4 +1,4 @@
-//! Provider registry — resolves `provider:model` specs to provider + model info.
+//! Provider registry  - resolves `provider:model` specs to provider + model info.
 
 use crate::provider::{ModelInfo, Provider};
 
@@ -18,6 +18,7 @@ pub enum RegistryError {
 pub struct ModelCapabilities {
     pub context_window: u64,
     pub max_output_tokens: u64,
+    pub supports_images: bool,
     pub supports_streaming: bool,
     pub supports_thinking: bool,
 }
@@ -73,6 +74,7 @@ impl ProviderRegistry {
         Ok(ModelCapabilities {
             context_window: model.context_window,
             max_output_tokens: model.max_output_tokens,
+            supports_images: model.supports_images,
             supports_streaming: model.supports_streaming,
             supports_thinking: model.supports_thinking,
         })

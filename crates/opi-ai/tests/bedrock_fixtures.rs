@@ -10,9 +10,13 @@ use futures_core::Stream;
 use futures_util::{StreamExt, pin_mut};
 use opi_ai::bedrock::BedrockProvider;
 use opi_ai::bedrock::event_stream;
+use opi_ai::bedrock::map_bedrock_status;
 use opi_ai::bedrock::sigv4::AwsCredentials;
 use opi_ai::http::HttpClient;
-use opi_ai::message::{InputContent, Message, ToolDef, UserMessage};
+use opi_ai::message::{
+    ImageSource, InputContent, MediaType, Message, OutputContent, ToolDef, ToolResultMessage,
+    UserMessage,
+};
 use opi_ai::provider::{Provider, ProviderError, Request};
 use opi_ai::stream::{AssistantStreamEvent, StopReason};
 use tokio_util::sync::CancellationToken;
@@ -313,31 +317,52 @@ async fn usage_tracked_from_metadata() {
 // Error mapping
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn access_denied_mapped_to_auth_failed() {
-    let provider = BedrockProvider::new(test_credentials(), None, Arc::new(HttpClient::new()));
-    let error = provider.map_bedrock_status(403, "Access denied");
+#[test]
+fn access_denied_mapped_to_auth_failed() {
+    let status = reqwest::StatusCode::from_u16(403).unwrap();
+    let headers = reqwest::header::HeaderMap::new();
+    let error = map_bedrock_status(status, "Access denied", &headers);
     assert!(matches!(error, ProviderError::AuthFailed(_)));
 }
 
-#[tokio::test]
-async fn throttling_mapped_to_rate_limited() {
-    let provider = BedrockProvider::new(test_credentials(), None, Arc::new(HttpClient::new()));
-    let error = provider.map_bedrock_status(429, "Too many requests");
-    assert!(matches!(error, ProviderError::RateLimited { .. }));
+#[test]
+fn throttling_mapped_to_rate_limited() {
+    let status = reqwest::StatusCode::from_u16(429).unwrap();
+    let headers = reqwest::header::HeaderMap::new();
+    let error = map_bedrock_status(status, "Too many requests", &headers);
+    assert!(matches!(
+        error,
+        ProviderError::RateLimited {
+            retry_after_ms: None
+        }
+    ));
 }
 
-#[tokio::test]
-async fn timeout_mapped_correctly() {
-    let provider = BedrockProvider::new(test_credentials(), None, Arc::new(HttpClient::new()));
-    let error = provider.map_bedrock_status(504, "Gateway timeout");
+#[test]
+fn throttling_parses_retry_after_header() {
+    let status = reqwest::StatusCode::from_u16(429).unwrap();
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("retry-after", "5".parse().unwrap());
+    let error = map_bedrock_status(status, "Too many requests", &headers);
+    assert!(
+        matches!(error, ProviderError::RateLimited { retry_after_ms: Some(ms) } if ms == 5000),
+        "expected retry_after_ms=5000 from retry-after header"
+    );
+}
+
+#[test]
+fn timeout_mapped_correctly() {
+    let status = reqwest::StatusCode::from_u16(504).unwrap();
+    let headers = reqwest::header::HeaderMap::new();
+    let error = map_bedrock_status(status, "Gateway timeout", &headers);
     assert!(matches!(error, ProviderError::Timeout));
 }
 
-#[tokio::test]
-async fn server_error_mapped_to_request_failed() {
-    let provider = BedrockProvider::new(test_credentials(), None, Arc::new(HttpClient::new()));
-    let error = provider.map_bedrock_status(500, "Internal error");
+#[test]
+fn server_error_mapped_to_request_failed() {
+    let status = reqwest::StatusCode::from_u16(500).unwrap();
+    let headers = reqwest::header::HeaderMap::new();
+    let error = map_bedrock_status(status, "Internal error", &headers);
     assert!(matches!(error, ProviderError::RequestFailed(_)));
 }
 
@@ -408,4 +433,77 @@ fn bedrock_provider_accepts_shared_client() {
     let client = Arc::new(HttpClient::new());
     let provider = BedrockProvider::new(test_credentials(), None, client.clone());
     assert!(Arc::ptr_eq(&client, provider.http_client()));
+}
+
+// ---------------------------------------------------------------------------
+// URL image validation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn url_image_rejected_with_clear_error() {
+    let provider = BedrockProvider::new(test_credentials(), None, Arc::new(HttpClient::new()));
+    let request = Request {
+        model: "bedrock:anthropic.claude-sonnet-4-20250514-v2:0".into(),
+        system: None,
+        messages: vec![Message::User(UserMessage {
+            content: vec![
+                InputContent::Text {
+                    text: "describe".into(),
+                },
+                InputContent::Image {
+                    source: ImageSource::Url {
+                        url: "https://example.com/img.png".into(),
+                    },
+                    media_type: MediaType::Png,
+                },
+            ],
+            timestamp_ms: 0,
+        })],
+        tools: vec![],
+        max_tokens: Some(1024),
+        temperature: None,
+        thinking: Default::default(),
+        stop_sequences: vec![],
+        metadata: None,
+        cancel: CancellationToken::new(),
+    };
+    let stream = provider.stream(request);
+    use futures_util::StreamExt;
+    let events: Vec<_> = stream.collect().await;
+    assert_eq!(events.len(), 1, "expected exactly one event");
+    match &events[0] {
+        Err(ProviderError::RequestFailed(msg)) => {
+            assert!(
+                msg.contains("URL-sourced images are not supported"),
+                "unexpected error: {msg}"
+            );
+        }
+        other => panic!("expected RequestFailed error, got {other:?}"),
+    }
+}
+
+#[test]
+fn tool_result_image_placeholder_preserves_media_type() {
+    let provider = BedrockProvider::new(test_credentials(), None, Arc::new(HttpClient::new()));
+    let mut request = text_stream_request();
+    request.messages = vec![Message::ToolResult(ToolResultMessage {
+        tool_call_id: "tool-1".into(),
+        tool_name: "screenshot".into(),
+        content: vec![OutputContent::Image {
+            source: ImageSource::Bytes {
+                data: vec![0xff, 0xd8, 0xff],
+            },
+            media_type: MediaType::Jpeg,
+        }],
+        details: None,
+        is_error: false,
+        timestamp_ms: 0,
+    })];
+
+    let body = provider.build_converse_body(&request);
+    let text = body["messages"][0]["content"][0]["toolResult"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+
+    assert_eq!(text, "[image: image/jpeg]");
 }

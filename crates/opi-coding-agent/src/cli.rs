@@ -91,6 +91,10 @@ pub struct Cli {
     #[arg(long)]
     pub image: Vec<PathBuf>,
 
+    /// List available models and exit.
+    #[arg(long)]
+    pub list_models: bool,
+
     /// Initial prompt (positional).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub prompt: Vec<String>,

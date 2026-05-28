@@ -406,3 +406,46 @@ async fn e2e_resume_context_from_original_workspace() {
         "System prompt on resume should contain context from original workspace"
     );
 }
+
+// --- E2E: global context file appears in system prompt ---
+
+#[tokio::test]
+async fn e2e_global_context_in_system_prompt() {
+    let workspace = create_temp_workspace();
+    let cwd = workspace.path();
+
+    let global_dir = tempfile::tempdir().expect("failed to create global dir");
+    write_file(
+        global_dir.path(),
+        "AGENTS.md",
+        "Global agents instructions from config dir",
+    );
+
+    let mock = MockProvider::new("mock", vec![text_response("done")]);
+    let call_log = mock.call_log_handle();
+
+    let mut harness = CodingHarness::new_with_global_config_dir(
+        Box::new(mock),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        cwd.to_path_buf(),
+        Box::new(opi_coding_agent::harness::CodingAgentHooks),
+        None,
+        vec![],
+        None,
+        opi_coding_agent::policy::ToolSelection::Default,
+        Some(global_dir.path().to_path_buf()),
+    );
+
+    let _ = harness.prompt("test prompt").await;
+
+    let requests = call_log.lock().unwrap();
+    let system = requests[0]
+        .system
+        .as_deref()
+        .expect("system prompt should be set");
+    assert!(
+        system.contains("Global agents instructions from config dir"),
+        "System prompt should contain global AGENTS.md content: {system}"
+    );
+}

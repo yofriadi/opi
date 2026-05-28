@@ -322,20 +322,42 @@ enum ProviderBuildError {
     Provider(opi_ai::provider::ProviderError),
 }
 
+/// Error from lightweight provider builders used by `--list-models`.
+///
+/// `MissingCredentials` — the provider has no API key / credentials
+/// configured; skip silently and try the next provider.
+///
+/// `Config` — the config file contains a broken setting (e.g. invalid
+/// proxy URL); report the error and exit.
+enum ListModelsError {
+    MissingCredentials,
+    Config(String),
+}
+
 impl From<opi_ai::provider::ProviderError> for ProviderBuildError {
     fn from(e: opi_ai::provider::ProviderError) -> Self {
         ProviderBuildError::Provider(e)
     }
 }
 
-/// Build an HTTP client with optional proxy configuration.
-///
-/// When an explicit proxy config is provided, it is used directly.
-/// Otherwise, falls back to environment variable detection.
+impl std::fmt::Display for ProviderBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProviderBuildError::Auth(msg) => write!(f, "{msg}"),
+            ProviderBuildError::Config(msg) => write!(f, "{msg}"),
+            ProviderBuildError::Provider(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 fn build_http_client(
     proxy_config: Option<&opi_coding_agent::config::ProviderProxyConfig>,
-) -> Arc<opi_ai::http::HttpClient> {
-    opi_coding_agent::config::build_http_client(proxy_config)
+) -> Result<Arc<opi_ai::http::HttpClient>, ProviderBuildError> {
+    opi_coding_agent::config::build_http_client(proxy_config).map_err(|e| {
+        ProviderBuildError::Config(format!(
+            "failed to build HTTP client with proxy config: {e}"
+        ))
+    })
 }
 
 fn build_provider(
@@ -354,7 +376,7 @@ fn build_provider(
         "anthropic" => {
             let env_name = &config.providers.anthropic.api_key_env;
             let api_key = require_api_key(env_name)?;
-            let client = build_http_client(config.providers.anthropic.proxy.as_ref());
+            let client = build_http_client(config.providers.anthropic.proxy.as_ref())?;
             let provider = opi_ai::anthropic::AnthropicProvider::with_client(
                 api_key,
                 config.providers.anthropic.base_url.clone(),
@@ -365,7 +387,7 @@ fn build_provider(
         "openai" => {
             let env_name = resolve_env_name(&config.providers.openai.api_key_env, "OPENAI_API_KEY");
             let api_key = require_api_key(&env_name)?;
-            let client = build_http_client(config.providers.openai.proxy.as_ref());
+            let client = build_http_client(config.providers.openai.proxy.as_ref())?;
             let provider = opi_ai::openai_chat::OpenAiChatProvider::with_client(
                 api_key,
                 config.providers.openai.base_url.clone(),
@@ -381,7 +403,7 @@ fn build_provider(
                 "OPENROUTER_API_KEY",
             );
             let api_key = require_api_key(&env_name)?;
-            let client = build_http_client(config.providers.openrouter.proxy.as_ref());
+            let client = build_http_client(config.providers.openrouter.proxy.as_ref())?;
             // If a custom referer is configured, build the provider directly with it.
             let provider = if let Some(ref referer) = config.providers.openrouter.referer {
                 let base_url = config
@@ -423,7 +445,7 @@ fn build_provider(
             let env_name =
                 resolve_env_name(&config.providers.mistral.api_key_env, "MISTRAL_API_KEY");
             let api_key = require_api_key(&env_name)?;
-            let client = build_http_client(config.providers.mistral.proxy.as_ref());
+            let client = build_http_client(config.providers.mistral.proxy.as_ref())?;
             let provider = opi_ai::mistral::mistral_provider(
                 api_key,
                 config.providers.mistral.base_url.clone(),
@@ -437,7 +459,7 @@ fn build_provider(
                 "OPENAI_API_KEY",
             );
             let api_key = require_api_key(&env_name)?;
-            let client = build_http_client(config.providers.openai_responses.proxy.as_ref());
+            let client = build_http_client(config.providers.openai_responses.proxy.as_ref())?;
             let provider = opi_ai::openai_responses::OpenAiResponsesProvider::with_client(
                 api_key,
                 config.providers.openai_responses.base_url.clone(),
@@ -448,7 +470,7 @@ fn build_provider(
         "gemini" => {
             let env_name = resolve_env_name(&config.providers.gemini.api_key_env, "GEMINI_API_KEY");
             let api_key = require_api_key(&env_name)?;
-            let client = build_http_client(config.providers.gemini.proxy.as_ref());
+            let client = build_http_client(config.providers.gemini.proxy.as_ref())?;
             let provider = opi_ai::gemini::GeminiProvider::with_client(
                 api_key,
                 config.providers.gemini.base_url.clone(),
@@ -500,7 +522,7 @@ fn build_provider(
                 )
             })?;
 
-            let client = build_http_client(bedrock_config.proxy.as_ref());
+            let client = build_http_client(bedrock_config.proxy.as_ref())?;
             let provider = opi_ai::bedrock::BedrockProvider::from_credentials(
                 bedrock_creds,
                 bedrock_config.base_url.clone(),
@@ -531,7 +553,7 @@ fn build_provider(
                     azure_config.api_version.clone(),
                 )?
             }
-            .with_client(build_http_client(azure_config.proxy.as_ref()));
+            .with_client(build_http_client(azure_config.proxy.as_ref())?);
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         "vertex" => {
@@ -562,7 +584,7 @@ fn build_provider(
                     vertex_config.base_url.clone(),
                 )
             }
-            .with_client(build_http_client(vertex_config.proxy.as_ref()));
+            .with_client(build_http_client(vertex_config.proxy.as_ref())?);
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         other => Err(ProviderBuildError::Config(format!(
@@ -657,108 +679,40 @@ struct ModelEntry {
 }
 
 /// List available models from all configured providers.
-/// Returns exit code: 0 on success, 1 if no models found.
+/// Returns exit code: 0 on success, 1 if no models found, 2 on config error.
 fn list_models(config: &opi_coding_agent::config::OpiConfig, json_output: bool) -> i32 {
     let mut entries: Vec<ModelEntry> = Vec::new();
 
-    // Anthropic
-    if let Ok(provider) = build_anthropic(config) {
-        for m in provider.models() {
-            entries.push(ModelEntry {
-                provider_id: "anthropic".into(),
-                model_id: m.id.clone(),
-                display_name: m.display_name.clone(),
-            });
-        }
+    macro_rules! try_provider {
+        ($build:expr, $provider_id:literal) => {
+            match $build {
+                Ok(provider) => {
+                    for m in provider.models() {
+                        entries.push(ModelEntry {
+                            provider_id: $provider_id.into(),
+                            model_id: m.id.clone(),
+                            display_name: m.display_name.clone(),
+                        });
+                    }
+                }
+                Err(ListModelsError::MissingCredentials) => {}
+                Err(ListModelsError::Config(msg)) => {
+                    eprintln!("opi: config error: {msg}");
+                    return 2;
+                }
+            }
+        };
     }
 
-    // OpenAI
-    if let Ok(provider) = build_openai(config) {
-        for m in provider.models() {
-            entries.push(ModelEntry {
-                provider_id: "openai".into(),
-                model_id: m.id.clone(),
-                display_name: m.display_name.clone(),
-            });
-        }
-    }
-
-    // OpenRouter
-    if let Ok(provider) = build_openrouter(config) {
-        for m in provider.models() {
-            entries.push(ModelEntry {
-                provider_id: "openrouter".into(),
-                model_id: m.id.clone(),
-                display_name: m.display_name.clone(),
-            });
-        }
-    }
-
-    // Mistral
-    if let Ok(provider) = build_mistral(config) {
-        for m in provider.models() {
-            entries.push(ModelEntry {
-                provider_id: "mistral".into(),
-                model_id: m.id.clone(),
-                display_name: m.display_name.clone(),
-            });
-        }
-    }
-
-    // OpenAI Responses
-    if let Ok(provider) = build_openai_responses(config) {
-        for m in provider.models() {
-            entries.push(ModelEntry {
-                provider_id: "openai-responses".into(),
-                model_id: m.id.clone(),
-                display_name: m.display_name.clone(),
-            });
-        }
-    }
-
-    // Gemini
-    if let Ok(provider) = build_gemini(config) {
-        for m in provider.models() {
-            entries.push(ModelEntry {
-                provider_id: "gemini".into(),
-                model_id: m.id.clone(),
-                display_name: m.display_name.clone(),
-            });
-        }
-    }
-
-    // Bedrock
-    if let Ok(provider) = build_bedrock(config) {
-        for m in provider.models() {
-            entries.push(ModelEntry {
-                provider_id: "bedrock".into(),
-                model_id: m.id.clone(),
-                display_name: m.display_name.clone(),
-            });
-        }
-    }
-
-    // Azure
-    if let Ok(provider) = build_azure(config) {
-        for m in provider.models() {
-            entries.push(ModelEntry {
-                provider_id: "azure".into(),
-                model_id: m.id.clone(),
-                display_name: m.display_name.clone(),
-            });
-        }
-    }
-
-    // Vertex
-    if let Ok(provider) = build_vertex(config) {
-        for m in provider.models() {
-            entries.push(ModelEntry {
-                provider_id: "vertex".into(),
-                model_id: m.id.clone(),
-                display_name: m.display_name.clone(),
-            });
-        }
-    }
+    try_provider!(build_anthropic(config), "anthropic");
+    try_provider!(build_openai(config), "openai");
+    try_provider!(build_openrouter(config), "openrouter");
+    try_provider!(build_mistral(config), "mistral");
+    try_provider!(build_openai_responses(config), "openai-responses");
+    try_provider!(build_gemini(config), "gemini");
+    try_provider!(build_bedrock(config), "bedrock");
+    try_provider!(build_azure(config), "azure");
+    try_provider!(build_vertex(config), "vertex");
 
     if entries.is_empty() {
         eprintln!("opi: no models available (configure API keys to list models)");
@@ -823,9 +777,11 @@ fn list_models(config: &opi_coding_agent::config::OpiConfig, json_output: bool) 
 
 fn build_anthropic(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<opi_ai::anthropic::AnthropicProvider, ()> {
-    let api_key = std::env::var(&config.providers.anthropic.api_key_env).map_err(|_| ())?;
-    let client = build_http_client(config.providers.anthropic.proxy.as_ref());
+) -> Result<opi_ai::anthropic::AnthropicProvider, ListModelsError> {
+    let api_key = std::env::var(&config.providers.anthropic.api_key_env)
+        .map_err(|_| ListModelsError::MissingCredentials)?;
+    let client = build_http_client(config.providers.anthropic.proxy.as_ref())
+        .map_err(|e| ListModelsError::Config(e.to_string()))?;
     Ok(opi_ai::anthropic::AnthropicProvider::with_client(
         api_key,
         config.providers.anthropic.base_url.clone(),
@@ -835,10 +791,11 @@ fn build_anthropic(
 
 fn build_openai(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ()> {
+) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ListModelsError> {
     let env_name = resolve_env_name(&config.providers.openai.api_key_env, "OPENAI_API_KEY");
-    let api_key = std::env::var(&env_name).map_err(|_| ())?;
-    let client = build_http_client(config.providers.openai.proxy.as_ref());
+    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let client = build_http_client(config.providers.openai.proxy.as_ref())
+        .map_err(|e| ListModelsError::Config(e.to_string()))?;
     Ok(opi_ai::openai_chat::OpenAiChatProvider::with_client(
         api_key,
         config.providers.openai.base_url.clone(),
@@ -850,13 +807,14 @@ fn build_openai(
 
 fn build_openrouter(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ()> {
+) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ListModelsError> {
     let env_name = resolve_env_name(
         &config.providers.openrouter.api_key_env,
         "OPENROUTER_API_KEY",
     );
-    let api_key = std::env::var(&env_name).map_err(|_| ())?;
-    let client = build_http_client(config.providers.openrouter.proxy.as_ref());
+    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let client = build_http_client(config.providers.openrouter.proxy.as_ref())
+        .map_err(|e| ListModelsError::Config(e.to_string()))?;
     if let Some(ref referer) = config.providers.openrouter.referer {
         let base_url = config
             .providers
@@ -894,10 +852,11 @@ fn build_openrouter(
 
 fn build_mistral(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ()> {
+) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ListModelsError> {
     let env_name = resolve_env_name(&config.providers.mistral.api_key_env, "MISTRAL_API_KEY");
-    let api_key = std::env::var(&env_name).map_err(|_| ())?;
-    let client = build_http_client(config.providers.mistral.proxy.as_ref());
+    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let client = build_http_client(config.providers.mistral.proxy.as_ref())
+        .map_err(|e| ListModelsError::Config(e.to_string()))?;
     Ok(
         opi_ai::mistral::mistral_provider(api_key, config.providers.mistral.base_url.clone())
             .with_shared_client(client),
@@ -906,13 +865,14 @@ fn build_mistral(
 
 fn build_openai_responses(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<opi_ai::openai_responses::OpenAiResponsesProvider, ()> {
+) -> Result<opi_ai::openai_responses::OpenAiResponsesProvider, ListModelsError> {
     let env_name = resolve_env_name(
         &config.providers.openai_responses.api_key_env,
         "OPENAI_API_KEY",
     );
-    let api_key = std::env::var(&env_name).map_err(|_| ())?;
-    let client = build_http_client(config.providers.openai_responses.proxy.as_ref());
+    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let client = build_http_client(config.providers.openai_responses.proxy.as_ref())
+        .map_err(|e| ListModelsError::Config(e.to_string()))?;
     Ok(
         opi_ai::openai_responses::OpenAiResponsesProvider::with_client(
             api_key,
@@ -924,10 +884,11 @@ fn build_openai_responses(
 
 fn build_gemini(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<opi_ai::gemini::GeminiProvider, ()> {
+) -> Result<opi_ai::gemini::GeminiProvider, ListModelsError> {
     let env_name = resolve_env_name(&config.providers.gemini.api_key_env, "GEMINI_API_KEY");
-    let api_key = std::env::var(&env_name).map_err(|_| ())?;
-    let client = build_http_client(config.providers.gemini.proxy.as_ref());
+    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let client = build_http_client(config.providers.gemini.proxy.as_ref())
+        .map_err(|e| ListModelsError::Config(e.to_string()))?;
     Ok(opi_ai::gemini::GeminiProvider::with_client(
         api_key,
         config.providers.gemini.base_url.clone(),
@@ -937,7 +898,7 @@ fn build_gemini(
 
 fn build_bedrock(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<opi_ai::bedrock::BedrockProvider, ()> {
+) -> Result<opi_ai::bedrock::BedrockProvider, ListModelsError> {
     let bedrock_config = &config.providers.bedrock;
     let (akid, sak, token, env_region) = resolve_bedrock_env_credentials();
     let env_profile = std::env::var("AWS_PROFILE").ok();
@@ -966,8 +927,9 @@ fn build_bedrock(
         config_file_path: config_file.as_deref(),
     };
     let resolved = opi_ai::bedrock::credentials::resolve_credentials(&input);
-    let (bedrock_creds, _) = resolved.ok_or(())?;
-    let client = build_http_client(bedrock_config.proxy.as_ref());
+    let (bedrock_creds, _) = resolved.ok_or(ListModelsError::MissingCredentials)?;
+    let client = build_http_client(bedrock_config.proxy.as_ref())
+        .map_err(|e| ListModelsError::Config(e.to_string()))?;
     Ok(opi_ai::bedrock::BedrockProvider::from_credentials(
         bedrock_creds,
         bedrock_config.base_url.clone(),
@@ -977,13 +939,14 @@ fn build_bedrock(
 
 fn build_azure(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<opi_ai::azure_openai::AzureOpenAIProvider, ()> {
+) -> Result<opi_ai::azure_openai::AzureOpenAIProvider, ListModelsError> {
     let azure_config = &config.providers.azure;
     let env_name = resolve_env_name(&azure_config.api_key_env, "AZURE_OPENAI_API_KEY");
-    let api_key = std::env::var(&env_name).map_err(|_| ())?;
+    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
     if azure_config.deployments.is_empty() {
-        // No deployments configured -- can't list models
-        return Err(());
+        return Err(ListModelsError::Config(
+            "azure provider has no deployments configured".into(),
+        ));
     }
     let provider = opi_ai::azure_openai::AzureOpenAIProvider::from_config(
         api_key,
@@ -991,18 +954,27 @@ fn build_azure(
         azure_config.deployments.clone(),
         azure_config.api_version.clone(),
     )
-    .map_err(|_| ())?;
-    Ok(provider.with_client(build_http_client(azure_config.proxy.as_ref())))
+    .map_err(|e| ListModelsError::Config(e.to_string()))?;
+    Ok(provider.with_client(
+        build_http_client(azure_config.proxy.as_ref())
+            .map_err(|e| ListModelsError::Config(e.to_string()))?,
+    ))
 }
 
 fn build_vertex(
     config: &opi_coding_agent::config::OpiConfig,
-) -> Result<opi_ai::vertex::VertexProvider, ()> {
+) -> Result<opi_ai::vertex::VertexProvider, ListModelsError> {
     let vertex_config = &config.providers.vertex;
     let env_name = resolve_env_name(&vertex_config.access_token_env, "VERTEX_ACCESS_TOKEN");
-    let access_token = std::env::var(&env_name).map_err(|_| ())?;
-    let project = vertex_config.project.as_deref().ok_or(())?;
-    let location = vertex_config.location.as_deref().ok_or(())?;
+    let access_token = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let project = vertex_config
+        .project
+        .as_deref()
+        .ok_or_else(|| ListModelsError::Config("vertex provider requires project".into()))?;
+    let location = vertex_config
+        .location
+        .as_deref()
+        .ok_or_else(|| ListModelsError::Config("vertex provider requires location".into()))?;
     let provider = if vertex_config.models.is_empty() {
         opi_ai::vertex::VertexProvider::new(
             access_token,
@@ -1019,5 +991,8 @@ fn build_vertex(
             vertex_config.base_url.clone(),
         )
     };
-    Ok(provider.with_client(build_http_client(vertex_config.proxy.as_ref())))
+    Ok(provider.with_client(
+        build_http_client(vertex_config.proxy.as_ref())
+            .map_err(|e| ListModelsError::Config(e.to_string()))?,
+    ))
 }

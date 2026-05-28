@@ -32,7 +32,7 @@ struct SseFrame {
     data: String,
 }
 
-/// Parsed result for a single SSE frame — either a valid event or a parse error.
+/// Parsed result for a single SSE frame  - either a valid event or a parse error.
 pub enum ParsedEvent {
     Valid(AnthropicEvent),
     Malformed {
@@ -321,7 +321,7 @@ impl AnthropicEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Stateful event mapper: AnthropicEvent → AssistantStreamEvent
+// Stateful event mapper: AnthropicEvent ->AssistantStreamEvent
 // ---------------------------------------------------------------------------
 
 /// Tracks content block state and accumulates the final message.
@@ -606,6 +606,7 @@ impl AnthropicProvider {
                 display_name: "Claude Sonnet 4.5".into(),
                 context_window: 200000,
                 max_output_tokens: 8192,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: true,
             },
@@ -614,6 +615,7 @@ impl AnthropicProvider {
                 display_name: "Claude Opus 4".into(),
                 context_window: 200000,
                 max_output_tokens: 8192,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: true,
             },
@@ -622,6 +624,7 @@ impl AnthropicProvider {
                 display_name: "Claude Haiku 4.5".into(),
                 context_window: 200000,
                 max_output_tokens: 8192,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: true,
             },
@@ -790,7 +793,7 @@ impl AnthropicProvider {
             }
         }
 
-        // Stream ended without a terminal event — surface as provider protocol error
+        // Stream ended without a terminal event  - surface as provider protocol error
         if !mapper.saw_done {
             let err = ProviderError::StreamError(
                 "stream ended without a terminal event (message_stop or error)".into(),

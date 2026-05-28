@@ -5,7 +5,7 @@ use std::pin::Pin;
 use futures_core::Stream;
 use tokio_util::sync::CancellationToken;
 
-use crate::message::{Message, ToolDef};
+use crate::message::{InputContent, Message, ToolDef};
 use crate::stream::AssistantStreamEvent;
 
 /// Provider trait — each concrete provider (Anthropic, OpenAI, etc.) implements this.
@@ -40,6 +40,19 @@ pub struct Request {
     pub cancel: CancellationToken,
 }
 
+impl Request {
+    /// Returns true when any user message contains image input.
+    pub fn contains_image_input(&self) -> bool {
+        self.messages.iter().any(|message| match message {
+            Message::User(user) => user
+                .content
+                .iter()
+                .any(|content| matches!(content, InputContent::Image { .. })),
+            _ => false,
+        })
+    }
+}
+
 /// Thinking/reasoning configuration for extended thinking models.
 #[derive(Debug, Clone, Default)]
 pub struct ThinkingConfig {
@@ -54,8 +67,49 @@ pub struct ModelInfo {
     pub display_name: String,
     pub context_window: u64,
     pub max_output_tokens: u64,
+    pub supports_images: bool,
     pub supports_streaming: bool,
     pub supports_thinking: bool,
+}
+
+/// Validate request content against model capabilities known by the provider.
+///
+/// Unknown model IDs are left to the provider implementation so configured
+/// custom deployments can still work. Known text-only models fail locally
+/// before any network call is attempted.
+pub fn validate_request_capabilities(
+    provider: &dyn Provider,
+    request: &Request,
+) -> Result<(), ProviderError> {
+    if !request.contains_image_input() {
+        return Ok(());
+    }
+
+    let model_id = request
+        .model
+        .split_once(':')
+        .map(|(provider_id, model_id)| {
+            if provider_id == provider.id() {
+                model_id
+            } else {
+                request.model.as_str()
+            }
+        })
+        .unwrap_or(request.model.as_str());
+
+    let Some(model) = provider.models().iter().find(|m| m.id == model_id) else {
+        return Ok(());
+    };
+
+    if model.supports_images {
+        return Ok(());
+    }
+
+    Err(ProviderError::RequestFailed(format!(
+        "model '{}' for provider '{}' does not support image input",
+        model.id,
+        provider.id()
+    )))
 }
 
 /// Errors that can occur during provider streaming.

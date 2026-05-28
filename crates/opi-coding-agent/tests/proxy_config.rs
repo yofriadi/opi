@@ -303,3 +303,84 @@ no_proxy = "localhost"
         "proxy section without url should be ignored"
     );
 }
+
+// ---------------------------------------------------------------------------
+// build_http_client tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn build_http_client_with_explicit_proxy() {
+    use opi_coding_agent::config::{ProviderProxyConfig, build_http_client};
+    let proxy = ProviderProxyConfig {
+        url: "http://proxy.example.com:8080".into(),
+        no_proxy: Some("localhost".into()),
+    };
+    let client = build_http_client(Some(&proxy)).expect("valid proxy should succeed");
+    let config = client.proxy_config();
+    assert_eq!(
+        config.url.as_deref(),
+        Some("http://proxy.example.com:8080"),
+        "proxy URL should be set"
+    );
+    assert_eq!(
+        config.no_proxy.as_deref(),
+        Some("localhost"),
+        "no_proxy should be set"
+    );
+}
+
+#[test]
+fn build_http_client_with_no_proxy_falls_back_to_env() {
+    use opi_coding_agent::config::build_http_client;
+    // Without env proxy vars set, this should still produce a valid client.
+    let client = build_http_client(None).expect("no-proxy should succeed");
+    // Just verify it does not panic and returns a usable client.
+    let _ = client.proxy_config();
+}
+
+#[test]
+fn build_http_client_with_proxy_and_no_proxy_list() {
+    use opi_coding_agent::config::{ProviderProxyConfig, build_http_client};
+    let proxy = ProviderProxyConfig {
+        url: "http://corporate-proxy.internal:3128".into(),
+        no_proxy: Some("localhost,*.internal,10.0.0.0/8".into()),
+    };
+    let client = build_http_client(Some(&proxy)).expect("valid proxy should succeed");
+    let config = client.proxy_config();
+    assert!(config.url.is_some());
+    assert_eq!(
+        config.no_proxy.as_deref(),
+        Some("localhost,*.internal,10.0.0.0/8")
+    );
+}
+
+#[test]
+fn build_http_client_with_proxy_no_no_proxy() {
+    use opi_coding_agent::config::{ProviderProxyConfig, build_http_client};
+    let proxy = ProviderProxyConfig {
+        url: "http://proxy.example.com:9999".into(),
+        no_proxy: None,
+    };
+    let client = build_http_client(Some(&proxy)).expect("valid proxy should succeed");
+    let config = client.proxy_config();
+    assert_eq!(config.url.as_deref(), Some("http://proxy.example.com:9999"));
+    assert!(config.no_proxy.is_none());
+}
+
+#[test]
+fn build_http_client_rejects_invalid_proxy_url() {
+    use opi_coding_agent::config::{ProviderProxyConfig, build_http_client};
+    let proxy = ProviderProxyConfig {
+        url: "not a proxy url".into(),
+        no_proxy: None,
+    };
+    let result = build_http_client(Some(&proxy));
+    assert!(result.is_err(), "invalid proxy URL should return Err");
+}
+
+#[test]
+fn build_http_client_without_proxy_succeeds() {
+    use opi_coding_agent::config::build_http_client;
+    let client = build_http_client(None).expect("no proxy should succeed");
+    assert!(client.proxy_config().url.is_none());
+}

@@ -384,6 +384,18 @@ pub struct ToolResultMessage {
 
 Stop reasons SHOULD stay close to pi: `stop`, `length`, `tool_use`, `error`, `aborted`.
 
+Image content is structural at the opi protocol boundary. `InputContent::Image`
+is forwarded only to models whose metadata advertises image support; known
+text-only models MUST fail before the provider network call. CLI image
+attachments MUST enforce a configured byte limit before reading the whole file.
+
+`OutputContent::Image` round-trips through tool results, session JSONL, and JSON
+mode as structured data. Provider request bodies MAY coerce image tool results
+to a textual placeholder such as `[image: image/png]` because current provider
+tool-result roles do not consistently accept binary image payloads. That
+coercion is a provider-protocol limitation and MUST NOT be described as a loss
+in session storage or JSON mode.
+
 ### 7.2 Agent Messages
 
 ```rust
@@ -529,7 +541,18 @@ Credential precedence:
 1. explicit CLI/config override;
 2. provider-specific environment variable;
 3. local auth storage when implemented;
-4. ambient cloud credential chain.
+4. ambient cloud credential chain where implemented.
+
+Bedrock credential resolution is local/offline: explicit config, AWS
+environment variables, `AWS_PROFILE`, `AWS_SHARED_CREDENTIALS_FILE`,
+`AWS_CONFIG_FILE`, shared credentials/config profiles, region config, and
+`credential_process`. It does not perform IMDS, ECS task metadata, SSO, or
+web-identity network flows.
+
+Vertex credential resolution is intentionally scoped to a static OAuth access
+token supplied through the configured environment variable, plus project and
+location config. Service-account JSON parsing and Application Default
+Credentials token minting are outside the current Phase 3 contract.
 
 Secrets MUST NOT be logged, persisted in sessions, or included in diagnostics.
 

@@ -1652,6 +1652,7 @@ dependencies = [
  "opi-tui",
  "ratatui",
  "regex",
+ "reqwest",
  "schemars",
  "serde",
  "serde_json",

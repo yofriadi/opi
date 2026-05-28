@@ -346,7 +346,7 @@ impl ResponsesMapper {
                         let id = item.id.unwrap_or_default();
                         let call_id = item.call_id.unwrap_or_default();
                         let name = item.name.unwrap_or_default();
-                        // Use call_id as the ToolCall.id — it's what function_call_output needs
+                        // Use call_id as the ToolCall.id  - it's what function_call_output needs
                         let effective_id = if call_id.is_empty() {
                             id.clone()
                         } else {
@@ -528,7 +528,7 @@ impl ResponsesMapper {
                         tool_call.arguments = tc_state.arguments.clone();
                     }
                     // Only emit ToolCallEnd if OutputItemDone hasn't already done it
-                    // (this is a safety net — normally OutputItemDone handles it)
+                    // (this is a safety net  - normally OutputItemDone handles it)
                 }
 
                 if let Some(m) = model {
@@ -610,6 +610,7 @@ impl OpenAiResponsesProvider {
                 display_name: "GPT-4o".into(),
                 context_window: 128000,
                 max_output_tokens: 16384,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },
@@ -618,6 +619,7 @@ impl OpenAiResponsesProvider {
                 display_name: "GPT-4o Mini".into(),
                 context_window: 128000,
                 max_output_tokens: 16384,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },
@@ -626,6 +628,7 @@ impl OpenAiResponsesProvider {
                 display_name: "o3".into(),
                 context_window: 200000,
                 max_output_tokens: 100000,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },
@@ -634,6 +637,7 @@ impl OpenAiResponsesProvider {
                 display_name: "o4-mini".into(),
                 context_window: 200000,
                 max_output_tokens: 100000,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },

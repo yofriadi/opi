@@ -9,7 +9,10 @@ use opi_agent::compaction::{
 };
 use opi_agent::message::AgentMessage;
 use opi_agent::session_event::CompactionReason;
-use opi_ai::message::{AssistantContent, AssistantMessage, InputContent, Message, UserMessage};
+use opi_ai::message::{
+    AssistantContent, AssistantMessage, ImageSource, InputContent, MediaType, Message,
+    OutputContent, ToolResultMessage, UserMessage,
+};
 use opi_ai::stream::{StopReason, Usage};
 
 // ---------------------------------------------------------------------------
@@ -391,4 +394,86 @@ fn default_config_has_reasonable_values() {
     let config = CompactionConfig::default();
     assert!(config.enabled, "compaction should be enabled by default");
     assert!(config.threshold_tokens > 0, "threshold should be positive");
+}
+
+// ---------------------------------------------------------------------------
+// Image content in compaction summary
+// ---------------------------------------------------------------------------
+
+fn user_with_image(id: &str, text: &str) -> Entry {
+    Entry {
+        id: id.into(),
+        message: AgentMessage::Llm(Message::User(UserMessage {
+            content: vec![
+                InputContent::Text { text: text.into() },
+                InputContent::Image {
+                    source: ImageSource::Base64 {
+                        data: "iVBORw0KGgo=".into(),
+                    },
+                    media_type: MediaType::Png,
+                },
+            ],
+            timestamp_ms: 0,
+        })),
+    }
+}
+
+fn tool_result_with_image(id: &str, text: &str) -> Entry {
+    Entry {
+        id: id.into(),
+        message: AgentMessage::Llm(Message::ToolResult(ToolResultMessage {
+            tool_call_id: "tc_1".into(),
+            tool_name: "screenshot".into(),
+            content: vec![
+                OutputContent::Text { text: text.into() },
+                OutputContent::Image {
+                    source: ImageSource::Bytes {
+                        data: vec![0x89, 0x50, 0x4e, 0x47],
+                    },
+                    media_type: MediaType::Png,
+                },
+            ],
+            details: None,
+            is_error: false,
+            timestamp_ms: 0,
+        })),
+    }
+}
+
+#[test]
+fn compaction_summary_includes_image_placeholder_for_user_images() {
+    let engine = CompactionEngine::new(CompactionConfig::default());
+    let entries = vec![
+        user_with_image("e1", "Here is a screenshot"),
+        assistant_text("e2", "I see the screenshot"),
+    ];
+
+    let result = engine
+        .compact(&entries, CompactionReason::Manual, &DefaultCompactionHooks)
+        .unwrap();
+
+    let summary = &result.summary_text;
+    assert!(
+        summary.contains("[image: image/png]"),
+        "summary should contain image placeholder, got: {summary}"
+    );
+}
+
+#[test]
+fn compaction_summary_includes_image_placeholder_for_tool_results() {
+    let engine = CompactionEngine::new(CompactionConfig::default());
+    let entries = vec![
+        tool_result_with_image("e1", "Tool captured a screenshot"),
+        assistant_text("e2", "I analyzed the screenshot"),
+    ];
+
+    let result = engine
+        .compact(&entries, CompactionReason::Manual, &DefaultCompactionHooks)
+        .unwrap();
+
+    let summary = &result.summary_text;
+    assert!(
+        summary.contains("[image: image/png]"),
+        "summary should contain image placeholder for tool result, got: {summary}"
+    );
 }

@@ -118,6 +118,7 @@ struct ScoredItem {
 /// Owns the items, tracks the current filter text, the filtered/sorted result
 /// set, the selected index within the filtered set, and the scroll offset for
 /// rendering.
+#[derive(Clone)]
 pub struct SelectListState {
     items: Vec<SelectItem>,
     filter: String,

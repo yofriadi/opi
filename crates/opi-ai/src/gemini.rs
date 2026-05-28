@@ -226,7 +226,7 @@ impl ParsedEvent {
             }
         }
 
-        // No useful data — return empty (silently skip)
+        // No useful data  - return empty (silently skip)
         Vec::new()
     }
 }
@@ -453,6 +453,7 @@ impl GeminiProvider {
                 display_name: "Gemini 2.5 Flash".into(),
                 context_window: 1_000_000,
                 max_output_tokens: 65536,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },
@@ -461,6 +462,7 @@ impl GeminiProvider {
                 display_name: "Gemini 2.5 Pro".into(),
                 context_window: 1_000_000,
                 max_output_tokens: 65536,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },
@@ -469,6 +471,7 @@ impl GeminiProvider {
                 display_name: "Gemini 2.0 Flash".into(),
                 context_window: 1_000_000,
                 max_output_tokens: 8192,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             },

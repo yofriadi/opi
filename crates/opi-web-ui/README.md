@@ -15,7 +15,7 @@ Current source contents:
 - `lib.rs`: module declaration and `ChatWidget` re-export.
 - `components.rs`: empty `ChatWidget` type with `new()` and `Default`.
 
-There are no real widgets, rendering adapters, HTTP integrations, browser bindings, or tests yet. The crate depends on `opi-ai`, `serde`, `serde_json`, and `thiserror`, but those dependencies are not meaningfully exercised by the placeholder implementation.
+There are no real widgets, rendering adapters, HTTP integrations, browser bindings, document preview components, or tests yet. The crate depends on `opi-ai`, `serde`, `serde_json`, and `thiserror`, but the placeholder implementation does not meaningfully exercise those dependencies.
 
 ## Public API
 
@@ -26,9 +26,11 @@ let widget = ChatWidget::new();
 let default_widget = ChatWidget::default();
 ```
 
-## Roadmap Boundary
+## Boundary
 
-Expected future work belongs here only when web-facing reusable components are implemented. The terminal coding agent lives in `opi-coding-agent`; provider and message types live in `opi-ai`.
+Future work belongs here only when it implements reusable web-facing UI components. The terminal coding agent lives in `opi-coding-agent`; provider and message types live in `opi-ai`; agent runtime primitives live in `opi-agent`.
+
+Do not describe this crate as an implemented web UI until real components exist.
 
 ## License
 

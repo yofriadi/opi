@@ -21,6 +21,7 @@ impl StubProvider {
                 display_name: format!("{id} Model 1"),
                 context_window: 128000,
                 max_output_tokens: 4096,
+                supports_images: true,
                 supports_streaming: true,
                 supports_thinking: false,
             }],
@@ -77,7 +78,7 @@ fn duplicate_registration_replaces() {
 }
 
 // ---------------------------------------------------------------------------
-// Resolve: provider:model → (Provider, ModelInfo)
+// Resolve: provider:model ->(Provider, ModelInfo)
 // ---------------------------------------------------------------------------
 
 #[test]

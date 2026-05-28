@@ -3,7 +3,7 @@
 [![CI](https://github.com/OdradekAI/opi/actions/workflows/ci.yml/badge.svg)](https://github.com/OdradekAI/opi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> AI agent toolkit in Rust, reimplementing ideas from [earendil-works/pi](https://github.com/earendil-works/pi) as a terminal-first coding agent and reusable agent crates.
+> Rust AI agent toolkit that reimplements ideas from [earendil-works/pi](https://github.com/earendil-works/pi) as a terminal-first coding agent and reusable agent crates.
 
 [Simplified Chinese](README.zh.md) | [Changelog](CHANGELOG.md) | [Spec](docs/opi-spec.md)
 
@@ -11,34 +11,28 @@
 
 Current workspace version: `0.3.0`.
 
-`opi` now has a working coding-agent binary, six built-in tools, a ratatui TUI, non-interactive stdout and NDJSON modes, TOML configuration, multi-provider streaming, session persistence, context compaction, retry/backoff support, configurable keybindings/themes, usage accumulation, and best-effort cost tracking.
+`opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, eight built-in tools, image attachments, model and session pickers, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, token usage accumulation, and best-effort cost summaries.
 
-The web UI crate still exists as a reserved placeholder and is not published to crates.io.
+`opi-web-ui` remains a placeholder crate with `publish = false`; it does not contain a real web UI yet.
 
 ## Workspace
 
-Cargo workspace with lockstep versioning: every crate inherits `version`, `edition`, `license`, `repository`, and `authors` from `[workspace.package]`.
+Cargo workspace with lockstep versioning. Every crate inherits `version`, `edition`, `license`, `repository`, and `authors` from `[workspace.package]`.
 
 | Crate | Published | Description |
 |-------|-----------|-------------|
-| [`opi-ai`](crates/opi-ai) | yes | Multi-provider LLM API, streaming events, registry, retry, usage, cost helpers |
-| [`opi-agent`](crates/opi-agent) | yes | Agent loop, tool execution, hooks, events, sessions, compaction, transport trait |
-| [`opi-tui`](crates/opi-tui) | yes | Ratatui widgets, diff view, themes, keybindings |
+| [`opi-ai`](crates/opi-ai) | yes | Provider-neutral LLM API, streaming events, image content, registry, retry, HTTP pooling/proxy, usage and cost helpers |
+| [`opi-agent`](crates/opi-agent) | yes | Agent loop, tool execution, hooks, events, queues, sessions, compaction, transport abstraction |
+| [`opi-tui`](crates/opi-tui) | yes | Ratatui widgets, transcript rendering, diff view, select list, terminal images, themes, keybindings |
 | [`opi-coding-agent`](crates/opi-coding-agent) | yes | The `opi` binary and embeddable coding harness |
 | [`opi-web-ui`](crates/opi-web-ui) | no (`publish = false`) | Reserved web chat component crate |
 
-Internal dependency flow:
+Internal dependency shape:
 
 ```text
-opi-ai
-  -> opi-agent
-  -> opi-web-ui
-
-opi-tui
-
-opi-ai + opi-agent + opi-tui
-  -> opi-coding-agent
-     -> opi binary
+opi-ai -> opi-agent
+opi-ai -> opi-web-ui
+opi-ai + opi-agent + opi-tui -> opi-coding-agent -> opi binary
 ```
 
 ## Install
@@ -50,15 +44,16 @@ cargo install opi-coding-agent
 opi --version
 ```
 
-Pre-built binaries for Linux, macOS, and Windows (x64 and arm64) are attached to each [GitHub Release](https://github.com/OdradekAI/opi/releases).
+Pre-built binaries for Linux, macOS, and Windows on x64 and arm64 are attached to [GitHub Releases](https://github.com/OdradekAI/opi/releases).
 
 ## Quick Start
 
-Set an API key for the provider you want to use:
+Set credentials for the provider you want to use:
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
 # or OPENAI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, GEMINI_API_KEY
+# or AWS credentials for Bedrock, AZURE_OPENAI_API_KEY, VERTEX_ACCESS_TOKEN
 ```
 
 Run the interactive TUI:
@@ -67,16 +62,23 @@ Run the interactive TUI:
 opi
 ```
 
-Run a single prompt and print assistant text to stdout:
+Run one prompt and print assistant text to stdout:
 
 ```sh
 opi "List the Rust crates in this workspace."
 ```
 
-Emit newline-delimited JSON events for automation:
+Emit NDJSON events for automation:
 
 ```sh
 opi --json "Summarize the latest session state."
+```
+
+Attach images to the initial prompt:
+
+```sh
+opi --image screenshot.png "Review this UI."
+opi --image before.png --image after.png "Compare these images."
 ```
 
 Pick a model with `provider:model` syntax:
@@ -84,24 +86,32 @@ Pick a model with `provider:model` syntax:
 ```sh
 opi -m anthropic:claude-sonnet-4-5-20250514 "Explain crates/opi-agent/src/lib.rs"
 opi -m openai:gpt-4o "Review the public API shape."
-opi -m openai-responses:gpt-4o-mini "Find small documentation gaps."
+opi -m openai-responses:gpt-4o-mini "Find documentation gaps."
 opi -m openrouter:openai/gpt-4o-mini "List TODO comments."
 opi -m mistral:codestral-latest "Explain the tool modules."
 opi -m gemini:gemini-2.5-flash "Summarize the README files."
+opi -m bedrock:anthropic.claude-sonnet-4-20250514-v2:0 "Summarize this repo."
+opi -m azure:my-deployment "Use my Azure OpenAI deployment."
+opi -m vertex:gemini-2.5-flash "Use Vertex AI."
 ```
 
 ## Supported Providers
 
 Provider support is implemented in `opi-ai` and wired into `opi-coding-agent`.
 
-| Provider spec prefix | API key env default | Notes |
-|----------------------|---------------------|-------|
-| `anthropic:` | `ANTHROPIC_API_KEY` | Anthropic Messages API with thinking support |
-| `openai:` | `OPENAI_API_KEY` | OpenAI Chat Completions compatible streaming |
-| `openai-responses:` | `OPENAI_API_KEY` | OpenAI Responses API streaming |
-| `openrouter:` | `OPENROUTER_API_KEY` | OpenAI-compatible OpenRouter profile |
-| `mistral:` | `MISTRAL_API_KEY` | OpenAI-compatible Mistral profile |
-| `gemini:` | `GEMINI_API_KEY` | Gemini `streamGenerateContent` SSE |
+| Model prefix | Backend | Default credentials |
+|--------------|---------|---------------------|
+| `anthropic:` | Anthropic Messages SSE | `ANTHROPIC_API_KEY` |
+| `openai:` | OpenAI Chat Completions SSE | `OPENAI_API_KEY` |
+| `openai-responses:` | OpenAI Responses SSE | `OPENAI_API_KEY` |
+| `openrouter:` | OpenAI-compatible OpenRouter profile | `OPENROUTER_API_KEY` |
+| `mistral:` | OpenAI-compatible Mistral profile | `MISTRAL_API_KEY` |
+| `gemini:` | Gemini `streamGenerateContent` SSE | `GEMINI_API_KEY` |
+| `bedrock:` | AWS Bedrock Converse streaming with SigV4 | AWS env vars or shared AWS config/credentials |
+| `azure:` | Azure OpenAI Chat Completions deployment | `AZURE_OPENAI_API_KEY` plus config endpoint |
+| `vertex:` | Google Vertex AI Gemini streaming | `VERTEX_ACCESS_TOKEN` plus config project/location |
+
+Use `opi --list-models` to list models advertised by configured providers. Add `--json` for machine-readable output.
 
 ## Built-in Tools
 
@@ -110,17 +120,27 @@ Tools are implemented by `opi-coding-agent` and exposed through the `opi-agent::
 | Tool | Args | Execution | Mutating |
 |------|------|-----------|----------|
 | `read` | `path`, optional `offset`, `limit` | parallel | no |
+| `ls` | `path`, optional `max_entries`, `max_depth` | parallel | no |
 | `glob` | `pattern` | parallel | no |
+| `find` | `pattern`, optional `path` | parallel | no |
 | `grep` | `pattern` | parallel | no |
 | `write` | `path`, `content` | sequential | yes |
 | `edit` | `path`, `old_string`, `new_string` | sequential | yes |
 | `bash` | `command`, optional `timeout_secs` | sequential | yes |
 
-All paths are constrained to the harness workspace root. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
+All file paths are constrained to the harness workspace root. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
+
+Tool selection flags:
+
+```sh
+opi --tools read,grep "Inspect the code without edits."
+opi --no-tools "Answer using only conversation context."
+opi --no-builtin-tools "Run without built-in tools."
+```
 
 ## Configuration
 
-Config resolution merges user config, project config, and explicit config files. Model precedence is:
+Config layers merge user config, project config, and explicit config files. Model precedence is:
 
 1. `--model`
 2. `OPI_MODEL` when `--config` was not passed
@@ -133,9 +153,10 @@ Example:
 
 ```toml
 [defaults]
-model = "anthropic:claude-sonnet-4-5-20250514"
+model = "anthropic:claude-sonnet-4"
 max_iterations = 50
 tool_timeout_ms = 30000
+max_image_bytes = 20971520
 theme = "default"
 allow_mutating_tools = false
 
@@ -163,20 +184,63 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
+# base_url = "https://api.openai.com"
 
 [providers.openai_responses]
 api_key_env = "OPENAI_API_KEY"
+# base_url = "https://api.openai.com"
 
 [providers.openrouter]
 api_key_env = "OPENROUTER_API_KEY"
+# base_url = "https://openrouter.ai/api"
 # referer = "https://example.com"
 
 [providers.mistral]
 api_key_env = "MISTRAL_API_KEY"
+# base_url = "https://api.mistral.ai"
 
 [providers.gemini]
 api_key_env = "GEMINI_API_KEY"
+# base_url = "https://generativelanguage.googleapis.com"
+
+[providers.bedrock]
+region = "us-east-1"
+# profile = "default"
+# base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
+# secret_access_key_env = "AWS_SECRET_ACCESS_KEY"
+# session_token_env = "AWS_SESSION_TOKEN"
+
+[providers.azure]
+api_key_env = "AZURE_OPENAI_API_KEY"
+endpoint = "https://my-resource.openai.azure.com"
+api_version = "2024-06-01"
+deployments = ["my-deployment"]
+
+[providers.vertex]
+access_token_env = "VERTEX_ACCESS_TOKEN"
+project = "my-gcp-project"
+location = "us-central1"
+models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+
+[providers.openai.proxy]
+url = "http://proxy.example.com:8080"
+no_proxy = "localhost,127.0.0.1"
 ```
+
+When a provider proxy is not configured, `opi` falls back to standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables.
+
+## Interactive Mode
+
+With no prompt args, `opi` starts the ratatui TUI. Useful commands inside the input box:
+
+| Command | Effect |
+|---------|--------|
+| `/model` | Open the model picker for the active provider |
+| `/session` | Open the session picker and resume a stored session |
+| `/image <path>` | Queue an image for the next prompt |
+| `exit` or `quit` | Exit the TUI |
+
+Default keybindings are `enter` to submit, `escape` to abort/exit, and `alt+enter` for a new line. They can be changed in `[keybindings]`.
 
 ## Sessions
 
@@ -195,7 +259,11 @@ opi --resume <session-id> "Continue from this session."
 opi --delete-session <session-id>
 ```
 
-Session files store a header plus message, compaction, and leaf entries. Resume reconstructs the active branch and honors compaction summaries. `--json` emits session events, retry events, compaction events, and a final session summary with token totals and optional cost totals.
+Session files store a header plus message, compaction, and leaf entries. Resume reconstructs the active branch and preserves compaction summaries. `--json` emits session events, retry events, compaction events, thinking-level events, and a final session summary with token totals and optional cost totals.
+
+## Context Files
+
+The coding harness discovers `AGENTS.md` and `CLAUDE.md` from the workspace directory upward to the git root, then from the user config directory. Files over 128 KiB and empty files are ignored. `OPI.md` is intentionally not loaded.
 
 ## Build From Source
 
@@ -219,9 +287,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 `opi` chooses a mode at startup:
 
-- Non-interactive: positional prompt, `--non-interactive`, or `--json`; builds a provider and runs `NonInteractiveRunner`.
-- Interactive: default with no prompt; builds `CodingHarness` with interactive hooks and launches the ratatui TUI.
-- Session commands: `--list-sessions`, `--resume`, and `--delete-session` are handled before provider construction.
+- Session/model/completion commands are handled early and exit.
+- Non-interactive mode is selected by prompt args, `--non-interactive`, or `--json`; it builds a provider and runs `NonInteractiveRunner`.
+- Interactive mode is the default with no prompt args; it builds a `CodingHarness` with interactive hooks and launches the ratatui TUI.
 
 Both interactive and non-interactive modes use the same agent loop:
 
@@ -252,7 +320,7 @@ Key abstractions:
 
 ## Still Not Implemented
 
-- Sub-agents and skills.
+- Sub-agents and skills as product features.
 - Prompt template registry.
 - MCP tool server integration through `Transport`.
 - OAuth or subscription login flows.
@@ -272,7 +340,7 @@ Releases publish to GitHub Releases and crates.io with the `opi-release` skill (
 - Use Conventional Commits.
 - Keep crate metadata inherited from `[workspace.package]`.
 - Run `cargo fmt --check --all`, `cargo clippy --workspace --all-targets -- -D warnings`, tests, and docs as appropriate.
-- See `AGENTS.md` for the repository working rules used by humans and agents.
+- See `AGENTS.md` for repository working rules used by humans and agents.
 
 Bug reports and PRs are welcome at <https://github.com/OdradekAI/opi/issues>.
 

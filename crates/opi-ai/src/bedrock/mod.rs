@@ -63,6 +63,12 @@ impl BedrockProvider {
         )
     }
 
+    /// Replace the HTTP client with a shared one (for proxy configuration
+    /// and connection pooling).
+    pub fn with_client(self, client: Arc<HttpClient>) -> Self {
+        Self { client, ..self }
+    }
+
     /// Access the shared HTTP client (for testing client reuse).
     pub fn http_client(&self) -> &Arc<HttpClient> {
         &self.client
@@ -83,18 +89,6 @@ impl BedrockProvider {
                 "unsupported Bedrock model family '{family}' in model ID '{model_id}'; supported families: {}",
                 SUPPORTED_FAMILIES.join(", ")
             )))
-        }
-    }
-
-    /// Map an HTTP status code to a ProviderError.
-    pub fn map_bedrock_status(&self, status: u16, body: &str) -> ProviderError {
-        match status {
-            401 | 403 => ProviderError::AuthFailed(format!("Bedrock access denied: {body}")),
-            429 => ProviderError::RateLimited {
-                retry_after_ms: None,
-            },
-            408 | 504 => ProviderError::Timeout,
-            code => ProviderError::RequestFailed(format!("Bedrock HTTP {code}: {body}")),
         }
     }
 
@@ -212,6 +206,24 @@ impl Provider for BedrockProvider {
             return Box::pin(stream::iter(vec![Err(e)]));
         }
 
+        // Validate image sources -- Bedrock Converse does not support URL-sourced images
+        for msg in &request.messages {
+            if let crate::message::Message::User(user_msg) = msg {
+                for content in &user_msg.content {
+                    if let crate::message::InputContent::Image {
+                        source: crate::message::ImageSource::Url { .. },
+                        ..
+                    } = content
+                    {
+                        return Box::pin(stream::iter(vec![Err(ProviderError::RequestFailed(
+                            "URL-sourced images are not supported by Bedrock. Use base64 or bytes."
+                                .into(),
+                        ))]));
+                    }
+                }
+            }
+        }
+
         let http_client = self.client.client().clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
@@ -303,25 +315,9 @@ impl BedrockProvider {
 
         let status = response.status();
         if !status.is_success() {
+            let headers = response.headers().clone();
             let error_body = response.text().await.unwrap_or_default();
-            match status.as_u16() {
-                401 | 403 => {
-                    return Err(ProviderError::AuthFailed(format!(
-                        "Bedrock access denied: {error_body}"
-                    )));
-                }
-                429 => {
-                    return Err(ProviderError::RateLimited {
-                        retry_after_ms: None,
-                    });
-                }
-                408 | 504 => return Err(ProviderError::Timeout),
-                code => {
-                    return Err(ProviderError::RequestFailed(format!(
-                        "Bedrock HTTP {code}: {error_body}"
-                    )));
-                }
-            };
+            return Err(map_bedrock_status(status, &error_body, &headers));
         }
 
         let mut byte_stream = response.bytes_stream();
@@ -646,7 +642,7 @@ fn map_bedrock_stop_reason(raw: &str) -> StopReason {
 }
 
 // ---------------------------------------------------------------------------
-// BedrockMapper: BedrockEvent → AssistantStreamEvent
+// BedrockMapper: BedrockEvent ->AssistantStreamEvent
 // ---------------------------------------------------------------------------
 
 struct BedrockMapper {
@@ -813,7 +809,7 @@ impl BedrockMapper {
             BedrockEvent::MessageStop { stop_reason } => {
                 self.partial.stop_reason = map_bedrock_stop_reason(&stop_reason);
                 self.saw_done = true;
-                // Defer Done event — metadata may follow with final usage
+                // Defer Done event  - metadata may follow with final usage
                 self.pending_done = Some(AssistantStreamEvent::Done {
                     reason: self.partial.stop_reason,
                     message: self.partial.clone(),
@@ -935,8 +931,8 @@ fn serialize_converse_messages(messages: &[crate::message::Message]) -> serde_js
                             crate::message::OutputContent::Text { text } => {
                                 serde_json::json!({"text": text})
                             }
-                            crate::message::OutputContent::Image { .. } => {
-                                serde_json::json!({"text": "[image]"})
+                            crate::message::OutputContent::Image { media_type, .. } => {
+                                serde_json::json!({"text": format!("[image: {}]", media_type.as_str())})
                             }
                         })
                         .collect();
@@ -954,6 +950,26 @@ fn serialize_converse_messages(messages: &[crate::message::Message]) -> serde_js
             })
             .collect(),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Error mapping
+// ---------------------------------------------------------------------------
+
+/// Map an HTTP status code + body + headers to a `ProviderError`.
+pub fn map_bedrock_status(
+    status: reqwest::StatusCode,
+    body: &str,
+    headers: &reqwest::header::HeaderMap,
+) -> ProviderError {
+    match status.as_u16() {
+        401 | 403 => ProviderError::AuthFailed(format!("Bedrock access denied: {body}")),
+        429 => ProviderError::RateLimited {
+            retry_after_ms: crate::retry::parse_retry_after(headers),
+        },
+        408 | 504 => ProviderError::Timeout,
+        code => ProviderError::RequestFailed(format!("Bedrock HTTP {code}: {body}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -980,6 +996,7 @@ fn default_bedrock_models() -> Vec<ModelInfo> {
             display_name: "Claude Sonnet 4 (Bedrock)".into(),
             context_window: 200000,
             max_output_tokens: 8192,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: true,
         },
@@ -988,6 +1005,7 @@ fn default_bedrock_models() -> Vec<ModelInfo> {
             display_name: "Claude Opus 4 (Bedrock)".into(),
             context_window: 200000,
             max_output_tokens: 8192,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: true,
         },
@@ -996,6 +1014,7 @@ fn default_bedrock_models() -> Vec<ModelInfo> {
             display_name: "Claude Haiku 4.5 (Bedrock)".into(),
             context_window: 200000,
             max_output_tokens: 8192,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: true,
         },

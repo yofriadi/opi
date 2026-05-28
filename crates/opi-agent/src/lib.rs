@@ -38,7 +38,7 @@ use hooks::{
     ShouldStopAfterTurnContext,
 };
 use opi_ai::message::{AssistantContent, InputContent, Message, ToolResultMessage, UserMessage};
-use opi_ai::provider::Request;
+use opi_ai::provider::{Request, validate_request_capabilities};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -103,6 +103,12 @@ pub async fn agent_loop(
                 metadata: None,
                 cancel: cancel.clone(),
             };
+            if let Err(e) = validate_request_capabilities(context.provider.as_ref(), &request) {
+                events(AgentEvent::AgentEnd {
+                    messages: messages.clone(),
+                });
+                return Err(AgentError::Provider(e.to_string()));
+            }
             let mut stream = context.provider.stream(request);
             assistant_content.clear();
 

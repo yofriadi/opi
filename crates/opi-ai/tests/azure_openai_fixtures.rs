@@ -21,6 +21,7 @@ fn make_provider() -> AzureOpenAIProvider {
         "my-gpt4o".into(),
         Some("2024-06-01".into()),
     )
+    .unwrap()
 }
 
 fn make_provider_with_deployments(deployments: Vec<&str>) -> AzureOpenAIProvider {
@@ -30,6 +31,7 @@ fn make_provider_with_deployments(deployments: Vec<&str>) -> AzureOpenAIProvider
         deployments.into_iter().map(|s| s.into()).collect(),
         Some("2024-06-01".into()),
     )
+    .unwrap()
 }
 
 fn text_request() -> opi_ai::provider::Request {
@@ -175,12 +177,19 @@ fn azure_url_construction() {
 }
 
 #[test]
-fn azure_url_uses_default_endpoint() {
-    let provider = AzureOpenAIProvider::new("key".into(), None, "deploy1".into(), None);
-    let url = provider.build_azure_url("deploy1");
-    assert!(url.starts_with("https://"));
-    assert!(url.contains("/openai/deployments/deploy1/chat/completions"));
-    assert!(url.contains("api-version="));
+fn missing_endpoint_returns_error() {
+    let result = AzureOpenAIProvider::new("key".into(), None, "deploy1".into(), None);
+    assert!(result.is_err(), "missing endpoint should return error");
+    let err = result.unwrap_err();
+    match err {
+        opi_ai::provider::ProviderError::RequestFailed(msg) => {
+            assert!(
+                msg.contains("endpoint is required"),
+                "unexpected error: {msg}"
+            );
+        }
+        other => panic!("expected RequestFailed, got {other:?}"),
+    }
 }
 
 #[test]

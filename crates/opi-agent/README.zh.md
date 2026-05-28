@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-agent.svg)](https://crates.io/crates/opi-agent)
 [![Docs.rs](https://docs.rs/opi-agent/badge.svg)](https://docs.rs/opi-agent)
 
-> [opi](https://github.com/OdradekAI/opi) 的通用 Agent 运行时：流式 turn、工具调用、hooks、事件、会话与上下文压缩。
+> [opi](https://github.com/OdradekAI/opi) 的通用 Agent 运行时：流式 turn、工具调用、hooks、事件、消息队列、会话与上下文压缩。
 
 [English](README.md) | [opi workspace](../../README.zh.md)
 
@@ -11,7 +11,7 @@
 
 当前 crate 版本：`0.3.0`。
 
-`opi-agent` 提供 `opi` 二进制使用的 Provider 无关运行时。它负责 turn 主循环、工具参数 JSON Schema 校验、并行/串行工具执行、支持 retry 的 Provider streaming、事件订阅、steering/follow-up 队列、JSONL 会话存储，以及阈值/手动/溢出触发的上下文压缩基础能力。
+`opi-agent` 提供 `opi` 二进制使用的 Provider 无关运行时。它负责 turn 主循环、工具参数 JSON Schema 校验、并行/串行工具执行、支持 retry 的 Provider streaming、图片能力校验、事件订阅、steering/follow-up 队列、JSONL 会话存储，以及阈值/手动/溢出触发的上下文压缩基础能力。
 
 `Transport` trait 已作为 stdio/SSE 工具传输抽象存在，但基于外部 transport 的工具服务器尚未接入主循环。
 
@@ -36,7 +36,7 @@ pub trait AgentHooks: Send + Sync {
 }
 ```
 
-`Agent` 在主循环外提供 `prompt`、`continue_`、`abort`、`subscribe`、`add_tool` 与消息缓冲区辅助方法。
+`Agent` 在主循环外提供 `prompt`、`prompt_with_content`、`continue_`、`abort`、`subscribe`、`steer`、`follow_up`、`add_tool`、模型切换与消息缓冲区辅助方法。
 
 ## Agent 主循环
 
@@ -44,6 +44,7 @@ pub trait AgentHooks: Send + Sync {
 agent_loop
   -> transform_context
   -> convert_to_llm
+  -> 校验请求能力
   -> provider.stream(Request)
   -> 发出并累积 AssistantStreamEvent
   -> 检测工具调用
@@ -129,15 +130,15 @@ impl Tool for EchoTool {
 }
 ```
 
-创建 `Agent` 时传入 boxed `opi_ai::Provider`、工具列表、模型、可选系统提示词、`AgentLoopConfig` 和 `AgentHooks` 实现即可。
+创建 `Agent` 时传入 boxed `opi_ai::Provider`、工具列表、模型、可选系统提示词、`AgentLoopConfig` 和 `AgentHooks` 实现即可。用户 turn 包含文本和图片时使用 `prompt_with_content`。
 
 ## 模块速查
 
 | 模块 | 作用 |
 |------|------|
-| `agent` | `Agent` 封装与消息缓冲区管理 |
+| `agent` | 有状态 `Agent` 封装、模型切换、取消、队列与消息缓冲区管理 |
 | 根模块 `agent_loop` | Provider/tool turn 主循环 |
-| `tool` | `Tool`、`ToolResult`、`ToolError`、`ExecutionMode` |
+| `tool` | `Tool`、`ToolResult`、`ToolError`、`ExecutionMode`、update callbacks |
 | `hooks` | Hook trait 及其上下文/结果类型 |
 | `event` | 运行时事件协议 |
 | `session_event` | JSON 模式使用的会话级事件协议 |

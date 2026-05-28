@@ -368,3 +368,37 @@ async fn ls_tool_distinguishes_dirs_and_files() {
         "directories should be distinguishable: {text}"
     );
 }
+
+// --- Truncation metadata correctness ---
+
+#[tokio::test]
+async fn ls_tool_truncation_shows_correct_omitted_count() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..20 {
+        fs::write(dir.path().join(format!("file_{:02}.txt", i)), "").unwrap();
+    }
+
+    let tool = LsTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "c13",
+            json!({ "path": ".", "max_entries": 5 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    let text = tool_result_text(&result);
+    // Should say "15 entries omitted" (20 total - 5 shown = 15 omitted)
+    assert!(
+        text.contains("15 entries omitted"),
+        "expected '15 entries omitted' in output, got: {text}"
+    );
+    // Details should have correct counts
+    let details = result.details.as_ref().unwrap();
+    assert_eq!(details["entry_count"], 5);
+    assert_eq!(details["total_entries"], 20);
+    assert_eq!(details["truncated"], true);
+}

@@ -120,7 +120,8 @@ impl Tool for LsTool {
 
             entries.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
 
-            let truncated = entries.len() > max_entries;
+            let total_entries = entries.len();
+            let truncated = total_entries > max_entries;
             entries.truncate(max_entries);
 
             let mut lines: Vec<String> = entries
@@ -137,7 +138,7 @@ impl Tool for LsTool {
             if truncated {
                 lines.push(format!(
                     "... (truncated, {} entries omitted)",
-                    entries.len()
+                    total_entries - max_entries
                 ));
             }
 
@@ -146,6 +147,7 @@ impl Tool for LsTool {
                 "workspace_root": workspace_root.to_string_lossy(),
                 "path": path_arg,
                 "entry_count": entries.len(),
+                "total_entries": total_entries,
                 "truncated": truncated,
             });
 

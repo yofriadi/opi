@@ -103,7 +103,8 @@ fn azure_provider_builds_with_key() {
         Some("https://myresource.openai.azure.com".into()),
         "my-deploy".into(),
         Some("2024-06-01".into()),
-    );
+    )
+    .unwrap();
     assert_eq!(provider.id(), "azure");
 }
 
@@ -114,7 +115,8 @@ fn azure_provider_from_config_with_deployments() {
         Some("https://myresource.openai.azure.com".into()),
         vec!["deploy1".into(), "deploy2".into()],
         None,
-    );
+    )
+    .unwrap();
     assert_eq!(provider.id(), "azure");
     assert_eq!(provider.models().len(), 2);
     assert_eq!(provider.models()[0].id, "deploy1");
@@ -132,7 +134,8 @@ fn azure_api_key_not_in_debug() {
         Some("https://myresource.openai.azure.com".into()),
         "my-deploy".into(),
         None,
-    );
+    )
+    .unwrap();
     let debug = format!("{provider:?}");
     assert!(
         !debug.contains("super-secret-key-12345"),
@@ -148,7 +151,8 @@ fn azure_config_endpoint_visible_in_debug() {
         Some("https://myresource.openai.azure.com".into()),
         "my-deploy".into(),
         None,
-    );
+    )
+    .unwrap();
     let debug = format!("{provider:?}");
     assert!(debug.contains("myresource.openai.azure.com"));
 }
@@ -160,7 +164,8 @@ fn azure_url_does_not_contain_api_key() {
         Some("https://myresource.openai.azure.com".into()),
         "my-deploy".into(),
         None,
-    );
+    )
+    .unwrap();
     let url = provider.build_azure_url("my-deploy");
     assert!(!url.contains("super-secret-key"));
     assert!(url.contains("my-deploy"));
