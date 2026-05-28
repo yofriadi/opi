@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use opi_ai::provider::Provider;
 
 use opi_coding_agent::cli::Cli;
 use opi_coding_agent::config::{ConfigSource, resolve_config};
@@ -23,6 +24,25 @@ fn main() {
 
     if cli.verbose {
         eprintln!("opi {} - debug mode", env!("CARGO_PKG_VERSION"));
+    }
+
+    // Handle --list-models early -- needs config but not a full provider session.
+    if cli.list_models {
+        let config = match resolve_config(ConfigSource {
+            cli_model: cli.model.clone(),
+            config_path: cli.config.clone(),
+            env_model: std::env::var("OPI_MODEL").ok(),
+            project_dir: std::env::current_dir().ok(),
+            user_config_path: None,
+        }) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("opi: config error: {e}");
+                std::process::exit(2);
+            }
+        };
+        let exit_code = list_models(&config, cli.json);
+        std::process::exit(exit_code);
     }
 
     // Handle session CLI commands first -- they don't need config or a provider.
@@ -133,6 +153,10 @@ async fn run_non_interactive(
             eprintln!("opi: {msg}");
             return ExitCode::ConfigError as i32;
         }
+        Err(ProviderBuildError::Provider(e)) => {
+            eprintln!("opi: {e}");
+            return ExitCode::ConfigError as i32;
+        }
     };
 
     let allow_mutating = cli.allow_mutating || config.defaults.allow_mutating_tools;
@@ -168,10 +192,36 @@ async fn run_non_interactive(
         tool_selection,
     );
 
-    let result = if cli.json {
-        runner.run_json(prompt_text).await
+    let result = if cli.image.is_empty() {
+        // No images -- use the plain text path.
+        if cli.json {
+            runner.run_json(prompt_text).await
+        } else {
+            runner.run(prompt_text).await
+        }
     } else {
-        runner.run(prompt_text).await
+        // Load images and combine with text prompt.
+        let mut content: Vec<opi_ai::message::InputContent> = Vec::new();
+        content.push(opi_ai::message::InputContent::Text {
+            text: prompt_text.to_owned(),
+        });
+        for image_path in &cli.image {
+            match opi_coding_agent::image::load_image_with_limit(
+                image_path,
+                config.defaults.max_image_bytes,
+            ) {
+                Ok(img) => content.push(img),
+                Err(e) => {
+                    eprintln!("opi: {e}");
+                    return ExitCode::ConfigError as i32;
+                }
+            }
+        }
+        if cli.json {
+            runner.run_json_with_content(content).await
+        } else {
+            runner.run_with_content(content).await
+        }
     };
 
     if !result.stdout.is_empty() {
@@ -202,6 +252,10 @@ async fn run_interactive(
         }
         Err(ProviderBuildError::Config(msg)) => {
             eprintln!("opi: {msg}");
+            std::process::exit(2);
+        }
+        Err(ProviderBuildError::Provider(e)) => {
+            eprintln!("opi: {e}");
             std::process::exit(2);
         }
     };
@@ -245,6 +299,23 @@ async fn run_interactive(
 enum ProviderBuildError {
     Auth(String),
     Config(String),
+    Provider(opi_ai::provider::ProviderError),
+}
+
+impl From<opi_ai::provider::ProviderError> for ProviderBuildError {
+    fn from(e: opi_ai::provider::ProviderError) -> Self {
+        ProviderBuildError::Provider(e)
+    }
+}
+
+/// Build an HTTP client with optional proxy configuration.
+///
+/// When an explicit proxy config is provided, it is used directly.
+/// Otherwise, falls back to environment variable detection.
+fn build_http_client(
+    proxy_config: Option<&opi_coding_agent::config::ProviderProxyConfig>,
+) -> Arc<opi_ai::http::HttpClient> {
+    opi_coding_agent::config::build_http_client(proxy_config)
 }
 
 fn build_provider(
@@ -263,18 +334,24 @@ fn build_provider(
         "anthropic" => {
             let env_name = &config.providers.anthropic.api_key_env;
             let api_key = require_api_key(env_name)?;
-            let provider = opi_ai::anthropic::AnthropicProvider::new(
+            let client = build_http_client(config.providers.anthropic.proxy.as_ref());
+            let provider = opi_ai::anthropic::AnthropicProvider::with_client(
                 api_key,
                 config.providers.anthropic.base_url.clone(),
+                client,
             );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         "openai" => {
             let env_name = resolve_env_name(&config.providers.openai.api_key_env, "OPENAI_API_KEY");
             let api_key = require_api_key(&env_name)?;
-            let provider = opi_ai::openai_chat::OpenAiChatProvider::new(
+            let client = build_http_client(config.providers.openai.proxy.as_ref());
+            let provider = opi_ai::openai_chat::OpenAiChatProvider::with_client(
                 api_key,
                 config.providers.openai.base_url.clone(),
+                "openai".into(),
+                vec![],
+                client,
             );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
@@ -284,6 +361,7 @@ fn build_provider(
                 "OPENROUTER_API_KEY",
             );
             let api_key = require_api_key(&env_name)?;
+            let client = build_http_client(config.providers.openrouter.proxy.as_ref());
             // If a custom referer is configured, build the provider directly with it.
             let provider = if let Some(ref referer) = config.providers.openrouter.referer {
                 let base_url = config
@@ -311,11 +389,13 @@ fn build_provider(
                     extra_headers,
                     models,
                 )
+                .with_shared_client(client)
             } else {
                 opi_ai::openrouter::openrouter_provider(
                     api_key,
                     config.providers.openrouter.base_url.clone(),
                 )
+                .with_shared_client(client)
             };
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
@@ -323,10 +403,12 @@ fn build_provider(
             let env_name =
                 resolve_env_name(&config.providers.mistral.api_key_env, "MISTRAL_API_KEY");
             let api_key = require_api_key(&env_name)?;
+            let client = build_http_client(config.providers.mistral.proxy.as_ref());
             let provider = opi_ai::mistral::mistral_provider(
                 api_key,
                 config.providers.mistral.base_url.clone(),
-            );
+            )
+            .with_shared_client(client);
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         "openai-responses" => {
@@ -335,18 +417,22 @@ fn build_provider(
                 "OPENAI_API_KEY",
             );
             let api_key = require_api_key(&env_name)?;
-            let provider = opi_ai::openai_responses::OpenAiResponsesProvider::new(
+            let client = build_http_client(config.providers.openai_responses.proxy.as_ref());
+            let provider = opi_ai::openai_responses::OpenAiResponsesProvider::with_client(
                 api_key,
                 config.providers.openai_responses.base_url.clone(),
+                client,
             );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         "gemini" => {
             let env_name = resolve_env_name(&config.providers.gemini.api_key_env, "GEMINI_API_KEY");
             let api_key = require_api_key(&env_name)?;
-            let provider = opi_ai::gemini::GeminiProvider::new(
+            let client = build_http_client(config.providers.gemini.proxy.as_ref());
+            let provider = opi_ai::gemini::GeminiProvider::with_client(
                 api_key,
                 config.providers.gemini.base_url.clone(),
+                client,
             );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
@@ -355,8 +441,10 @@ fn build_provider(
 
             // Resolve credentials: config > env > profile
             let (akid, sak, token, env_region) = resolve_bedrock_env_credentials();
-            let profile_name = bedrock_config.profile.as_deref();
-            let credentials_file = default_aws_credentials_path();
+            let env_profile = std::env::var("AWS_PROFILE").ok();
+            let profile_name = bedrock_config.profile.as_deref().or(env_profile.as_deref());
+            let credentials_file = aws_credentials_path();
+            let config_file = aws_config_path();
 
             // Read secret key from configured env var
             let secret_key = bedrock_config
@@ -381,20 +469,22 @@ fn build_provider(
                 env_region: env_region.as_deref(),
                 profile_name,
                 credentials_file_path: credentials_file.as_deref(),
+                config_file_path: config_file.as_deref(),
             };
 
             let resolved = opi_ai::bedrock::credentials::resolve_credentials(&input);
 
             let (bedrock_creds, _source) = resolved.ok_or_else(|| {
                 ProviderBuildError::Auth(
-                    "no AWS credentials found: set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, configure [providers.bedrock], or set up ~/.aws/credentials".into(),
+                    "no AWS credentials found: set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, configure [providers.bedrock], or set up AWS shared credentials/config profiles".into(),
                 )
             })?;
 
+            let client = build_http_client(bedrock_config.proxy.as_ref());
             let provider = opi_ai::bedrock::BedrockProvider::from_credentials(
                 bedrock_creds,
                 bedrock_config.base_url.clone(),
-                Arc::new(opi_ai::http::HttpClient::new()),
+                client,
             );
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
@@ -412,16 +502,16 @@ fn build_provider(
                     azure_config.endpoint.clone(),
                     deployment.to_string(),
                     azure_config.api_version.clone(),
-                )
+                )?
             } else {
                 opi_ai::azure_openai::AzureOpenAIProvider::from_config(
                     api_key,
                     azure_config.endpoint.clone(),
                     azure_config.deployments.clone(),
                     azure_config.api_version.clone(),
-                )
+                )?
             }
-            .with_client(Arc::new(opi_ai::http::HttpClient::new()));
+            .with_client(build_http_client(azure_config.proxy.as_ref()));
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         "vertex" => {
@@ -452,7 +542,7 @@ fn build_provider(
                     vertex_config.base_url.clone(),
                 )
             }
-            .with_client(Arc::new(opi_ai::http::HttpClient::new()));
+            .with_client(build_http_client(vertex_config.proxy.as_ref()));
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
         other => Err(ProviderBuildError::Config(format!(
@@ -499,12 +589,27 @@ fn resolve_bedrock_env_credentials() -> (
     (akid, sak, token, region)
 }
 
-/// Default path for ~/.aws/credentials.
-fn default_aws_credentials_path() -> Option<std::path::PathBuf> {
+/// AWS shared credentials file path.
+fn aws_credentials_path() -> Option<std::path::PathBuf> {
+    std::env::var("AWS_SHARED_CREDENTIALS_FILE")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| home_dir().map(|h| h.join(".aws").join("credentials")))
+}
+
+/// AWS shared config file path.
+fn aws_config_path() -> Option<std::path::PathBuf> {
+    std::env::var("AWS_CONFIG_FILE")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| home_dir().map(|h| h.join(".aws").join("config")))
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
-        .map(|h| std::path::PathBuf::from(h).join(".aws").join("credentials"))
+        .map(std::path::PathBuf::from)
 }
 
 fn parse_keybindings(config: &opi_coding_agent::config::KeybindingsConfig) -> opi_tui::Keybindings {
@@ -522,4 +627,377 @@ fn parse_keybindings(config: &opi_coding_agent::config::KeybindingsConfig) -> op
             opi_tui::Keybindings::default()
         }
     }
+}
+
+/// Entry for --list-models output.
+struct ModelEntry {
+    provider_id: String,
+    model_id: String,
+    display_name: String,
+}
+
+/// List available models from all configured providers.
+/// Returns exit code: 0 on success, 1 if no models found.
+fn list_models(config: &opi_coding_agent::config::OpiConfig, json_output: bool) -> i32 {
+    let mut entries: Vec<ModelEntry> = Vec::new();
+
+    // Anthropic
+    if let Ok(provider) = build_anthropic(config) {
+        for m in provider.models() {
+            entries.push(ModelEntry {
+                provider_id: "anthropic".into(),
+                model_id: m.id.clone(),
+                display_name: m.display_name.clone(),
+            });
+        }
+    }
+
+    // OpenAI
+    if let Ok(provider) = build_openai(config) {
+        for m in provider.models() {
+            entries.push(ModelEntry {
+                provider_id: "openai".into(),
+                model_id: m.id.clone(),
+                display_name: m.display_name.clone(),
+            });
+        }
+    }
+
+    // OpenRouter
+    if let Ok(provider) = build_openrouter(config) {
+        for m in provider.models() {
+            entries.push(ModelEntry {
+                provider_id: "openrouter".into(),
+                model_id: m.id.clone(),
+                display_name: m.display_name.clone(),
+            });
+        }
+    }
+
+    // Mistral
+    if let Ok(provider) = build_mistral(config) {
+        for m in provider.models() {
+            entries.push(ModelEntry {
+                provider_id: "mistral".into(),
+                model_id: m.id.clone(),
+                display_name: m.display_name.clone(),
+            });
+        }
+    }
+
+    // OpenAI Responses
+    if let Ok(provider) = build_openai_responses(config) {
+        for m in provider.models() {
+            entries.push(ModelEntry {
+                provider_id: "openai-responses".into(),
+                model_id: m.id.clone(),
+                display_name: m.display_name.clone(),
+            });
+        }
+    }
+
+    // Gemini
+    if let Ok(provider) = build_gemini(config) {
+        for m in provider.models() {
+            entries.push(ModelEntry {
+                provider_id: "gemini".into(),
+                model_id: m.id.clone(),
+                display_name: m.display_name.clone(),
+            });
+        }
+    }
+
+    // Bedrock
+    if let Ok(provider) = build_bedrock(config) {
+        for m in provider.models() {
+            entries.push(ModelEntry {
+                provider_id: "bedrock".into(),
+                model_id: m.id.clone(),
+                display_name: m.display_name.clone(),
+            });
+        }
+    }
+
+    // Azure
+    if let Ok(provider) = build_azure(config) {
+        for m in provider.models() {
+            entries.push(ModelEntry {
+                provider_id: "azure".into(),
+                model_id: m.id.clone(),
+                display_name: m.display_name.clone(),
+            });
+        }
+    }
+
+    // Vertex
+    if let Ok(provider) = build_vertex(config) {
+        for m in provider.models() {
+            entries.push(ModelEntry {
+                provider_id: "vertex".into(),
+                model_id: m.id.clone(),
+                display_name: m.display_name.clone(),
+            });
+        }
+    }
+
+    if entries.is_empty() {
+        eprintln!("opi: no models available (configure API keys to list models)");
+        return 1;
+    }
+
+    if json_output {
+        for entry in &entries {
+            let json = serde_json::json!({
+                "model": entry.model_id,
+                "provider": entry.provider_id,
+                "display_name": entry.display_name,
+            });
+            println!("{json}");
+        }
+    } else {
+        // Compute column widths
+        let max_id = entries.iter().map(|e| e.model_id.len()).max().unwrap_or(10);
+        let max_name = entries
+            .iter()
+            .map(|e| e.display_name.len())
+            .max()
+            .unwrap_or(12);
+        let max_prov = entries
+            .iter()
+            .map(|e| e.provider_id.len())
+            .max()
+            .unwrap_or(8);
+
+        // Header
+        println!(
+            "{:<width_prov$}  {:<width_id$}  DISPLAY NAME",
+            "PROVIDER",
+            "MODEL ID",
+            width_prov = max_prov,
+            width_id = max_id,
+        );
+        println!(
+            "{}  {}  {}",
+            "-".repeat(max_prov),
+            "-".repeat(max_id),
+            "-".repeat(max_name),
+        );
+
+        for entry in &entries {
+            println!(
+                "{:<width_prov$}  {:<width_id$}  {}",
+                entry.provider_id,
+                entry.model_id,
+                entry.display_name,
+                width_prov = max_prov,
+                width_id = max_id,
+            );
+        }
+    }
+
+    0
+}
+
+// Lightweight provider builders for --list-models.
+// These try to construct providers but silently fail on missing auth.
+
+fn build_anthropic(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::anthropic::AnthropicProvider, ()> {
+    let api_key = std::env::var(&config.providers.anthropic.api_key_env).map_err(|_| ())?;
+    let client = build_http_client(config.providers.anthropic.proxy.as_ref());
+    Ok(opi_ai::anthropic::AnthropicProvider::with_client(
+        api_key,
+        config.providers.anthropic.base_url.clone(),
+        client,
+    ))
+}
+
+fn build_openai(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ()> {
+    let env_name = resolve_env_name(&config.providers.openai.api_key_env, "OPENAI_API_KEY");
+    let api_key = std::env::var(&env_name).map_err(|_| ())?;
+    let client = build_http_client(config.providers.openai.proxy.as_ref());
+    Ok(opi_ai::openai_chat::OpenAiChatProvider::with_client(
+        api_key,
+        config.providers.openai.base_url.clone(),
+        "openai".into(),
+        vec![],
+        client,
+    ))
+}
+
+fn build_openrouter(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ()> {
+    let env_name = resolve_env_name(
+        &config.providers.openrouter.api_key_env,
+        "OPENROUTER_API_KEY",
+    );
+    let api_key = std::env::var(&env_name).map_err(|_| ())?;
+    let client = build_http_client(config.providers.openrouter.proxy.as_ref());
+    if let Some(ref referer) = config.providers.openrouter.referer {
+        let base_url = config
+            .providers
+            .openrouter
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "https://openrouter.ai/api".into());
+        let compat = opi_ai::openai_chat::CompatConfig::default();
+        let extra_headers = vec![
+            ("HTTP-Referer".into(), referer.clone()),
+            ("X-Title".into(), "opi".into()),
+        ];
+        let temp = opi_ai::openrouter::openrouter_provider(
+            String::new(),
+            config.providers.openrouter.base_url.clone(),
+        );
+        let models = temp.models().to_vec();
+        Ok(opi_ai::openai_chat::OpenAiChatProvider::new_for_profile(
+            api_key,
+            base_url,
+            "openrouter".into(),
+            compat,
+            extra_headers,
+            models,
+        )
+        .with_shared_client(client))
+    } else {
+        Ok(opi_ai::openrouter::openrouter_provider(
+            api_key,
+            config.providers.openrouter.base_url.clone(),
+        )
+        .with_shared_client(client))
+    }
+}
+
+fn build_mistral(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ()> {
+    let env_name = resolve_env_name(&config.providers.mistral.api_key_env, "MISTRAL_API_KEY");
+    let api_key = std::env::var(&env_name).map_err(|_| ())?;
+    let client = build_http_client(config.providers.mistral.proxy.as_ref());
+    Ok(
+        opi_ai::mistral::mistral_provider(api_key, config.providers.mistral.base_url.clone())
+            .with_shared_client(client),
+    )
+}
+
+fn build_openai_responses(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::openai_responses::OpenAiResponsesProvider, ()> {
+    let env_name = resolve_env_name(
+        &config.providers.openai_responses.api_key_env,
+        "OPENAI_API_KEY",
+    );
+    let api_key = std::env::var(&env_name).map_err(|_| ())?;
+    let client = build_http_client(config.providers.openai_responses.proxy.as_ref());
+    Ok(
+        opi_ai::openai_responses::OpenAiResponsesProvider::with_client(
+            api_key,
+            config.providers.openai_responses.base_url.clone(),
+            client,
+        ),
+    )
+}
+
+fn build_gemini(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::gemini::GeminiProvider, ()> {
+    let env_name = resolve_env_name(&config.providers.gemini.api_key_env, "GEMINI_API_KEY");
+    let api_key = std::env::var(&env_name).map_err(|_| ())?;
+    let client = build_http_client(config.providers.gemini.proxy.as_ref());
+    Ok(opi_ai::gemini::GeminiProvider::with_client(
+        api_key,
+        config.providers.gemini.base_url.clone(),
+        client,
+    ))
+}
+
+fn build_bedrock(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::bedrock::BedrockProvider, ()> {
+    let bedrock_config = &config.providers.bedrock;
+    let (akid, sak, token, env_region) = resolve_bedrock_env_credentials();
+    let env_profile = std::env::var("AWS_PROFILE").ok();
+    let profile_name = bedrock_config.profile.as_deref().or(env_profile.as_deref());
+    let credentials_file = aws_credentials_path();
+    let config_file = aws_config_path();
+    let secret_key = bedrock_config
+        .secret_access_key_env
+        .as_deref()
+        .and_then(|env_name| std::env::var(env_name).ok());
+    let session_token = bedrock_config
+        .session_token_env
+        .as_deref()
+        .and_then(|env_name| std::env::var(env_name).ok());
+    let input = opi_ai::bedrock::credentials::CredentialResolutionInput {
+        config_access_key_id: bedrock_config.access_key_id.as_deref(),
+        config_secret_access_key: secret_key.as_deref(),
+        config_session_token: session_token.as_deref(),
+        config_region: bedrock_config.region.as_deref(),
+        env_access_key_id: akid.as_deref(),
+        env_secret_access_key: sak.as_deref(),
+        env_session_token: token.as_deref(),
+        env_region: env_region.as_deref(),
+        profile_name,
+        credentials_file_path: credentials_file.as_deref(),
+        config_file_path: config_file.as_deref(),
+    };
+    let resolved = opi_ai::bedrock::credentials::resolve_credentials(&input);
+    let (bedrock_creds, _) = resolved.ok_or(())?;
+    let client = build_http_client(bedrock_config.proxy.as_ref());
+    Ok(opi_ai::bedrock::BedrockProvider::from_credentials(
+        bedrock_creds,
+        bedrock_config.base_url.clone(),
+        client,
+    ))
+}
+
+fn build_azure(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::azure_openai::AzureOpenAIProvider, ()> {
+    let azure_config = &config.providers.azure;
+    let env_name = resolve_env_name(&azure_config.api_key_env, "AZURE_OPENAI_API_KEY");
+    let api_key = std::env::var(&env_name).map_err(|_| ())?;
+    if azure_config.deployments.is_empty() {
+        // No deployments configured -- can't list models
+        return Err(());
+    }
+    let provider = opi_ai::azure_openai::AzureOpenAIProvider::from_config(
+        api_key,
+        azure_config.endpoint.clone(),
+        azure_config.deployments.clone(),
+        azure_config.api_version.clone(),
+    )
+    .map_err(|_| ())?;
+    Ok(provider.with_client(build_http_client(azure_config.proxy.as_ref())))
+}
+
+fn build_vertex(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::vertex::VertexProvider, ()> {
+    let vertex_config = &config.providers.vertex;
+    let env_name = resolve_env_name(&vertex_config.access_token_env, "VERTEX_ACCESS_TOKEN");
+    let access_token = std::env::var(&env_name).map_err(|_| ())?;
+    let project = vertex_config.project.as_deref().ok_or(())?;
+    let location = vertex_config.location.as_deref().ok_or(())?;
+    let provider = if vertex_config.models.is_empty() {
+        opi_ai::vertex::VertexProvider::new(
+            access_token,
+            project.into(),
+            location.into(),
+            vertex_config.base_url.clone(),
+        )
+    } else {
+        opi_ai::vertex::VertexProvider::from_config(
+            access_token,
+            project.into(),
+            location.into(),
+            vertex_config.models.clone(),
+            vertex_config.base_url.clone(),
+        )
+    };
+    Ok(provider.with_client(build_http_client(vertex_config.proxy.as_ref())))
 }
