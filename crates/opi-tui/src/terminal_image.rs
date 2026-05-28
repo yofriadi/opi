@@ -72,15 +72,7 @@ pub fn detect_graphics_protocol(
         if term == "xterm-kitty" {
             return TerminalGraphicsProtocol::Kitty;
         }
-        if term == "xterm-ghostty" || term == "mlterm" || term == "yaft-256color" {
-            if term_features.map(|f| f.contains("sixel")).unwrap_or(false) {
-                return TerminalGraphicsProtocol::Sixel;
-            }
-            // Ghostty and mlterm may still support sixel
-            if term == "mlterm" || term == "yaft-256color" {
-                return TerminalGraphicsProtocol::Sixel;
-            }
-        }
+        let _ = term;
     }
 
     if let Some(program) = term_program
@@ -89,11 +81,7 @@ pub fn detect_graphics_protocol(
         return TerminalGraphicsProtocol::Iterm2;
     }
 
-    if let Some(features) = term_features
-        && features.contains("sixel")
-    {
-        return TerminalGraphicsProtocol::Sixel;
-    }
+    let _ = term_features;
 
     TerminalGraphicsProtocol::Fallback
 }
@@ -102,19 +90,16 @@ pub fn detect_graphics_protocol(
 ///
 /// Uses base64-encoded payload with the `a=T` (transmit and display) action.
 pub fn kitty_escape(data: &ImageData) -> String {
+    if data.media_type != MediaType::Png {
+        return String::new();
+    }
+
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&data.bytes);
 
-    let mut params = vec!["a=T".to_string(), "f=24".to_string()];
-    if let Some(w) = data.width {
-        params.push(format!("s={w}"));
-    }
-    if let Some(h) = data.height {
-        params.push(format!("v={h}"));
-    }
-    params.push(format!("t=d,{b64}"));
+    let params = ["a=T", "f=100"].join(",");
 
-    format!("\x1b_G{};\x1b\\", params.join(","))
+    format!("\x1b_G{params};{b64}\x1b\\")
 }
 
 /// Generate an iTerm2 inline image escape sequence.
@@ -132,20 +117,15 @@ pub fn iterm_escape(data: &ImageData) -> String {
         parts.push(format!("height={h}"));
     }
 
-    format!("\x1b]1337;File={};{}\x07", parts.join(";"), b64)
+    format!("\x1b]1337;File={}:{}\x07", parts.join(";"), b64)
 }
 
 /// Generate a Sixel escape sequence for the given image.
 ///
 /// Sixel encodes pixel data as character sequences. For raw bytes input,
 /// this produces a minimal Sixel wrapper indicating image dimensions.
-pub fn sixel_escape(data: &ImageData) -> String {
-    let w = data.width.unwrap_or(1);
-    let h = data.height.unwrap_or(1);
-
-    // DCS q with raster attributes: "1;1;{width};{height}"
-    // followed by Sixel data and ST terminator
-    format!("\x1bPq\"1;1;{w};{h}\x1b\\")
+pub fn sixel_escape(_data: &ImageData) -> String {
+    String::new()
 }
 
 /// Generate a text placeholder for the image.

@@ -24,17 +24,10 @@ fn kitty_escape_base64_payload() {
         "Kitty escape must start with ESC_G"
     );
     assert!(
-        escape.contains("f=24"),
-        "Kitty escape must specify format f=24 for PNG"
+        escape.starts_with("\x1b_Ga=T,f=100;"),
+        "Kitty escape must put PNG payload after the semicolon"
     );
-    assert!(
-        escape.contains("s=100"),
-        "Kitty escape must contain width s=100"
-    );
-    assert!(
-        escape.contains("v=50"),
-        "Kitty escape must contain height v=50"
-    );
+    assert!(escape.contains("iVBORw=="));
     assert!(
         escape.ends_with("\x1b\\"),
         "Kitty escape must end with ESC\\"
@@ -51,11 +44,9 @@ fn kitty_escape_jpeg_format() {
     };
     let escape = kitty_escape(&data);
     assert!(
-        escape.contains("f=24"),
-        "Kitty uses f=24 for JPEG too (RGB24)"
+        escape.is_empty(),
+        "encoded JPEG bytes are not sent through Kitty raw-RGB f=24"
     );
-    assert!(escape.contains("s=200"));
-    assert!(escape.contains("v=150"));
 }
 
 #[test]
@@ -92,7 +83,15 @@ fn iterm_escape_base64_payload() {
         escape.starts_with("\x1b]1337;File=inline=1"),
         "iTerm2 escape must start with OSC 1337"
     );
-    assert!(escape.ends_with("\x07"), "iTerm2 escape must end with BEL");
+    // The colon separates key-value params from base64 payload per iTerm2 spec.
+    let without_prefix = escape.strip_prefix("\x1b]1337;File=").unwrap();
+    let colon_pos = without_prefix.find(':').expect("params and base64 must be separated by ':'");
+    let (params, rest) = without_prefix.split_at(colon_pos);
+    assert!(params.contains("inline=1"), "must contain inline=1");
+    assert!(!params.contains(':'), "params must use ';' not ':' between key-value pairs");
+    let base64_and_bel = &rest[1..]; // skip the ':'
+    assert!(base64_and_bel.ends_with("\x07"), "iTerm2 escape must end with BEL");
+    assert!(!base64_and_bel.contains(';'), "base64 payload must come after ':' separator, not ';'");
 }
 
 #[test]
@@ -122,12 +121,8 @@ fn sixel_escape_structure() {
     };
     let escape = sixel_escape(&data);
     assert!(
-        escape.starts_with("\x1bPq") || escape.starts_with("\x1b["),
-        "Sixel escape must start with DCS or CSI sequence"
-    );
-    assert!(
-        escape.contains("\x1b\\"),
-        "Sixel escape must contain ST terminator"
+        escape.is_empty(),
+        "Sixel remains disabled until a real encoder converts pixels to sixel data"
     );
 }
 
@@ -219,14 +214,14 @@ fn detect_iterm_from_term_program() {
 }
 
 #[test]
-fn detect_sixel_from_term_features() {
+fn detect_sixel_env_falls_back_until_encoder_exists() {
     let result = detect_graphics_protocol(
         Some("xterm-ghostty"),
         None,
         Some("sixel"),
         &CapabilitySource::EnvVars,
     );
-    assert_eq!(result, TerminalGraphicsProtocol::Sixel);
+    assert_eq!(result, TerminalGraphicsProtocol::Fallback);
 }
 
 #[test]
