@@ -4,7 +4,7 @@
     "docs/opi-spec.md"
   ],
   "spec_files_sha256": {
-    "docs/opi-spec.md": "7352d798d574cc1946879e164e3829ca36408325522971b16587ac54284fedd2"
+    "docs/opi-spec.md": "ec34eb0336c916feff151f7bef7ed5452451da126d8a03a4ff12d262f92b4dad"
   },
   "task_graph_confirmed_at": "2026-05-25T10:23:18Z",
   "current_phase": 3,
@@ -15,7 +15,7 @@
       "title": "AWS Bedrock provider",
       "crate": "opi-ai",
       "parent_spec_row": null,
-      "definition_of_done": "fixtures cover text, tool call, usage, provider errors, and error mapping; deterministic SigV4 request signing tests; resolves bedrock:<model-id> through provider construction, registry/model metadata, and --list-models; credential precedence covers explicit config, provider-specific env vars, profile/region config, and ambient AWS credential chain without logging secrets; secret redaction tests assert AWS credentials do not appear in logs, errors, sessions, or snapshots; no fixture or credential-chain test performs live AWS calls; shared reqwest client/proxy configuration from 3.13/3.12 is reused; supported Bedrock model-family routing is explicit and fixture-backed, and unsupported Bedrock model families return clear config errors",
+      "definition_of_done": "fixtures cover text, tool call, usage, provider errors, and error mapping; deterministic SigV4 request signing tests; resolves bedrock:<model-id> through provider construction, registry/model metadata, and --list-models; credential precedence covers explicit config, provider-specific env vars, profile/region config, AWS_PROFILE, AWS_SHARED_CREDENTIALS_FILE, AWS_CONFIG_FILE, and credential_process without logging secrets; IMDS, SSO, ECS task metadata, and web-identity flows are explicitly out of current scope; secret redaction tests assert AWS credentials do not appear in logs, errors, sessions, or snapshots; no fixture or credential-chain test performs live AWS calls; shared reqwest client/proxy configuration from 3.13/3.12 is reused; supported Bedrock model-family routing is explicit and fixture-backed, and unsupported Bedrock model families return clear config errors",
       "definition_source": "inferred",
       "replaces": null,
       "status": "passing",
@@ -96,6 +96,28 @@
         "commit": "99b263d",
         "verification": "clippy clean, cargo test --workspace pass, RUSTDOCFLAGS=\"-D warnings\" cargo doc clean",
         "evaluator": "passed (code-reviewer found 2 bugs fixed before commit)"
+      },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "codex",
+        "verdict": "pass",
+        "fixes_verified": [
+          "Bedrock credential resolver now uses default profile when AWS_PROFILE is absent",
+          "AWS_PROFILE, AWS_SHARED_CREDENTIALS_FILE, and AWS_CONFIG_FILE are wired through provider construction",
+          "shared AWS config profile region and static credentials are parsed offline",
+          "credential_process is supported with offline fixture tests",
+          "network credential providers (IMDS/SSO/ECS/web identity) are documented as out of scope in docs/opi-spec.md"
+        ],
+        "remaining_gaps": [
+          "No live/network AWS credential provider chain is implemented; this is now documented as a scoped Phase 3 limitation rather than an unmet DoD."
+        ],
+        "evidence_paths": [
+          "crates/opi-ai/src/bedrock/credentials.rs",
+          "crates/opi-coding-agent/src/main.rs",
+          "docs/opi-spec.md"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
       },
       "blocker": null,
       "session_notes": [
@@ -191,6 +213,26 @@
         "opi_verification": "workspace; fmt clean, clippy 0 warnings, 968 tests pass, doc 0 warnings",
         "opi_evaluator": "passed (code-reviewer found 2 issues fixed before commit: Retry-After header, shared HttpClient)"
       },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "claude-opus-4.7",
+        "verdict": "pass",
+        "fixes_verified": [
+          "endpoint validation hardened in provider factory: crates/opi-coding-agent/src/main.rs:485-509 (returns config error when endpoint missing, no placeholder URL)",
+          "deployment URL formatting, api-version query param, api-key header, secret redaction Debug impl, with_client() builder, retry-after header parsing all confirmed in crates/opi-ai/src/azure_openai.rs",
+          "proxy wired through build_provider: crates/opi-coding-agent/src/main.rs:508",
+          "baseline tests pass at HEAD 7d1fb8c (1009 passed, 0 failed)"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-ai/src/azure_openai.rs",
+          "crates/opi-coding-agent/src/main.rs",
+          "crates/opi-ai/tests/azure_openai_fixtures.rs",
+          "crates/opi-coding-agent/tests/azure_openai_provider_wiring.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
+      },
       "blocker": null,
       "session_notes": [
         "session 2026-05-26: task 3.2 completed - Azure OpenAI provider with 20 tests (11 fixture + 9 wiring)"
@@ -203,7 +245,7 @@
       "title": "Google Vertex provider",
       "crate": "opi-ai",
       "parent_spec_row": null,
-      "definition_of_done": "resolves vertex:<model>, routes through Gemini adapter with projects/{project}/locations/{location} URL formatting and offline OAuth/service-account token injection tests; registry/model metadata and --list-models include Vertex models; config/provider construction supports project, location, credential precedence, and secret redaction; secret redaction tests assert OAuth tokens and service-account material do not appear in logs, errors, sessions, or snapshots; no fixture or credential test performs live Google Cloud calls; shared reqwest client/proxy configuration from 3.13/3.12 is reused; fixture tests cover text, tool call, usage, provider errors, and error mapping",
+      "definition_of_done": "resolves vertex:<model>, routes through Gemini adapter with projects/{project}/locations/{location} URL formatting and static OAuth access-token injection tests; registry/model metadata and --list-models include Vertex models; config/provider construction supports project, location, static token env resolution, and secret redaction; secret redaction tests assert OAuth tokens do not appear in logs, errors, sessions, or snapshots; no fixture or credential test performs live Google Cloud calls; shared reqwest client/proxy configuration from 3.13/3.12 is reused; fixture tests cover text, tool call, usage, provider errors, and error mapping",
       "definition_source": "inferred",
       "replaces": null,
       "status": "passing",
@@ -284,6 +326,26 @@
         "opi_dod_sha256": "f1659b21224344bd866fb77e4b67d4f7e3caeb32c88c9c99857deb78a1b5cf57",
         "opi_verification": "workspace; fmt clean, clippy 0 warnings, all tests pass, doc 0 warnings",
         "opi_evaluator": "passed (code-reviewer found 1 issue fixed before commit: unnecessary access_token clone into inner GeminiProvider)"
+      },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "codex",
+        "verdict": "pass",
+        "fixes_verified": [
+          "Vertex provider contract is documented as static OAuth access-token env injection, project, and location config",
+          "The previous service-account/ADC expectation was downgraded in docs/opi-spec.md and this ledger",
+          "Existing Vertex URL formatting, Bearer token injection, model metadata, --list-models, proxy, and fixture tests remain in scope"
+        ],
+        "remaining_gaps": [
+          "Service-account JSON parsing and Application Default Credentials token minting remain out of scope for Phase 3."
+        ],
+        "evidence_paths": [
+          "crates/opi-ai/src/vertex.rs",
+          "crates/opi-coding-agent/src/main.rs",
+          "docs/opi-spec.md"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
       },
       "blocker": null,
       "session_notes": [
@@ -389,6 +451,30 @@
         "opi_dod_sha256": "ccf631a72dada4c9bdfc9c0e892bb4270ac0a15d590780567a0459fe8cda61bb",
         "opi_verification": "workspace; fmt clean, clippy 0 warnings, 676 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
+      },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "codex",
+        "verdict": "pass",
+        "fixes_verified": [
+          "ModelInfo and ModelCapabilities now expose supports_images",
+          "agent_loop validates image input against known model capability before provider.stream()",
+          "known text-only model image input returns a local unsupported-capability error without a provider call",
+          "CLI image loading enforces defaults.max_image_bytes before reading the full file",
+          "Mistral and DeepSeek OpenRouter defaults are marked text-only"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-ai/src/provider.rs",
+          "crates/opi-ai/src/registry.rs",
+          "crates/opi-agent/src/lib.rs",
+          "crates/opi-agent/tests/image_capability.rs",
+          "crates/opi-coding-agent/src/image.rs",
+          "crates/opi-coding-agent/src/config.rs",
+          "crates/opi-coding-agent/tests/image_input_cli.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
       },
       "blocker": null,
       "session_notes": [
@@ -501,6 +587,25 @@
         "opi_verification": "workspace; fmt clean, clippy 0 warnings, 697 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
       },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "codex",
+        "verdict": "pass",
+        "fixes_verified": [
+          "Provider request-body text coercion for OutputContent::Image is documented as a provider-protocol limitation in docs/opi-spec.md",
+          "Bedrock image tool-result placeholder now preserves media type as [image: image/jpeg]",
+          "Bedrock fixture test covers image tool-result placeholder media-type preservation",
+          "Session JSONL and JSON mode remain the structured round-trip surfaces for image tool results"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "docs/opi-spec.md",
+          "crates/opi-ai/src/bedrock/mod.rs",
+          "crates/opi-ai/tests/bedrock_fixtures.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
+      },
       "blocker": null,
       "session_notes": [
         "session 2026-05-26: task 3.5 completed and verified"
@@ -610,6 +715,25 @@
         "opi_verification": "workspace; fmt clean, clippy 0 warnings, 730 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
       },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "codex",
+        "verdict": "pass",
+        "fixes_verified": [
+          "Kitty escape now places base64 payload after the semicolon and uses PNG transfer f=100",
+          "encoded JPEG bytes no longer use raw RGB f=24 incorrectly",
+          "Sixel encoder stub now returns fallback until a real encoder exists",
+          "Sixel environment detection falls back while the encoder is unavailable",
+          "terminal image tests cover Kitty payload placement and forced Sixel fallback"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-tui/src/terminal_image.rs",
+          "crates/opi-tui/tests/terminal_image_rendering.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
+      },
       "blocker": null,
       "session_notes": [
         "session 2026-05-26: task 3.6 completed and verified"
@@ -704,6 +828,24 @@
         "opi_dod_sha256": "95006ab87483ac40fdb7a8497404bcc63d3df4429520c9a483387e0e29fd817d",
         "opi_verification": "workspace; fmt clean, clippy 0 warnings, 747 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
+      },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "claude-opus-4.7",
+        "verdict": "pass",
+        "fixes_verified": [
+          "Production harness now wires global config directory into discover_context_files: crates/opi-coding-agent/src/harness.rs:143-165 (new_with_global_config_dir) defaults to crate::config::user_config_dir when not overridden, satisfying DoD 'discover ... from an isolated global config directory'",
+          "All earlier confirmed coverage (cwd-to-ancestor walk, AGENTS.md before CLAUDE.md, OPI.md exclusion per ADR-020, resume reread from session header cwd, MockProvider E2E) remains green",
+          "baseline tests pass at HEAD 7d1fb8c (1009 passed, 0 failed)"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-coding-agent/src/harness.rs",
+          "crates/opi-coding-agent/src/context_files.rs",
+          "crates/opi-coding-agent/tests/agents_md_context.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
       },
       "blocker": null,
       "session_notes": [
@@ -810,6 +952,28 @@
         "opi_verification": "workspace; fmt clean, clippy 0 warnings, 778 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
       },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "claude-opus-4.7",
+        "verdict": "pass",
+        "fixes_verified": [
+          "--tools allowlist, --no-tools, --no-builtin-tools flags wired through crates/opi-coding-agent/src/policy.rs and harness.build_tools",
+          "before_tool_call hook denies mutating tools (write/edit/bash) unless allow_mutating: crates/opi-coding-agent/src/harness.rs InteractiveCodingHooks::before_tool_call",
+          "JSON mode policy events and session audit records covered by behavioral tests (tool_selection.rs, safety_hooks.rs)",
+          "No [permissions] TOML table introduced; MCP/extension confirmation UI explicitly Phase 4 per ADR-019",
+          "baseline tests pass at HEAD 7d1fb8c (1009 passed, 0 failed)"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-coding-agent/src/cli.rs",
+          "crates/opi-coding-agent/src/policy.rs",
+          "crates/opi-coding-agent/src/harness.rs",
+          "crates/opi-coding-agent/tests/tool_selection.rs",
+          "crates/opi-coding-agent/tests/safety_hooks.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
+      },
       "blocker": null,
       "session_notes": [
         "session 2026-05-26: task 3.8 completed and verified"
@@ -902,6 +1066,25 @@
         "opi_verification": "cli-tool; fmt clean, clippy 0 warnings, 803 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
       },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "claude-opus-4.7",
+        "verdict": "pass",
+        "fixes_verified": [
+          "ls truncation accounting fixed: crates/opi-coding-agent/src/tool/ls.rs:123-152 captures total_entries before truncate(), reports omitted = total_entries - max_entries, and details now expose both entry_count (displayed) and total_entries (true total)",
+          "find/ls workspace path validation, gitignore handling, hidden file rules, traversal rejection, deterministic ordering all unchanged from initial implementation",
+          "baseline tests pass at HEAD 7d1fb8c (1009 passed, 0 failed)"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-coding-agent/src/tool/ls.rs",
+          "crates/opi-coding-agent/src/tool/find.rs",
+          "crates/opi-coding-agent/tests/find_tool.rs",
+          "crates/opi-coding-agent/tests/ls_tool.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
+      },
       "blocker": null,
       "session_notes": [
         "session 2026-05-26: task 3.9 completed - find/ls built-in tools with 25 tests"
@@ -978,6 +1161,25 @@
         "opi_dod_sha256": "b19505ff15faeea80c9bf4770af3f1e42a6c1d99045f5a1ca614f2dba46acb4f",
         "opi_verification": "cli-runtime; fmt clean, clippy 0 warnings, 811 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
+      },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "claude-opus-4.7",
+        "verdict": "pass",
+        "fixes_verified": [
+          "--generate-completion bash|zsh|fish|powershell|elvish wired via clap_complete: crates/opi-coding-agent/src/cli.rs:70-72, main.rs:18-23 (early-exit before config/provider construction)",
+          "subprocess tests assert non-empty output and exit code 0 across all five shells",
+          "no regressions introduced by hardening pass",
+          "baseline tests pass at HEAD 7d1fb8c (1009 passed, 0 failed)"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-coding-agent/src/cli.rs",
+          "crates/opi-coding-agent/src/main.rs",
+          "crates/opi-coding-agent/tests/shell_completions.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
       },
       "blocker": null,
       "session_notes": [
@@ -1068,6 +1270,27 @@
         "opi_dod_sha256": "2992295744acba4ed5af9d45f972d76395f2dd1b7fb816257ce915ac14adbb81",
         "opi_verification": "workspace; fmt clean, clippy 0 warnings, 859 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
+      },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "codex",
+        "verdict": "pass",
+        "fixes_verified": [
+          "interactive.rs now owns picker overlay state and routes key events through SelectListState",
+          "/model opens model picker from active provider model metadata and switches the Agent model on confirmation",
+          "/session opens session picker from session listing and resumes the selected session into the current harness",
+          "Shell renders SelectList as an overlay, and unit tests cover picker confirmation routing"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-coding-agent/src/interactive.rs",
+          "crates/opi-coding-agent/src/harness.rs",
+          "crates/opi-coding-agent/src/picker.rs",
+          "crates/opi-tui/src/render.rs",
+          "crates/opi-tui/src/select_list.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
       },
       "blocker": null,
       "session_notes": [
@@ -1161,6 +1384,26 @@
         "opi_verification": "workspace; fmt clean, clippy 0 warnings, 903 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
       },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "claude-opus-4.7",
+        "verdict": "pass",
+        "fixes_verified": [
+          "build_provider now feeds [providers.*.proxy] (or env proxy fallback) into all 9 provider factories via build_http_client(proxy.as_ref()): crates/opi-coding-agent/src/main.rs:334 (anthropic), :345 (openai), :361 (openrouter), :403 (mistral), :417 (openai-responses), :428 (gemini), :477 (bedrock), :508 (azure), :539 (vertex)",
+          "Earlier HTTP_PROXY/HTTPS_PROXY/NO_PROXY env handling, config struct, redaction utility, no-live-network tests all unchanged",
+          "baseline tests pass at HEAD 7d1fb8c (1009 passed, 0 failed)"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-coding-agent/src/main.rs",
+          "crates/opi-coding-agent/src/config.rs",
+          "crates/opi-ai/src/http.rs",
+          "crates/opi-ai/tests/proxy_support.rs",
+          "crates/opi-coding-agent/tests/proxy_config.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
+      },
       "blocker": null,
       "session_notes": [
         "session 2026-05-26: task 3.12 completed - proxy support with 35 tests"
@@ -1237,6 +1480,24 @@
         "opi_dod_sha256": "7633159dfb189e74c3e8b3e4f58df7acd1a1512dc2ea0f001f3db6de3ff7188b",
         "opi_verification": "library; fmt clean, clippy 0 warnings, 868 tests pass, doc 0 warnings",
         "opi_evaluator": "not-required"
+      },
+      "secondary_review": {
+        "reviewed_at": "2026-05-28",
+        "reviewer": "claude-opus-4.7",
+        "verdict": "pass",
+        "fixes_verified": [
+          "Shared HttpClient with pool_max_idle_per_host and pool_idle_timeout still in place; HttpClientBuilder abstraction unchanged",
+          "Arc-based reuse path remains the construction primitive used by every provider factory (see task 3.12 secondary_review for the proxy/wiring confirmation)",
+          "No regressions from the hardening pass",
+          "baseline tests pass at HEAD 7d1fb8c (1009 passed, 0 failed)"
+        ],
+        "remaining_gaps": [],
+        "evidence_paths": [
+          "crates/opi-ai/src/http.rs",
+          "crates/opi-ai/tests/connection_pooling.rs"
+        ],
+        "needs_recheck": false,
+        "recheck_trigger": null
       },
       "blocker": null,
       "session_notes": [
@@ -1465,6 +1726,93 @@
           "title": "session contract tests",
           "status": "passing",
           "verified_at_commit": "43a64dcfba38d05996d51c078da0e7c31a19fec7"
+        }
+      ],
+      "audit_notes": []
+    },
+    "3": {
+      "completed_at": "2026-05-28T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 13 Phase 3 tasks passing. 1009+ tests green. All cross-cutting gates pass: fmt, clippy, doc. Secondary reviews by codex and claude-opus-4.7 confirm task correctness. Audit fixes for terminal image protocols, session picker safety, and JSON escaping applied.",
+      "snapshot_path": "docs/snapshots/phase3/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "3.1",
+          "title": "AWS Bedrock provider",
+          "status": "passing",
+          "verified_at_commit": "99b263d"
+        },
+        {
+          "id": "3.2",
+          "title": "Azure OpenAI provider",
+          "status": "passing",
+          "verified_at_commit": "5d43811"
+        },
+        {
+          "id": "3.3",
+          "title": "Google Vertex provider",
+          "status": "passing",
+          "verified_at_commit": "e079e33"
+        },
+        {
+          "id": "3.4",
+          "title": "image input",
+          "status": "passing",
+          "verified_at_commit": "bba5bbb"
+        },
+        {
+          "id": "3.5",
+          "title": "image tool results",
+          "status": "passing",
+          "verified_at_commit": "bcff45f"
+        },
+        {
+          "id": "3.6",
+          "title": "terminal image rendering",
+          "status": "passing",
+          "verified_at_commit": "44a8091"
+        },
+        {
+          "id": "3.7",
+          "title": "AGENTS.md / CLAUDE.md context loading",
+          "status": "passing",
+          "verified_at_commit": "823bd2b"
+        },
+        {
+          "id": "3.8",
+          "title": "pi-style tool selection and safety hooks",
+          "status": "passing",
+          "verified_at_commit": "f2a8a37"
+        },
+        {
+          "id": "3.9",
+          "title": "find / ls built-in tool parity",
+          "status": "passing",
+          "verified_at_commit": "5996fd7"
+        },
+        {
+          "id": "3.10",
+          "title": "shell completions",
+          "status": "passing",
+          "verified_at_commit": "d6442d6"
+        },
+        {
+          "id": "3.11",
+          "title": "fuzzy model/session picker",
+          "status": "passing",
+          "verified_at_commit": "82b10d6"
+        },
+        {
+          "id": "3.12",
+          "title": "proxy support",
+          "status": "passing",
+          "verified_at_commit": "444db3d"
+        },
+        {
+          "id": "3.13",
+          "title": "connection pooling tuning",
+          "status": "passing",
+          "verified_at_commit": "b6d1dc9"
         }
       ],
       "audit_notes": []
