@@ -40,6 +40,8 @@ pub struct CodingHarness {
     session: Option<SessionCoordinator>,
     /// Message count before the current turn — used to slice only new messages for persistence.
     turn_offset: usize,
+    /// Images queued from --image CLI flag, injected into the first prompt.
+    pending_images: Vec<opi_ai::message::InputContent>,
 }
 
 impl CodingHarness {
@@ -120,13 +122,49 @@ impl CodingHarness {
         resume: Option<ResumeInfo>,
         tool_selection: ToolSelection,
     ) -> Self {
+        Self::new_with_global_config_dir(
+            provider,
+            model,
+            config,
+            workspace_root,
+            hooks,
+            user_system_prompt,
+            initial_messages,
+            resume,
+            tool_selection,
+            None,
+        )
+    }
+
+    /// Create a new harness with an explicit global config directory override.
+    ///
+    /// When `global_config_dir` is `None`, uses the platform default from
+    /// [`crate::config::user_config_dir`]. Pass `Some(path)` in tests to
+    /// isolate global context file discovery from the real user config dir.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_global_config_dir(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        hooks: Box<dyn AgentHooks>,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        resume: Option<ResumeInfo>,
+        tool_selection: ToolSelection,
+        global_config_dir: Option<PathBuf>,
+    ) -> Self {
         let tools = Self::build_tools(&workspace_root, &tool_selection);
         let tool_defs: Vec<_> = tools.iter().map(|t| t.definition()).collect();
         let mut builder = SystemPromptBuilder::new().tools(tool_defs);
         if let Some(content) = user_system_prompt {
             builder = builder.user_system(content);
         }
-        let context = context_files::discover_context_files(&workspace_root, None);
+        let resolved_global_dir = global_config_dir.unwrap_or_else(crate::config::user_config_dir);
+        let context = context_files::discover_context_files(
+            &workspace_root,
+            Some(resolved_global_dir.as_path()),
+        );
         if !context.content.is_empty() {
             builder = builder.context_files(context.content);
         }
@@ -197,6 +235,7 @@ impl CodingHarness {
             system_prompt,
             session,
             turn_offset: initial_len,
+            pending_images: Vec::new(),
         }
     }
 
@@ -205,10 +244,71 @@ impl CodingHarness {
         self.agent.add_tool(tool);
     }
 
+    /// Queue images to be injected into the next prompt.
+    pub fn queue_images(&mut self, images: Vec<opi_ai::message::InputContent>) {
+        self.pending_images.extend(images);
+    }
+
+    /// Take and clear queued images.
+    pub fn take_pending_images(&mut self) -> Vec<opi_ai::message::InputContent> {
+        std::mem::take(&mut self.pending_images)
+    }
+
+    /// Return model picker items from the active provider.
+    pub fn model_picker_items(&self) -> Vec<opi_tui::SelectItem> {
+        crate::picker::model_picker_items_from_provider(self.agent.provider())
+    }
+
+    /// Change the model used by subsequent prompts.
+    pub fn set_model(&mut self, model: String) {
+        self.agent.set_model(model);
+    }
+
+    /// Resume an existing session by ID into this harness.
+    pub fn resume_session_id(&mut self, session_id: &str) -> Result<usize, String> {
+        let dir = crate::session_cli::session_dir();
+        let session =
+            crate::session_cli::resume_session(&dir, session_id).map_err(|e| e.to_string())?;
+        let messages = crate::session_cli::reconstruct_context(&session.entries);
+        let message_count = messages.len();
+        self.agent.replace_messages(messages);
+
+        let compaction_config = opi_agent::compaction::CompactionConfig {
+            enabled: self.config.compaction.enabled,
+            threshold_tokens: self.config.compaction.threshold_tokens,
+        };
+        self.session = SessionCoordinator::open_existing(
+            session.path,
+            session.header.id,
+            &session.entries,
+            message_count,
+            compaction_config,
+            self.agent.model().to_string(),
+        )
+        .ok();
+        self.turn_offset = message_count;
+        Ok(message_count)
+    }
+
     /// Send a user prompt and run the agent loop.
     pub async fn prompt(&mut self, text: &str) -> Result<Vec<AgentMessage>, AgentError> {
         let offset = self.turn_offset;
         let messages = self.agent.prompt(text).await?;
+        let new = &messages[offset..];
+        self.persist_turn(new, offset);
+        let final_messages = self.current_messages();
+        self.turn_offset = final_messages.len();
+        Ok(final_messages)
+    }
+
+    /// Send a user message with arbitrary content (text + images) and run the
+    /// agent loop.
+    pub async fn prompt_with_content(
+        &mut self,
+        content: Vec<opi_ai::message::InputContent>,
+    ) -> Result<Vec<AgentMessage>, AgentError> {
+        let offset = self.turn_offset;
+        let messages = self.agent.prompt_with_content(content).await?;
         let new = &messages[offset..];
         self.persist_turn(new, offset);
         let final_messages = self.current_messages();

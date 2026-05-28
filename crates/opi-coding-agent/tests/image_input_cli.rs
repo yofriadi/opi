@@ -140,3 +140,163 @@ fn load_image_unsupported_extension_returns_error() {
     let result = opi_coding_agent::image::load_image(&file_path);
     assert!(result.is_err());
 }
+
+#[test]
+fn load_image_rejects_file_above_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("oversized.png");
+    std::fs::write(&file_path, vec![0u8; 16]).unwrap();
+
+    let result = opi_coding_agent::image::load_image_with_limit(&file_path, 8);
+
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("max_image_bytes"), "unexpected error: {err}");
+}
+
+// --- prompt_with_content integration tests ---
+
+use opi_agent::hooks::AgentHooks;
+use opi_agent::loop_types::AgentError;
+use opi_agent::message::AgentMessage;
+use opi_ai::message::Message;
+use opi_ai::test_support::MockProvider;
+
+struct TestHooks;
+
+impl AgentHooks for TestHooks {
+    fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
+        let mut result = Vec::new();
+        for msg in messages {
+            if let AgentMessage::Llm(m) = msg {
+                result.push(m.clone());
+            }
+        }
+        Ok(result)
+    }
+}
+
+fn make_mock_provider() -> MockProvider {
+    MockProvider::new(
+        "test-mock",
+        vec![opi_ai::test_support::text_response("I see the image.")],
+    )
+}
+
+#[test]
+fn pending_images_injected_into_first_prompt() {
+    use opi_coding_agent::config::OpiConfig;
+    use opi_coding_agent::harness::CodingHarness;
+
+    let provider = Box::new(MockProvider::new(
+        "test-mock",
+        vec![opi_ai::test_support::text_response("ok")],
+    ));
+    let config = OpiConfig::default();
+    let mut harness = CodingHarness::new(
+        provider,
+        "mock:test".into(),
+        config,
+        std::env::current_dir().unwrap(),
+    );
+
+    // Queue a synthetic image content.
+    let fake_image = InputContent::Text { text: "[fake image]".into() };
+    harness.queue_images(vec![fake_image]);
+
+    let pending = harness.take_pending_images();
+    assert_eq!(pending.len(), 1);
+    assert!(harness.take_pending_images().is_empty(), "images should be cleared after take");
+}
+
+#[tokio::test]
+async fn prompt_with_content_sends_image_to_provider() {
+    let provider = make_mock_provider();
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("test.png");
+    let png_header = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A];
+    std::fs::write(&file_path, &png_header).unwrap();
+
+    let image_content = opi_coding_agent::image::load_image(&file_path).unwrap();
+    let content = vec![
+        InputContent::Text {
+            text: "Describe this image".into(),
+        },
+        image_content,
+    ];
+
+    let mut agent = opi_agent::Agent::new(
+        Box::new(provider),
+        vec![],
+        "test:model".into(),
+        None,
+        Default::default(),
+        Box::new(TestHooks),
+    );
+
+    let messages = agent.prompt_with_content(content).await.unwrap();
+
+    // The first message should be a UserMessage with image content
+    let first = &messages[0];
+    if let AgentMessage::Llm(Message::User(user_msg)) = first {
+        assert!(
+            user_msg
+                .content
+                .iter()
+                .any(|c| matches!(c, InputContent::Image { .. })),
+            "user message should contain an image"
+        );
+        assert!(
+            user_msg
+                .content
+                .iter()
+                .any(|c| matches!(c, InputContent::Text { .. })),
+            "user message should contain text"
+        );
+    } else {
+        panic!("expected user message, got: {first:?}");
+    }
+}
+
+#[tokio::test]
+async fn harness_prompt_with_content_sends_image() {
+    use opi_coding_agent::config::OpiConfig;
+    use opi_coding_agent::harness::CodingHarness;
+
+    let provider = make_mock_provider();
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("photo.jpg");
+    let jpg_data = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    std::fs::write(&file_path, &jpg_data).unwrap();
+
+    let image_content = opi_coding_agent::image::load_image(&file_path).unwrap();
+    let content = vec![
+        InputContent::Text {
+            text: "What is in this image?".into(),
+        },
+        image_content,
+    ];
+
+    let mut harness = CodingHarness::new(
+        Box::new(provider),
+        "test:model".into(),
+        OpiConfig::default(),
+        dir.path().to_path_buf(),
+    );
+
+    let messages = harness.prompt_with_content(content).await.unwrap();
+
+    let first = &messages[0];
+    if let AgentMessage::Llm(Message::User(user_msg)) = first {
+        let has_image = user_msg
+            .content
+            .iter()
+            .any(|c| matches!(c, InputContent::Image { .. }));
+        assert!(
+            has_image,
+            "harness should pass image content through to agent"
+        );
+    } else {
+        panic!("expected user message, got: {first:?}");
+    }
+}

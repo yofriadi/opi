@@ -285,6 +285,26 @@ async fn run_interactive(
         tool_selection,
     );
 
+    let mut harness = harness;
+
+    // Load --image files for the first interactive prompt.
+    if !cli.image.is_empty() {
+        let mut images = Vec::new();
+        for image_path in &cli.image {
+            match opi_coding_agent::image::load_image_with_limit(
+                image_path,
+                config.defaults.max_image_bytes,
+            ) {
+                Ok(img) => images.push(img),
+                Err(e) => {
+                    eprintln!("opi: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        harness.queue_images(images);
+    }
+
     let model_display = config.defaults.model.clone();
     let theme_name = config.defaults.theme.clone();
     let keybindings = parse_keybindings(&config.keybindings);

@@ -22,8 +22,8 @@ use opi_tui::terminal_image::{
     CapabilitySource, TerminalGraphicsProtocol, detect_graphics_protocol,
 };
 use opi_tui::{
-    AppState, Key, KeyCombo, Keybindings, Message as TuiMessage, Role as TuiRole, Shell, Theme,
-    ToolCallStatus, resolve_theme,
+    AppState, Key, KeyCombo, Keybindings, Message as TuiMessage, Role as TuiRole, SelectListState,
+    Shell, Theme, ToolCallStatus, resolve_theme,
 };
 use opi_tui::{ImageData, ImagePayload, MediaType as TuiMediaType};
 
@@ -44,6 +44,27 @@ struct TuiState {
     total_tokens: u64,
     cost_usd: Option<f64>,
     graphics_protocol: TerminalGraphicsProtocol,
+    picker: Option<PickerOverlay>,
+}
+
+#[derive(Clone)]
+struct PickerOverlay {
+    kind: PickerKind,
+    title: String,
+    state: SelectListState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickerKind {
+    Model,
+    Session,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PickerAction {
+    SelectModel(String),
+    SelectSession(String),
+    Cancel,
 }
 
 pub async fn run_interactive_tui(
@@ -74,6 +95,7 @@ pub async fn run_interactive_tui(
         total_tokens: 0,
         cost_usd: None,
         graphics_protocol,
+        picker: None,
     }));
 
     // Wire agent events into shared state before wrapping harness
@@ -352,6 +374,43 @@ async fn tui_event_loop(
                 continue;
             }
             let kb = state.lock().unwrap().keybindings.clone();
+            if let Some(action) = {
+                let mut s = state.lock().unwrap();
+                handle_picker_key(&mut s, key.code)
+            } {
+                match action {
+                    PickerAction::SelectModel(model) => {
+                        let mut h = harness.lock().await;
+                        h.set_model(model.clone());
+                        let mut s = state.lock().unwrap();
+                        s.model = model.clone();
+                        s.messages.push(TuiMessage::new(
+                            TuiRole::System,
+                            format!("[model switched: {model}]"),
+                        ));
+                    }
+                    PickerAction::SelectSession(session_id) => {
+                        let result = {
+                            let mut h = harness.lock().await;
+                            h.resume_session_id(&session_id)
+                        };
+                        let mut s = state.lock().unwrap();
+                        match result {
+                            Ok(count) => s.messages.push(TuiMessage::new(
+                                TuiRole::System,
+                                format!("[session resumed: {session_id}, {count} messages]"),
+                            )),
+                            Err(e) => s.messages.push(TuiMessage::new(
+                                TuiRole::System,
+                                format!("[session resume failed: {e}]"),
+                            )),
+                        }
+                    }
+                    PickerAction::Cancel => {}
+                }
+                continue;
+            }
+
             if matches_key_combo(key.code, key.modifiers, &kb.submit) {
                 // Ignore submit while agent is running
                 if pending.is_some() {
@@ -377,6 +436,46 @@ async fn tui_event_loop(
                     continue;
                 }
 
+                if input == "/model" {
+                    let items = {
+                        let h = harness.lock().await;
+                        h.model_picker_items()
+                    };
+                    let mut s = state.lock().unwrap();
+                    if items.is_empty() {
+                        s.messages.push(TuiMessage::new(
+                            TuiRole::System,
+                            "[model picker: no models available]",
+                        ));
+                    } else {
+                        s.picker = Some(PickerOverlay {
+                            kind: PickerKind::Model,
+                            title: "Select model".into(),
+                            state: SelectListState::new(items),
+                        });
+                    }
+                    continue;
+                }
+
+                if input == "/session" {
+                    let dir = crate::session_cli::session_dir();
+                    let items = crate::picker::session_picker_items(&dir).unwrap_or_default();
+                    let mut s = state.lock().unwrap();
+                    if items.is_empty() {
+                        s.messages.push(TuiMessage::new(
+                            TuiRole::System,
+                            "[session picker: no sessions available]",
+                        ));
+                    } else {
+                        s.picker = Some(PickerOverlay {
+                            kind: PickerKind::Session,
+                            title: "Resume session".into(),
+                            state: SelectListState::new(items),
+                        });
+                    }
+                    continue;
+                }
+
                 // Add user message to display
                 {
                     let mut s = state.lock().unwrap();
@@ -389,7 +488,16 @@ async fn tui_event_loop(
                 let h = harness.clone();
                 let handle = tokio::spawn(async move {
                     let mut h = h.lock().await;
-                    h.prompt(&input).await
+                    let pending = h.take_pending_images();
+                    if pending.is_empty() {
+                        h.prompt(&input).await
+                    } else {
+                        let mut content = vec![opi_ai::message::InputContent::Text {
+                            text: input,
+                        }];
+                        content.extend(pending);
+                        h.prompt_with_content(content).await
+                    }
                 });
                 pending = Some(handle);
             } else if matches_key_combo(key.code, key.modifiers, &kb.abort) {
@@ -439,7 +547,60 @@ fn build_shell(s: &TuiState) -> Shell {
         shell = shell.active_tool(name.clone(), args.clone(), status.clone());
     }
 
+    if let Some(picker) = &s.picker {
+        shell = shell.picker(picker.title.clone(), picker.state.clone());
+    }
+
     shell
+}
+
+fn handle_picker_key(s: &mut TuiState, code: KeyCode) -> Option<PickerAction> {
+    let picker = s.picker.as_mut()?;
+    match code {
+        KeyCode::Esc => {
+            s.picker = None;
+            Some(PickerAction::Cancel)
+        }
+        KeyCode::Enter => {
+            let item = picker.state.confirm().cloned();
+            let kind = picker.kind;
+            s.picker = None;
+            match (kind, item) {
+                (PickerKind::Model, Some(item)) => Some(PickerAction::SelectModel(item.id)),
+                (PickerKind::Session, Some(item)) => Some(PickerAction::SelectSession(item.id)),
+                (_, None) => Some(PickerAction::Cancel),
+            }
+        }
+        KeyCode::Down => {
+            picker.state.move_down();
+            None
+        }
+        KeyCode::Up => {
+            picker.state.move_up();
+            None
+        }
+        KeyCode::PageDown => {
+            picker.state.page_down(10);
+            None
+        }
+        KeyCode::PageUp => {
+            picker.state.page_up(10);
+            None
+        }
+        KeyCode::Backspace => {
+            let mut filter = picker.state.filter().to_string();
+            filter.pop();
+            picker.state.set_filter(filter);
+            None
+        }
+        KeyCode::Char(c) => {
+            let mut filter = picker.state.filter().to_string();
+            filter.push(c);
+            picker.state.set_filter(filter);
+            None
+        }
+        _ => None,
+    }
 }
 
 fn matches_key_combo(code: KeyCode, modifiers: KeyModifiers, combo: &KeyCombo) -> bool {
@@ -457,4 +618,51 @@ fn matches_key_combo(code: KeyCode, modifiers: KeyModifiers, combo: &KeyCombo) -
     combo.modifiers.alt == modifiers.contains(KeyModifiers::ALT)
         && combo.modifiers.ctrl == modifiers.contains(KeyModifiers::CONTROL)
         && combo.modifiers.shift == modifiers.contains(KeyModifiers::SHIFT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opi_tui::SelectItem;
+
+    fn state_with_picker(kind: PickerKind) -> TuiState {
+        TuiState {
+            messages: Vec::new(),
+            input_text: String::new(),
+            app_state: AppState::Idle,
+            model: "mock:old".into(),
+            active_tool: None,
+            streaming_started: false,
+            theme: Theme::default(),
+            keybindings: Keybindings::default(),
+            total_tokens: 0,
+            cost_usd: None,
+            graphics_protocol: TerminalGraphicsProtocol::Fallback,
+            picker: Some(PickerOverlay {
+                kind,
+                title: "Pick".into(),
+                state: SelectListState::new(vec![SelectItem {
+                    id: "mock:new".into(),
+                    display: "New".into(),
+                    metadata: "mock".into(),
+                }]),
+            }),
+        }
+    }
+
+    #[test]
+    fn model_picker_enter_returns_selected_model() {
+        let mut state = state_with_picker(PickerKind::Model);
+        let action = handle_picker_key(&mut state, KeyCode::Enter);
+        assert_eq!(action, Some(PickerAction::SelectModel("mock:new".into())));
+        assert!(state.picker.is_none());
+    }
+
+    #[test]
+    fn session_picker_enter_returns_selected_session() {
+        let mut state = state_with_picker(PickerKind::Session);
+        let action = handle_picker_key(&mut state, KeyCode::Enter);
+        assert_eq!(action, Some(PickerAction::SelectSession("mock:new".into())));
+        assert!(state.picker.is_none());
+    }
 }
