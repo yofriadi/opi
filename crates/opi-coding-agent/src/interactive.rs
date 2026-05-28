@@ -476,6 +476,41 @@ async fn tui_event_loop(
                     continue;
                 }
 
+                if let Some(rest) = input.strip_prefix("/image ") {
+                    let path = rest.trim();
+                    if path.is_empty() {
+                        let mut s = state.lock().unwrap();
+                        s.messages.push(TuiMessage::new(
+                            TuiRole::System,
+                            "[/image: usage: /image <path>]".to_string(),
+                        ));
+                    } else {
+                        let image_path = std::path::PathBuf::from(path);
+                        let max_bytes = {
+                            let h = harness.lock().await;
+                            h.config().defaults.max_image_bytes
+                        };
+                        match crate::image::load_image_with_limit(&image_path, max_bytes) {
+                            Ok(img) => {
+                                harness.lock().await.queue_images(vec![img]);
+                                let mut s = state.lock().unwrap();
+                                s.messages.push(TuiMessage::new(
+                                    TuiRole::System,
+                                    format!("[image queued: {}]", image_path.display()),
+                                ));
+                            }
+                            Err(e) => {
+                                let mut s = state.lock().unwrap();
+                                s.messages.push(TuiMessage::new(
+                                    TuiRole::System,
+                                    format!("[/image error: {e}]"),
+                                ));
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 // Add user message to display
                 {
                     let mut s = state.lock().unwrap();
