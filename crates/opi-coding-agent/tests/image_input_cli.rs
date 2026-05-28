@@ -201,12 +201,17 @@ fn pending_images_injected_into_first_prompt() {
     );
 
     // Queue a synthetic image content.
-    let fake_image = InputContent::Text { text: "[fake image]".into() };
+    let fake_image = InputContent::Text {
+        text: "[fake image]".into(),
+    };
     harness.queue_images(vec![fake_image]);
 
     let pending = harness.take_pending_images();
     assert_eq!(pending.len(), 1);
-    assert!(harness.take_pending_images().is_empty(), "images should be cleared after take");
+    assert!(
+        harness.take_pending_images().is_empty(),
+        "images should be cleared after take"
+    );
 }
 
 #[tokio::test]

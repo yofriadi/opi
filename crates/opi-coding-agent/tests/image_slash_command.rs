@@ -2,8 +2,8 @@
 
 use opi_ai::message::InputContent;
 use opi_ai::test_support::{MockProvider, text_response};
-use opi_coding_agent::harness::CodingHarness;
 use opi_coding_agent::config::OpiConfig;
+use opi_coding_agent::harness::CodingHarness;
 
 #[test]
 fn image_slash_command_queues_for_next_prompt() {
@@ -39,7 +39,8 @@ fn image_slash_command_queues_for_next_prompt() {
     let img = opi_coding_agent::image::load_image_with_limit(
         &png_path,
         opi_coding_agent::image::DEFAULT_MAX_IMAGE_BYTES,
-    ).unwrap();
+    )
+    .unwrap();
     harness.queue_images(vec![img]);
 
     let pending = harness.take_pending_images();

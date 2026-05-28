@@ -527,9 +527,7 @@ async fn tui_event_loop(
                     if pending.is_empty() {
                         h.prompt(&input).await
                     } else {
-                        let mut content = vec![opi_ai::message::InputContent::Text {
-                            text: input,
-                        }];
+                        let mut content = vec![opi_ai::message::InputContent::Text { text: input }];
                         content.extend(pending);
                         h.prompt_with_content(content).await
                     }

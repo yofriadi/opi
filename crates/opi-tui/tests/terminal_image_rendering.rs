@@ -85,13 +85,24 @@ fn iterm_escape_base64_payload() {
     );
     // The colon separates key-value params from base64 payload per iTerm2 spec.
     let without_prefix = escape.strip_prefix("\x1b]1337;File=").unwrap();
-    let colon_pos = without_prefix.find(':').expect("params and base64 must be separated by ':'");
+    let colon_pos = without_prefix
+        .find(':')
+        .expect("params and base64 must be separated by ':'");
     let (params, rest) = without_prefix.split_at(colon_pos);
     assert!(params.contains("inline=1"), "must contain inline=1");
-    assert!(!params.contains(':'), "params must use ';' not ':' between key-value pairs");
+    assert!(
+        !params.contains(':'),
+        "params must use ';' not ':' between key-value pairs"
+    );
     let base64_and_bel = &rest[1..]; // skip the ':'
-    assert!(base64_and_bel.ends_with("\x07"), "iTerm2 escape must end with BEL");
-    assert!(!base64_and_bel.contains(';'), "base64 payload must come after ':' separator, not ';'");
+    assert!(
+        base64_and_bel.ends_with("\x07"),
+        "iTerm2 escape must end with BEL"
+    );
+    assert!(
+        !base64_and_bel.contains(';'),
+        "base64 payload must come after ':' separator, not ';'"
+    );
 }
 
 #[test]

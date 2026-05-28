@@ -6,7 +6,14 @@ use std::process::Command;
 #[test]
 fn list_models_json_output_is_valid_json() {
     let output = Command::new("cargo")
-        .args(["run", "-p", "opi-coding-agent", "--", "--list-models", "--json"])
+        .args([
+            "run",
+            "-p",
+            "opi-coding-agent",
+            "--",
+            "--list-models",
+            "--json",
+        ])
         .output()
         .expect("failed to run opi");
     let stdout = String::from_utf8_lossy(&output.stdout);
