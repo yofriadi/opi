@@ -15,15 +15,25 @@ pub fn model_picker_items(registry: &opi_ai::registry::ProviderRegistry) -> Vec<
         let Some(provider) = registry.get_provider(provider_id) else {
             continue;
         };
-        for model in provider.models() {
-            items.push(SelectItem {
-                id: format!("{provider_id}:{}", model.id),
-                display: model.display_name.clone(),
-                metadata: provider_id.to_string(),
-            });
-        }
+        items.extend(model_picker_items_from_provider(provider));
     }
     items
+}
+
+/// Collect SelectItem entries from one provider's advertised model list.
+pub fn model_picker_items_from_provider(
+    provider: &dyn opi_ai::provider::Provider,
+) -> Vec<SelectItem> {
+    let provider_id = provider.id();
+    provider
+        .models()
+        .iter()
+        .map(|model| SelectItem {
+            id: format!("{provider_id}:{}", model.id),
+            display: model.display_name.clone(),
+            metadata: provider_id.to_string(),
+        })
+        .collect()
 }
 
 /// Collect SelectItem entries from session listing in the given directory.
@@ -36,7 +46,8 @@ pub fn session_picker_items(dir: &Path) -> Result<Vec<SelectItem>, std::io::Erro
         .into_iter()
         .map(|s| {
             let cwd_short = if s.cwd.len() > 40 {
-                format!("...{}", &s.cwd[s.cwd.len() - 37..])
+                let start = s.cwd.floor_char_boundary(s.cwd.len() - 37);
+                format!("...{}", &s.cwd[start..])
             } else {
                 s.cwd
             };

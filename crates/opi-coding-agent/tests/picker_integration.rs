@@ -51,6 +51,7 @@ fn sample_registry() -> opi_ai::registry::ProviderRegistry {
             display_name: "Claude Sonnet 4.5".into(),
             context_window: 200000,
             max_output_tokens: 8192,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: true,
         },
@@ -59,6 +60,7 @@ fn sample_registry() -> opi_ai::registry::ProviderRegistry {
             display_name: "Claude Opus 4".into(),
             context_window: 200000,
             max_output_tokens: 8192,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: true,
         },
@@ -99,6 +101,7 @@ fn model_picker_multiple_providers() {
             display_name: "Claude Sonnet 4.5".into(),
             context_window: 200000,
             max_output_tokens: 8192,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: true,
         }],
@@ -110,6 +113,7 @@ fn model_picker_multiple_providers() {
             display_name: "GPT-4o".into(),
             context_window: 128000,
             max_output_tokens: 4096,
+            supports_images: true,
             supports_streaming: true,
             supports_thinking: false,
         }],
@@ -214,6 +218,19 @@ fn session_picker_long_cwd_is_truncated() {
     assert_eq!(items.len(), 1);
     assert!(items[0].display.starts_with("..."));
     assert!(items[0].display.len() <= 40);
+}
+
+#[test]
+fn session_picker_multibyte_cwd_does_not_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    // CJK characters: each is 3 bytes in UTF-8. 20 chars = 60 bytes.
+    let cjk_cwd = "/home/\u{4f60}\u{597d}\u{4e16}\u{754c}\u{6587}\u{4ef6}\u{76ee}\u{5f55}\u{8def}\u{5f84}\u{6d4b}\u{8bd5}\u{6570}\u{636e}\u{9879}\u{76ee}\u{5de5}\u{7a0b}\u{4ee3}\u{7801}/end";
+    create_test_session(dir.path(), "sess-cjk", "2026-05-26T10:00:00Z", cjk_cwd);
+
+    let items = picker::session_picker_items(dir.path()).unwrap();
+    assert_eq!(items.len(), 1);
+    // Should not panic, and display should be valid UTF-8.
+    assert!(items[0].display.starts_with("...") || items[0].display.len() <= 40);
 }
 
 // ---------------------------------------------------------------------------
