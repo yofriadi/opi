@@ -7,25 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-02
+
+Phase 3: cloud provider expansion (Vertex AI, Azure OpenAI, Bedrock), image
+support across the stack, new built-in tools (find, ls), fuzzy picker, terminal
+image rendering, shell completions, and proxy support.
+
 ### Added
 
 - `opi-ai`: AWS Bedrock provider with SigV4 signing and credential resolution
 - `opi-ai`: Azure OpenAI provider with deployment URL and api-key auth
 - `opi-ai`: Google Vertex AI provider with OAuth Bearer auth
 - `opi-ai`: HTTP/HTTPS proxy support with env-var and per-provider config
+- `opi-ai`: image input support for multimodal prompts
+- `opi-ai`: shared HttpClient with connection pooling
+- `opi-agent`: image tool result support for visual tool output
+- `opi-agent`: `prompt_with_content` method for arbitrary content (text + images)
 - `opi-coding-agent`: `--list-models` flag to list available models (table or NDJSON)
 - `opi-coding-agent`: `--image` flag for non-interactive image attachment
-- `opi-agent`: `prompt_with_content` method for arbitrary content (text + images)
+- `opi-coding-agent`: `/image` slash command for TUI image attachment
+- `opi-coding-agent`: `find` built-in tool for file search
+- `opi-coding-agent`: `ls` built-in tool for directory listing with metadata
+- `opi-coding-agent`: shell completion generation for bash, zsh, fish, powershell, elvish
+- `opi-coding-agent`: pi-style tool selection and safety hooks
+- `opi-coding-agent`: AGENTS.md / CLAUDE.md context file loading
 - `opi-coding-agent`: global context file discovery from user config directory
 - `opi-coding-agent`: proxy wiring to all provider factory paths
+- `opi-coding-agent`: enhanced tool management and path resolution
+- `opi-tui`: fuzzy model/session picker with SelectList widget
+- `opi-tui`: terminal image rendering with protocol detection (kitty, sixel, iTerm2)
+
+### Performance
+
+- `opi-ai`: shared HttpClient with connection pooling reduces TLS handshake overhead
 
 ### Fixed
 
 - `opi-ai`: Bedrock error mapping now parses Retry-After header for 429 responses
 - `opi-ai`: Azure OpenAI endpoint validation -- missing endpoint returns config error
 - `opi-ai`: Bedrock URL-sourced images rejected with clear unsupported-error message
-- `opi-coding-agent`: ls tool truncation count now correctly reports omitted entries
 - `opi-agent`: compaction summary includes image content placeholders
+- `opi-coding-agent`: ls tool truncation count now correctly reports omitted entries
+- `opi-coding-agent`: session picker sorted newest-first to avoid filesystem ordering flakes
+- `opi-coding-agent`: char-aware truncation in session picker to avoid non-ASCII panic
+- `opi-coding-agent`: `--list-models --json` uses serde_json for properly escaped output
+- `opi-coding-agent`: `--image` files passed through to interactive mode first prompt
+- `opi-coding-agent`: session files excluded from crate package
+- `opi-tui`: terminal image protocol hardening
 
 ## [0.3.0] - 2026-05-25
 
@@ -154,6 +182,7 @@ boundaries; functional implementations land in subsequent releases.
 - This release is published as a GitHub Release only; crates.io publish
   is deferred until the crates have real implementations.
 
+[0.4.0]: https://github.com/OdradekAI/opi/releases/tag/v0.4.0
 [0.3.0]: https://github.com/OdradekAI/opi/releases/tag/v0.3.0
 [0.2.0]: https://github.com/OdradekAI/opi/releases/tag/v0.2.0
 [0.1.1]: https://github.com/OdradekAI/opi/releases/tag/v0.1.1
