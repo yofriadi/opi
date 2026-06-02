@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.3.0`.
+Current crate version: `0.4.0`.
 
 `opi-ai` exposes the common `Provider` trait plus provider-neutral request, message, model, and stream event types. The crate contains real streaming implementations for Anthropic, OpenAI Chat Completions, OpenAI Responses, Gemini, AWS Bedrock Converse, Azure OpenAI, and Google Vertex AI, plus OpenAI-compatible profiles for OpenRouter and Mistral.
 

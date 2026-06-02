@@ -9,7 +9,7 @@
 
 ## Status
 
-Current workspace version: `0.3.0`.
+Current workspace version: `0.4.0`.
 
 `opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, eight built-in tools, image attachments, model and session pickers, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, token usage accumulation, and best-effort cost summaries.
 

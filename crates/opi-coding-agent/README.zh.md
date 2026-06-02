@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.3.0`。
+当前 crate 版本：`0.4.0`。
 
 本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、9 个 Provider 前缀、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话选择器、shell 补全生成、上下文文件加载、会话持久化、会话 resume/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、retry、token 用量统计，以及尽力而为的费用摘要。
 

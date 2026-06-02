@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi) — an AI agent toolkit. v0.3.0 ships a multi-provider coding assistant (Anthropic, OpenAI, OpenAI Responses, OpenRouter, Mistral, Gemini), six built-in tools, a ratatui TUI with configurable keybindings/themes, session JSONL persistence with resume, context compaction, retry/backoff, and cost tracking. New work extends this foundation rather than redesigning the layout.
+`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi) — an AI agent toolkit. v0.4.0 ships a multi-provider coding assistant (Anthropic, OpenAI, OpenAI Responses, OpenRouter, Mistral, Gemini, Bedrock, Azure OpenAI, Vertex AI), eight built-in tools, image attachments, fuzzy model/session pickers, shell completion generation, a ratatui TUI with configurable keybindings/themes, session JSONL persistence with resume, context compaction, retry/backoff, and cost tracking. New work extends this foundation rather than redesigning the layout.
 
 Repository: https://github.com/OdradekAI/opi
 
@@ -62,7 +62,7 @@ after_tool_call hook → check should_stop_after_turn → poll steering/follow-u
 queues → repeat
 ```
 
-Six built-in tools in `opi-coding-agent`: `read`, `glob`, `grep` (parallel, read-only) and `write`, `edit`, `bash` (sequential, mutating). All paths are constrained to the harness workspace root. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
+Eight built-in tools in `opi-coding-agent`: `read`, `glob`, `grep`, `find`, `ls` (parallel, read-only) and `write`, `edit`, `bash` (sequential, mutating). All paths are constrained to the harness workspace root. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
 
 Key abstractions:
 - **`opi_ai::Provider`** trait — streaming LLM backend; resolved from `provider:model` specs via the registry.
@@ -72,6 +72,8 @@ Key abstractions:
 - **`opi_agent::SessionWriter` / `SessionReader`** — append-only JSONL session storage with crash recovery.
 - **`opi_agent::CompactionEngine`** — threshold/manual/overflow context compaction.
 - **`opi_agent::Transport`** trait — stdio/SSE abstraction reserved for external (MCP-style) tool servers; not wired into the main loop yet.
+
+Provider implementations in `opi-ai`: `anthropic`, `openai`, `openai-responses`, `openrouter`, `mistral`, `gemini`, `bedrock` (AWS SigV4), `azure` (Azure OpenAI deployment), `vertex` (Google Vertex AI).
 
 Config resolution (model): `--model` > `OPI_MODEL` (only when `--config` was not passed) > `--config` file > project `.opi/config.toml` > user config > built-in defaults. TOML layers merge user → project → `--config`. Model specs use `provider:model` format (e.g. `anthropic:claude-sonnet-4-5-20250514`, `openai:gpt-4o`, `gemini:gemini-2.5-flash`).
 
@@ -112,7 +114,9 @@ If you create or modify a test file, you MUST run that test and iterate until it
 
 - Tests live in `crates/<crate>/tests/` (integration) and inline `#[cfg(test)]` modules (unit).
 - Use `opi_ai::test_support::MockProvider` for agent/harness integration tests — never hit a real LLM API or require API keys in tests.
+- For provider wire-format tests, use fixtures or `wiremock`; do not require external network access.
 - For tool tests that touch the filesystem, use `tempfile::tempdir()` and build fixtures in the temp directory.
+- For snapshot/UI tests in `opi-tui`, follow the existing `insta` snapshot pattern.
 - Run the relevant test after writing it: `cargo test -p <crate> -- <test_name>`.
 
 ## Sessions
@@ -218,6 +222,7 @@ Two GitHub Actions workflows in `.github/workflows/`:
 - Conventional Commits drive changelog categorization (`feat:` → Added, `fix:` → Fixed, `feat!:`/`BREAKING CHANGE` → Breaking Changes).
 - Each crate's `description`, `license`, and `repository` come from the workspace — don't duplicate them per crate.
 - The CLI binary is named `opi` (defined by `[[bin]]` in `crates/opi-coding-agent/Cargo.toml`), not `opi-coding-agent`.
+- `opi-web-ui` has `publish = false`; do not describe it as implemented until real web components exist.
 
 ## User override
 

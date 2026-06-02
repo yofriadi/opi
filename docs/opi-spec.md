@@ -11,8 +11,8 @@
 | Last updated | 2026-06-01 |
 | Repository | `https://github.com/OdradekAI/opi` |
 | Upstream studied | `pi` 0.75.3 at `.repo/pi-0.75.3/` |
-| Current implementation | `opi` 0.3.0, Phase 3 complete |
-| Next milestone | 0.4.0 Phase 4 extensibility |
+| Current implementation | `opi` 0.4.0, Phase 3 complete |
+| Next milestone | Phase 4 extensibility |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
 
@@ -129,12 +129,12 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 
 ## 4. Current Baseline
 
-### 4.1 Version 0.3.0
+### 4.1 Version 0.4.0
 
 | Area | Current state |
 |---|---|
 | Workspace | five crates under one Cargo workspace |
-| Versioning | lockstep `0.3.0` |
+| Versioning | lockstep `0.4.0` |
 | Edition | Rust 2024 |
 | Internal dependencies | `opi-agent -> opi-ai`, `opi-web-ui -> opi-ai`, `opi-coding-agent -> opi-ai + opi-agent + opi-tui` |
 | External dependencies | Rust-native async, HTTP/SSE, schema, config, TUI, search, tracing, and test stacks from workspace dependencies |
@@ -974,8 +974,9 @@ All crates share one workspace version.
 |---|---|---|
 | 0.1.0 | scaffolding | GitHub Release only |
 | 0.2.0 | Phase 1 MVP | GitHub Release; crates.io only if publish gates pass except `opi-web-ui` |
-| 0.3.0 | Phase 2 persistence/providers + Phase 3 hardening | GitHub + crates.io |
-| 0.4.0+ | Phase 4 extensibility | GitHub + crates.io |
+| 0.3.0 | Phase 2 persistence/providers | GitHub + crates.io |
+| 0.4.0 | Phase 3 production hardening | GitHub + crates.io |
+| post-0.4.0 | Phase 4 extensibility | GitHub + crates.io |
 
 The first crates.io publish is gated by quality, not by the version number alone.
 It MAY happen at 0.2.0 if all published crates expose real, documented behavior
@@ -1082,7 +1083,7 @@ Exit criteria: sessions survive restart, multiple providers pass contract fixtur
 
 ### Phase 3 - Production Hardening
 
-Status: complete in 0.3.0.
+Status: complete in 0.4.0.
 
 | # | Task | Crate |
 |---|---|---|

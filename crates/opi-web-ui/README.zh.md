@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.3.0`。
+当前 crate 版本：`0.4.0`。
 
 `opi-web-ui` 仍是占位 crate，不会发布到 crates.io（`publish = false`）。它用于保持 workspace 边界稳定，并为后续可复用 Web 聊天组件预留包边界。
 

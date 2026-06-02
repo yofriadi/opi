@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 workspace 版本：`0.3.0`。
+当前 workspace 版本：`0.4.0`。
 
 `opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、8 个内置工具、图片附件、模型与会话选择器、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、token 用量累计，以及尽力而为的费用摘要。
 

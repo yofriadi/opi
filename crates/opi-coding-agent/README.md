@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.3.0`.
+Current crate version: `0.4.0`.
 
 This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, nine provider prefixes, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session pickers, shell completion generation, context file loading, session persistence, resume/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, retry, token usage totals, and best-effort cost summaries.
 

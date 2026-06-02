@@ -6,7 +6,7 @@
 
 ## Status
 
-Current crate version: `0.3.0`.
+Current crate version: `0.4.0`.
 
 `opi-web-ui` is still a placeholder and is not published to crates.io (`publish = false`). The crate exists to keep the workspace layout stable and reserve the package boundary for future reusable web chat components.
 

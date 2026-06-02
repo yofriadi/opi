@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.3.0`.
+Current crate version: `0.4.0`.
 
 `opi-tui` is a synchronous widget library. The application owns the event loop and async runtime. The crate provides transcript, editor, status, markdown, tool-call, diff, select-list, terminal-image, theme, and keybinding primitives used by `opi-coding-agent`.
 

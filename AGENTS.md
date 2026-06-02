@@ -6,18 +6,21 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 `opi` is a Rust reimplementation of ideas from [earendil-works/pi](https://github.com/earendil-works/pi), organized as an AI agent toolkit and terminal-first coding agent.
 
-Current workspace version: `0.3.0`.
+Current workspace version: `0.4.0`.
 
 The current implementation includes:
 
 - A working `opi` coding-agent binary.
-- Interactive ratatui TUI mode.
+- Interactive ratatui TUI mode with model/session pickers and terminal image rendering.
 - Non-interactive text mode and `--json` NDJSON mode.
-- Six built-in tools: `read`, `glob`, `grep`, `write`, `edit`, `bash`.
-- Multi-provider streaming through Anthropic, OpenAI Chat Completions, OpenAI Responses, OpenRouter, Mistral, and Gemini.
-- TOML config with layered precedence.
+- Eight built-in tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `glob`.
+- Mode-aware tool defaults and tool selection flags: `--tools`, `--no-tools`, `--no-builtin-tools`, and `--allow-mutating`.
+- Image attachments through `--image` and the TUI `/image` command.
+- Multi-provider streaming through Anthropic, OpenAI Chat Completions, OpenAI Responses, OpenRouter, Mistral, Gemini, AWS Bedrock, Azure OpenAI, and Google Vertex AI.
+- TOML config with layered precedence, per-provider proxy config, image limits, and mutating-tool defaults.
 - Session JSONL persistence with list/resume/delete CLI commands.
-- Context compaction, retry/backoff, usage accumulation, configurable keybindings/themes, edit diff rendering, and best-effort cost tracking.
+- AGENTS.md / CLAUDE.md context file loading from workspace ancestors and the user config directory.
+- Context compaction, retry/backoff, usage accumulation, configurable keybindings/themes, shell completion generation, edit diff rendering, and best-effort cost tracking.
 
 `opi-web-ui` remains a placeholder crate with `publish = false`; it is not a real web UI implementation yet.
 
@@ -41,6 +44,7 @@ Repository: https://github.com/OdradekAI/opi
 - Use workspace dependencies. Never add a version directly to a crate's `Cargo.toml` if it can go through `[workspace.dependencies]`.
 - Trait objects (`Box<dyn T>`) are fine at crate boundaries; prefer generics within a crate when the concrete type is known at compile time.
 - Match the existing module's style. If a file uses `thiserror`, do not switch to manual `impl Display + Error`.
+- When updating documentation that has a localized counterpart such as `README.zh.md` or `docs/*.zh.md`, update the localized counterpart in the same change or explicitly state why it does not need synchronization.
 
 ## Workspace layout
 
@@ -48,7 +52,7 @@ Cargo workspace with lockstep versioning. All crates share `version.workspace = 
 
 ```text
 opi-ai      (no internal deps)        - multi-provider LLM API
-opi-tui     (no internal deps)        - terminal UI widgets
+opi-tui     (no internal deps)        - terminal UI widgets, pickers, diff and image rendering
 opi-agent   -> opi-ai                 - agent runtime, tool calling, sessions, compaction
 opi-web-ui  -> opi-ai                 - placeholder web chat component crate
 opi-coding-agent -> opi-ai, opi-agent, opi-tui - produces the `opi` binary
@@ -62,8 +66,11 @@ When publishing internal crates, path dependencies must also carry a `version` f
 
 The `opi` binary is produced by `opi-coding-agent`. Startup flow:
 
-- Session commands (`--list-sessions`, `--delete-session`) are handled before config/provider construction and then exit.
+- Shell completion generation (`--generate-completion <SHELL>`) is handled before config/provider construction and then exits.
+- Model listing (`--list-models`, optionally with `--json`) resolves config, lists models advertised by configured providers, and then exits.
+- Session commands (`--list-sessions`, `--delete-session`) are handled before full provider construction and then exit.
 - `--resume <ID>` loads a JSONL session, reconstructs the active branch, and then continues in interactive or non-interactive mode.
+- Tool selection is resolved from `--no-tools`, `--tools`, `--no-builtin-tools`, run mode, and mutating-tool opt-in.
 - Non-interactive mode is selected by non-empty positional `[PROMPT]...`, `--non-interactive`, or `--json`. It builds a provider, runs `NonInteractiveRunner`, prints stdout/stderr, and exits with a numeric code.
 - Interactive mode is the default with no prompt args. It builds a `CodingHarness` with `InteractiveCodingHooks` and launches `interactive::run_interactive_tui()`.
 
@@ -103,6 +110,9 @@ Provider implementations live in `opi-ai`:
 - `openrouter:` uses an OpenAI-compatible OpenRouter profile.
 - `mistral:` uses an OpenAI-compatible Mistral profile.
 - `gemini:` uses Gemini `streamGenerateContent?alt=sse`.
+- `bedrock:` uses AWS Bedrock Converse streaming with SigV4 signing.
+- `azure:` uses Azure OpenAI Chat Completions deployments.
+- `vertex:` uses Google Vertex AI Gemini streaming.
 
 Config resolution for model selection:
 
@@ -114,6 +124,8 @@ Config resolution for model selection:
 6. Built-in defaults
 
 TOML layers merge user -> project -> `--config`. Model specs use `provider:model` format, for example `anthropic:claude-sonnet-4-5-20250514` or `openai:gpt-4o`.
+
+The user config path is `%APPDATA%\opi\config.toml` on Windows and `~/.config/opi/config.toml` on Unix. Global context files (`AGENTS.md`, `CLAUDE.md`) live in the same user config directory.
 
 ## Edition
 
@@ -130,10 +142,14 @@ cargo build --release
 cargo run -p opi-coding-agent             # interactive TUI
 cargo run -p opi-coding-agent -- --help
 cargo run -p opi-coding-agent -- --version
+cargo run -p opi-coding-agent -- --list-models
+cargo run -p opi-coding-agent -- --generate-completion powershell
 
 # Non-interactive examples
 cargo run -p opi-coding-agent -- "Summarize this workspace"
 cargo run -p opi-coding-agent -- --json "Summarize this workspace"
+cargo run -p opi-coding-agent -- --image screenshot.png "Review this UI"
+cargo run -p opi-coding-agent -- --tools read,grep "Inspect without edits"
 
 # Tests
 cargo test --workspace --all-targets
@@ -236,7 +252,7 @@ Rules:
 
 ## Releasing
 
-Releases go to both GitHub Releases and crates.io via the `opi-release` skill at `.claude/skills/opi-release/skill.md`. Invoke with a target semver version, for example `0.3.1`.
+Releases go to both GitHub Releases and crates.io via the `opi-release` skill at `.claude/skills/opi-release/skill.md`. Invoke with a target semver version, for example `0.4.1`.
 
 Critical properties:
 
