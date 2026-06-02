@@ -104,7 +104,7 @@ fn canonicalize_headers(
         all_headers.push(("x-amz-security-token", token.as_str()));
     }
     // Sort by lowercase header name
-    all_headers.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    all_headers.sort_by_key(|a| a.0.to_lowercase());
 
     let canonical: String = all_headers
         .iter()

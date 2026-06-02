@@ -116,6 +116,7 @@ pub fn list_sessions(dir: &Path) -> Result<Vec<SessionInfo>, SessionCliError> {
         });
     }
 
+    sessions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(sessions)
 }
 

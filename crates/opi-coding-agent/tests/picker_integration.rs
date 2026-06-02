@@ -153,9 +153,10 @@ fn session_picker_items_from_directory() {
 
     let items = picker::session_picker_items(dir.path()).unwrap();
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0].id, "sess-001");
-    assert!(items[0].display.contains("project"));
-    assert_eq!(items[1].id, "sess-002");
+    // Sorted newest-first by timestamp
+    assert_eq!(items[0].id, "sess-002");
+    assert!(items[1].display.contains("project"));
+    assert_eq!(items[1].id, "sess-001");
 }
 
 #[test]
