@@ -15,11 +15,7 @@ fn opi_bin() -> String {
     let release = workspace_root.join("target/release").join(exe_name);
     let debug = workspace_root.join("target/debug").join(exe_name);
 
-    let path = if release.exists() {
-        release
-    } else {
-        debug
-    };
+    let path = if release.exists() { release } else { debug };
 
     path.to_string_lossy().into_owned()
 }
