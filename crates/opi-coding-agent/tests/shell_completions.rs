@@ -9,10 +9,18 @@ use std::process::Command;
 fn opi_bin() -> String {
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest.parent().unwrap().parent().unwrap();
-    let mut path = workspace_root.join("target/release/opi");
-    if cfg!(windows) {
-        path.set_extension("exe");
-    }
+
+    // Prefer release binary, fall back to debug when running tests locally or in CI
+    let exe_name = if cfg!(windows) { "opi.exe" } else { "opi" };
+    let release = workspace_root.join("target/release").join(exe_name);
+    let debug = workspace_root.join("target/debug").join(exe_name);
+
+    let path = if release.exists() {
+        release
+    } else {
+        debug
+    };
+
     path.to_string_lossy().into_owned()
 }
 
