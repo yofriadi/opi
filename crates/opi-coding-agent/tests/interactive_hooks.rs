@@ -1,8 +1,7 @@
 //! Unit tests for InteractiveCodingHooks (C3/H8).
 //!
-//! Directly exercises the before_tool_call hook to verify the safety policy:
-//! mutating tools (write, edit, bash) are blocked unless allow_mutating=true;
-//! read-only tools (read, glob, grep) are always allowed.
+//! Directly exercises the before_tool_call hook. Interactive mode delegates
+//! tool availability to startup tool selection; the hook itself is pass-through.
 
 use opi_agent::hooks::{AgentHooks, BeforeToolCallContext, BeforeToolCallResult};
 use opi_coding_agent::harness::InteractiveCodingHooks;
@@ -24,44 +23,22 @@ async fn assert_allowed(hooks: &InteractiveCodingHooks, tool_name: &str) {
     );
 }
 
-async fn assert_denied(hooks: &InteractiveCodingHooks, tool_name: &str) {
-    let result = hooks.before_tool_call(make_ctx(tool_name)).await;
-    match result {
-        BeforeToolCallResult::Deny { reason } => {
-            assert!(
-                reason.contains(tool_name),
-                "denial reason should mention tool: {reason}"
-            );
-            assert!(
-                reason.contains("interactive mode"),
-                "denial reason should mention interactive mode: {reason}"
-            );
-        }
-        BeforeToolCallResult::Allow => {
-            panic!("{tool_name} should be denied, but was allowed")
-        }
-        _ => {
-            panic!("{tool_name} should be denied, got unexpected result")
-        }
-    }
+#[tokio::test]
+async fn interactive_write_allowed_by_default() {
+    let hooks = InteractiveCodingHooks::new(false);
+    assert_allowed(&hooks, "write").await;
 }
 
 #[tokio::test]
-async fn interactive_write_blocked_by_default() {
+async fn interactive_edit_allowed_by_default() {
     let hooks = InteractiveCodingHooks::new(false);
-    assert_denied(&hooks, "write").await;
+    assert_allowed(&hooks, "edit").await;
 }
 
 #[tokio::test]
-async fn interactive_edit_blocked_by_default() {
+async fn interactive_bash_allowed_by_default() {
     let hooks = InteractiveCodingHooks::new(false);
-    assert_denied(&hooks, "edit").await;
-}
-
-#[tokio::test]
-async fn interactive_bash_blocked_by_default() {
-    let hooks = InteractiveCodingHooks::new(false);
-    assert_denied(&hooks, "bash").await;
+    assert_allowed(&hooks, "bash").await;
 }
 
 #[tokio::test]
@@ -83,7 +60,7 @@ async fn interactive_grep_allowed_by_default() {
 }
 
 #[tokio::test]
-async fn interactive_all_mutating_tools_allowed_when_opted_in() {
+async fn interactive_allow_mutating_flag_is_compatibility_noop() {
     let hooks = InteractiveCodingHooks::new(true);
     assert_allowed(&hooks, "write").await;
     assert_allowed(&hooks, "edit").await;

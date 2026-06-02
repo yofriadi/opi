@@ -6,7 +6,9 @@ use opi_ai::provider::Provider;
 use opi_coding_agent::cli::Cli;
 use opi_coding_agent::config::{ConfigSource, resolve_config};
 use opi_coding_agent::harness::ResumeInfo;
-use opi_coding_agent::policy::{ToolFlags, ToolSelection, resolve_tool_selection};
+use opi_coding_agent::policy::{
+    RunMode, ToolFlags, ToolRuntimeConfig, ToolSelection, resolve_tool_selection,
+};
 
 fn main() {
     // Load .env if present (for local development/testing convenience).
@@ -180,7 +182,7 @@ async fn run_non_interactive(
         .map(|info| info.original_cwd.clone())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    let mut runner = NonInteractiveRunner::new_with_resume(
+    let mut runner = match NonInteractiveRunner::new_with_resume(
         provider,
         config.defaults.model.clone(),
         config.clone(),
@@ -190,7 +192,13 @@ async fn run_non_interactive(
         resumed_messages.unwrap_or_default(),
         resume_info,
         tool_selection,
-    );
+    ) {
+        Ok(runner) => runner,
+        Err(e) => {
+            eprintln!("opi: {e}");
+            return ExitCode::ConfigError as i32;
+        }
+    };
 
     let result = if cli.image.is_empty() {
         // No images -- use the plain text path.
@@ -260,20 +268,21 @@ async fn run_interactive(
         }
     };
 
-    let allow_mutating = cli.allow_mutating || config.defaults.allow_mutating_tools;
     let user_system_prompt = cli
         .system
         .as_ref()
         .and_then(|path| std::fs::read_to_string(path).ok());
 
-    let hooks = Box::new(InteractiveCodingHooks::new(allow_mutating));
+    let hooks = Box::new(InteractiveCodingHooks::new(true));
     let initial_messages = resumed_messages.unwrap_or_default();
     let workspace_root = resume_info
         .as_ref()
         .map(|info| info.original_cwd.clone())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    let harness = CodingHarness::new_with_hooks_and_resume(
+    let tool_config = ToolRuntimeConfig::resolve(RunMode::Interactive, true, tool_selection)
+        .expect("interactive tool config should be valid");
+    let harness = CodingHarness::new_with_hooks_and_resume_tool_config(
         provider,
         config.defaults.model.clone(),
         config.clone(),
@@ -282,7 +291,7 @@ async fn run_interactive(
         user_system_prompt,
         initial_messages,
         resume_info,
-        tool_selection,
+        tool_config,
     );
 
     let mut harness = harness;

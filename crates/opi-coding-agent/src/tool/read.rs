@@ -8,6 +8,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+use super::PathPolicy;
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadArgs {
     /// Relative path within workspace to read.
@@ -20,14 +22,20 @@ pub struct ReadArgs {
 
 pub struct ReadTool {
     workspace_root: PathBuf,
+    path_policy: PathPolicy,
     schema: serde_json::Value,
 }
 
 impl ReadTool {
     pub fn new(workspace_root: PathBuf) -> Self {
+        Self::new_with_policy(workspace_root, PathPolicy::WorkspaceOnly)
+    }
+
+    pub fn new_with_policy(workspace_root: PathBuf, path_policy: PathPolicy) -> Self {
         let schema = schemars::schema_for!(ReadArgs);
         Self {
             workspace_root,
+            path_policy,
             schema: serde_json::to_value(&schema).unwrap_or_default(),
         }
     }
@@ -64,19 +72,22 @@ impl Tool for ReadTool {
                 });
             }
         };
-        let file_path = match super::validate_workspace_path(&self.workspace_root, &args.path) {
-            Ok(p) => p,
-            Err(msg) => {
-                return Box::pin(async move {
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text { text: msg }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    })
-                });
-            }
-        };
+        let resolved_path =
+            match super::resolve_tool_path(&self.workspace_root, &args.path, self.path_policy) {
+                Ok(p) => p,
+                Err(msg) => {
+                    return Box::pin(async move {
+                        Ok(ToolResult {
+                            content: vec![OutputContent::Text { text: msg }],
+                            details: None,
+                            is_error: true,
+                            terminate: false,
+                        })
+                    });
+                }
+            };
+        let file_path = resolved_path.path;
+        let inside_workspace = resolved_path.inside_workspace;
         let workspace_root = self.workspace_root.clone();
         let path_for_display = args.path.clone();
         Box::pin(async move {
@@ -107,6 +118,8 @@ impl Tool for ReadTool {
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
                 "path": path_for_display,
+                "resolved_path": file_path.to_string_lossy(),
+                "inside_workspace": inside_workspace,
             });
 
             let text = format!("{}\n{}", file_path.display(), output);

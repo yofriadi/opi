@@ -16,7 +16,7 @@ use opi_ai::provider::Provider;
 
 use crate::config::OpiConfig;
 use crate::context_files;
-use crate::policy::ToolSelection;
+use crate::policy::{RunMode, ToolRuntimeConfig, ToolSelection};
 use crate::prompt::SystemPromptBuilder;
 use crate::session_coordinator::{SessionCoordinator, to_wire_result};
 use crate::tool::{BashTool, EditTool, FindTool, GlobTool, GrepTool, LsTool, ReadTool, WriteTool};
@@ -84,6 +84,27 @@ impl CodingHarness {
         )
     }
 
+    /// Create a new harness with already resolved tool runtime config.
+    pub fn new_with_tool_config(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        tool_config: ToolRuntimeConfig,
+    ) -> Self {
+        Self::new_with_hooks_and_resume_tool_config(
+            provider,
+            model,
+            config,
+            workspace_root,
+            Box::new(CodingAgentHooks),
+            None,
+            Vec::new(),
+            None,
+            tool_config,
+        )
+    }
+
     /// Create a new harness with custom hooks.
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_hooks(
@@ -122,7 +143,9 @@ impl CodingHarness {
         resume: Option<ResumeInfo>,
         tool_selection: ToolSelection,
     ) -> Self {
-        Self::new_with_global_config_dir(
+        let tool_config = ToolRuntimeConfig::resolve(RunMode::Interactive, true, tool_selection)
+            .expect("interactive tool config should be valid");
+        Self::new_with_hooks_and_resume_tool_config(
             provider,
             model,
             config,
@@ -131,7 +154,34 @@ impl CodingHarness {
             user_system_prompt,
             initial_messages,
             resume,
-            tool_selection,
+            tool_config,
+        )
+    }
+
+    /// Create a new harness, optionally adopting an existing session (resume),
+    /// with already resolved tool runtime config.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_hooks_and_resume_tool_config(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        hooks: Box<dyn AgentHooks>,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        resume: Option<ResumeInfo>,
+        tool_config: ToolRuntimeConfig,
+    ) -> Self {
+        Self::new_with_global_config_dir_tool_config(
+            provider,
+            model,
+            config,
+            workspace_root,
+            hooks,
+            user_system_prompt,
+            initial_messages,
+            resume,
+            tool_config,
             None,
         )
     }
@@ -154,7 +204,38 @@ impl CodingHarness {
         tool_selection: ToolSelection,
         global_config_dir: Option<PathBuf>,
     ) -> Self {
-        let tools = Self::build_tools(&workspace_root, &tool_selection);
+        let tool_config = ToolRuntimeConfig::resolve(RunMode::Interactive, true, tool_selection)
+            .expect("interactive tool config should be valid");
+        Self::new_with_global_config_dir_tool_config(
+            provider,
+            model,
+            config,
+            workspace_root,
+            hooks,
+            user_system_prompt,
+            initial_messages,
+            resume,
+            tool_config,
+            global_config_dir,
+        )
+    }
+
+    /// Create a new harness with an explicit global config directory override
+    /// and already resolved tool runtime config.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_global_config_dir_tool_config(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        hooks: Box<dyn AgentHooks>,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        resume: Option<ResumeInfo>,
+        tool_config: ToolRuntimeConfig,
+        global_config_dir: Option<PathBuf>,
+    ) -> Self {
+        let tools = Self::build_tools(&workspace_root, &tool_config);
         let tool_defs: Vec<_> = tools.iter().map(|t| t.definition()).collect();
         let mut builder = SystemPromptBuilder::new().tools(tool_defs);
         if let Some(content) = user_system_prompt {
@@ -450,26 +531,57 @@ impl CodingHarness {
         self.session.as_ref()
     }
 
-    fn build_tools(workspace_root: &Path, selection: &ToolSelection) -> Vec<Box<dyn Tool>> {
-        let all_tools: Vec<Box<dyn Tool>> = vec![
-            Box::new(ReadTool::new(workspace_root.to_path_buf())),
-            Box::new(WriteTool::new(workspace_root.to_path_buf())),
-            Box::new(EditTool::new(workspace_root.to_path_buf())),
-            Box::new(BashTool::new(workspace_root.to_path_buf())),
-            Box::new(GlobTool::new(workspace_root.to_path_buf())),
-            Box::new(GrepTool::new(workspace_root.to_path_buf())),
-            Box::new(FindTool::new(workspace_root.to_path_buf())),
-            Box::new(LsTool::new(workspace_root.to_path_buf())),
+    fn build_tools(workspace_root: &Path, tool_config: &ToolRuntimeConfig) -> Vec<Box<dyn Tool>> {
+        let read_policy = match tool_config.run_mode {
+            RunMode::Interactive => crate::tool::PathPolicy::AllowOutsideWorkspace,
+            RunMode::NonInteractive => crate::tool::PathPolicy::WorkspaceOnly,
+        };
+
+        let mut tools: Vec<(&str, Box<dyn Tool>)> = vec![
+            (
+                "read",
+                Box::new(ReadTool::new_with_policy(
+                    workspace_root.to_path_buf(),
+                    read_policy,
+                )),
+            ),
+            (
+                "write",
+                Box::new(WriteTool::new(workspace_root.to_path_buf())),
+            ),
+            (
+                "edit",
+                Box::new(EditTool::new(workspace_root.to_path_buf())),
+            ),
+            (
+                "bash",
+                Box::new(BashTool::new(workspace_root.to_path_buf())),
+            ),
+            (
+                "grep",
+                Box::new(GrepTool::new(workspace_root.to_path_buf())),
+            ),
+            (
+                "find",
+                Box::new(FindTool::new(workspace_root.to_path_buf())),
+            ),
+            ("ls", Box::new(LsTool::new(workspace_root.to_path_buf()))),
+            (
+                "glob",
+                Box::new(GlobTool::new(workspace_root.to_path_buf())),
+            ),
         ];
 
-        match selection {
-            ToolSelection::Default => all_tools,
-            ToolSelection::Disabled | ToolSelection::NoBuiltin => Vec::new(),
-            ToolSelection::Allowlist(names) => all_tools
-                .into_iter()
-                .filter(|t| names.iter().any(|n| *n == t.definition().name))
-                .collect(),
-        }
+        tools
+            .drain(..)
+            .filter(|(name, _)| {
+                tool_config
+                    .active_tool_names
+                    .iter()
+                    .any(|active| active == name)
+            })
+            .map(|(_, tool)| tool)
+            .collect()
     }
 }
 
@@ -518,45 +630,20 @@ impl AgentHooks for CodingAgentHooks {
     }
 }
 
-/// Interactive hooks that deny mutating tools unless auto-allowed.
-pub struct InteractiveCodingHooks {
-    pub allow_mutating: bool,
-}
+/// Interactive hooks for the coding agent.
+///
+/// Tool safety is controlled by active tool selection and extension hooks, not
+/// by a core interactive permission popup.
+pub struct InteractiveCodingHooks;
 
 impl InteractiveCodingHooks {
-    pub fn new(allow_mutating: bool) -> Self {
-        Self { allow_mutating }
-    }
-
-    fn is_mutating_tool(name: &str) -> bool {
-        matches!(name, "write" | "edit" | "bash")
+    pub fn new(_allow_mutating: bool) -> Self {
+        Self
     }
 }
 
 impl AgentHooks for InteractiveCodingHooks {
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
         Ok(agent_messages_to_llm(messages))
-    }
-
-    fn before_tool_call(
-        &self,
-        ctx: opi_agent::hooks::BeforeToolCallContext,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = opi_agent::hooks::BeforeToolCallResult> + Send>,
-    > {
-        use opi_agent::hooks::BeforeToolCallResult;
-        let allow = self.allow_mutating || !Self::is_mutating_tool(&ctx.tool_name);
-        Box::pin(async move {
-            if allow {
-                BeforeToolCallResult::Allow
-            } else {
-                BeforeToolCallResult::Deny {
-                    reason: format!(
-                        "mutating tool '{}' blocked in interactive mode (use --allow-mutating to override)",
-                        ctx.tool_name
-                    ),
-                }
-            }
-        })
     }
 }

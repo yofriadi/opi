@@ -18,80 +18,140 @@ pub use write::WriteTool;
 
 use std::path::{Path, PathBuf};
 
-/// Verify that `user_path` resolves within `workspace_root`. Returns the
-/// canonicalized file path on success, or an error message suitable for the
-/// tool response.
+/// Path boundary policy for file tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathPolicy {
+    WorkspaceOnly,
+    AllowOutsideWorkspace,
+}
+
+/// Resolved path metadata shared by file tools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedToolPath {
+    pub path: PathBuf,
+    pub inside_workspace: bool,
+}
+
+/// Resolve a user-supplied file path for tool execution.
 ///
-/// Walks up the ancestor chain to find the nearest existing directory, then
-/// canonicalizes that ancestor to resolve symlinks/junctions. This prevents
-/// an intermediate symlink pointing outside the workspace from bypassing the
-/// check when the deeper path components don't exist yet.
-pub fn validate_workspace_path(workspace_root: &Path, user_path: &str) -> Result<PathBuf, String> {
-    let resolved = workspace_root.join(user_path);
+/// Relative paths are based on `workspace_root`; absolute paths are preserved.
+/// A leading `@` is ignored for editor-style path mentions, and `~` expands
+/// from HOME/USERPROFILE when available.
+pub fn resolve_tool_path(
+    workspace_root: &Path,
+    user_path: &str,
+    policy: PathPolicy,
+) -> Result<ResolvedToolPath, String> {
+    let expanded = expand_user_path(user_path);
+    let resolved = if expanded.is_absolute() {
+        expanded
+    } else {
+        workspace_root.join(expanded)
+    };
     let canonical_root = std::fs::canonicalize(workspace_root)
         .map_err(|e| format!("cannot canonicalize workspace root: {e}"))?;
+    let canonical = canonicalize_existing_or_nearest(&resolved)?;
+    let inside_workspace = canonical.starts_with(&canonical_root);
 
-    // Try canonicalize first (handles symlinks, existing files).
-    if let Ok(canonical) = std::fs::canonicalize(&resolved) {
-        return if canonical.starts_with(&canonical_root) {
-            Ok(canonical)
-        } else {
-            Err(format!(
-                "path '{}' resolves outside the workspace",
-                user_path
-            ))
-        };
+    if policy == PathPolicy::WorkspaceOnly && !inside_workspace {
+        return Err(format!(
+            "path '{}' resolves outside the workspace",
+            user_path
+        ));
     }
 
-    // Path doesn't exist — walk up ancestors to find the nearest existing one.
-    // Canonicalizing that ancestor resolves any symlinks/junctions in the chain.
-    // Components are pushed in reverse order (leaf first), then reversed.
-    let mut ancestor = resolved.as_path();
-    let mut suffix_components: Vec<std::ffi::OsString> = Vec::new();
+    Ok(ResolvedToolPath {
+        path: canonical,
+        inside_workspace,
+    })
+}
+
+pub fn validate_workspace_path(workspace_root: &Path, user_path: &str) -> Result<PathBuf, String> {
+    resolve_tool_path(workspace_root, user_path, PathPolicy::WorkspaceOnly)
+        .map(|resolved| resolved.path)
+}
+
+fn expand_user_path(user_path: &str) -> PathBuf {
+    let path = user_path.strip_prefix('@').unwrap_or(user_path);
+    if path == "~" {
+        return home_dir().unwrap_or_else(|| PathBuf::from(path));
+    }
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\"))
+        && let Some(home) = home_dir()
+    {
+        return home.join(rest);
+    }
+    PathBuf::from(path)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+fn canonicalize_existing_or_nearest(path: &Path) -> Result<PathBuf, String> {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return Ok(canonical);
+    }
+
+    // Path doesn't exist, so canonicalize the nearest existing ancestor.
+    // Preserve the original lexical suffix relative to that ancestor, then
+    // normalize after joining so `..` segments are applied consistently.
+    let mut ancestor = path;
     while let Some(parent) = ancestor.parent() {
-        if let Some(name) = ancestor.file_name() {
-            suffix_components.push(name.to_os_string());
-        }
         if let Ok(canonical_ancestor) = std::fs::canonicalize(parent) {
-            suffix_components.reverse();
-            let suffix: PathBuf = suffix_components.iter().collect();
-            let canonical = canonical_ancestor.join(suffix);
-            return if canonical.starts_with(&canonical_root) {
-                Ok(canonical)
-            } else {
-                Err(format!(
-                    "path '{}' resolves outside the workspace",
-                    user_path
-                ))
-            };
+            let suffix = path.strip_prefix(parent).unwrap_or_else(|_| Path::new(""));
+            return Ok(normalize_path_components(&canonical_ancestor.join(suffix)));
         }
         ancestor = parent;
     }
 
-    // No ancestor exists on disk — normalize by resolving `..` components
-    // and check against the canonical root.
-    let normalized = normalize_path_components(&resolved);
-    if normalized.starts_with(&canonical_root) {
-        Ok(normalized)
-    } else {
-        Err(format!(
-            "path '{}' resolves outside the workspace",
-            user_path
-        ))
-    }
+    Ok(normalize_path_components(path))
 }
 
 /// Resolve `.` and `..` components without touching the filesystem.
 fn normalize_path_components(path: &Path) -> PathBuf {
-    let mut stack = Vec::new();
+    let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
             std::path::Component::ParentDir => {
-                stack.pop();
+                normalized.pop();
             }
             std::path::Component::CurDir => {}
-            c => stack.push(c.as_os_str()),
+            c => normalized.push(c.as_os_str()),
         }
     }
-    stack.iter().collect()
+    normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_user_path_strips_at_prefix() {
+        let path = expand_user_path("@Cargo.toml");
+        assert_eq!(path, PathBuf::from("Cargo.toml"));
+    }
+
+    #[test]
+    fn normalize_path_components_removes_parent_segments() {
+        let path = normalize_path_components(Path::new("/tmp/a/../b"));
+        assert!(path.ends_with(Path::new("tmp").join("b")));
+    }
+
+    #[test]
+    fn canonicalize_existing_or_nearest_normalizes_missing_suffix_parent_segments() {
+        let workspace = tempfile::tempdir().unwrap();
+        let path = workspace.path().join("missing/child/../../target.txt");
+        let resolved = canonicalize_existing_or_nearest(&path).unwrap();
+
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(workspace.path())
+                .unwrap()
+                .join("target.txt")
+        );
+    }
 }

@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
-use opi_coding_agent::tool::{BashTool, EditTool, ReadTool, WriteTool};
+use opi_coding_agent::tool::{BashTool, EditTool, PathPolicy, ReadTool, WriteTool};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -24,6 +24,13 @@ fn tool_result_text(result: &ToolResult) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn details_string<'a>(details: &'a serde_json::Value, key: &str) -> &'a str {
+    details
+        .get(key)
+        .and_then(|value| value.as_str())
+        .unwrap_or_else(|| panic!("details should include string key '{key}'"))
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +136,57 @@ async fn read_tool_reports_workspace_boundary() {
         text.contains("inside.txt"),
         "result should reference the file path"
     );
+
+    let details = result.details.expect("should have details");
+    assert_eq!(
+        details
+            .get("inside_workspace")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert!(details_string(&details, "resolved_path").ends_with("inside.txt"));
+}
+
+#[tokio::test]
+async fn read_tool_allow_outside_policy_reads_absolute_outside_path() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("outside.txt");
+    std::fs::write(&outside_file, "outside data").unwrap();
+
+    let tool = ReadTool::new_with_policy(
+        workspace.path().to_path_buf(),
+        PathPolicy::AllowOutsideWorkspace,
+    );
+    let result = tool
+        .execute(
+            "outside-read-allow",
+            json!({ "path": outside_file }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !result.is_error,
+        "unexpected error: {}",
+        tool_result_text(&result)
+    );
+    assert!(tool_result_text(&result).contains("outside data"));
+    let details = result.details.expect("should have details");
+    assert_eq!(
+        details
+            .get("inside_workspace")
+            .and_then(|value| value.as_bool()),
+        Some(false)
+    );
+    assert_eq!(
+        details_string(&details, "resolved_path"),
+        std::fs::canonicalize(&outside_file)
+            .unwrap()
+            .to_string_lossy()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +265,13 @@ async fn write_tool_safety_context_in_details() {
         "details should include workspace_root"
     );
     assert!(details.get("path").is_some(), "details should include path");
+    assert_eq!(
+        details
+            .get("inside_workspace")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert!(details_string(&details, "resolved_path").ends_with("safe.txt"));
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +362,15 @@ async fn edit_tool_safety_context_in_details() {
     let details = result.details.expect("should have details");
     assert!(details.get("workspace_root").is_some());
     assert!(details.get("path").is_some());
+    assert_eq!(
+        details
+            .get("inside_workspace")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert!(details_string(&details, "resolved_path").ends_with("safe_edit.txt"));
+    assert!(details.get("before").is_some());
+    assert!(details.get("after").is_some());
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +450,92 @@ async fn write_tool_rejects_path_outside_workspace() {
 }
 
 #[tokio::test]
+async fn write_tool_rejects_absolute_path_outside_workspace() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("outside-write.txt");
+
+    let tool = WriteTool::new(workspace.path().to_path_buf());
+    let result = tool
+        .execute(
+            "escape-absolute-write",
+            json!({ "path": outside_file, "content": "escaped" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "should reject path outside workspace");
+    assert!(
+        tool_result_text(&result).contains("outside the workspace"),
+        "error should mention workspace boundary"
+    );
+    assert!(
+        !outside_file.exists(),
+        "write must not create files outside workspace"
+    );
+}
+
+#[tokio::test]
+async fn write_tool_normalizes_parent_segment_after_missing_component() {
+    let workspace = tempfile::tempdir().unwrap();
+    let tool = WriteTool::new(workspace.path().to_path_buf());
+    let result = tool
+        .execute(
+            "normalize-missing-parent",
+            json!({ "path": "missing/../target.txt", "content": "normalized" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !result.is_error,
+        "unexpected error: {}",
+        tool_result_text(&result)
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("target.txt")).unwrap(),
+        "normalized"
+    );
+    assert!(
+        !workspace.path().join("missing/target.txt").exists(),
+        "path should normalize to workspace target, not missing/target"
+    );
+}
+
+#[tokio::test]
+async fn write_tool_rejects_parent_escape_after_missing_component() {
+    let parent = tempfile::tempdir().unwrap();
+    let workspace = parent.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let outside_file = parent.path().join("outside.txt");
+
+    let tool = WriteTool::new(workspace);
+    let result = tool
+        .execute(
+            "normalize-missing-parent-escape",
+            json!({ "path": "missing/../../outside.txt", "content": "escaped" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "should reject path outside workspace");
+    assert!(
+        tool_result_text(&result).contains("outside the workspace"),
+        "error should mention workspace boundary"
+    );
+    assert!(
+        !outside_file.exists(),
+        "write must not create files outside workspace"
+    );
+}
+
+#[tokio::test]
 async fn edit_tool_rejects_path_outside_workspace() {
     let dir = tempfile::tempdir().unwrap();
     let tool = EditTool::new(dir.path().to_path_buf());
@@ -402,6 +562,36 @@ async fn edit_tool_rejects_path_outside_workspace() {
 }
 
 #[tokio::test]
+async fn edit_tool_rejects_absolute_path_outside_workspace() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("outside-edit.txt");
+    std::fs::write(&outside_file, "before").unwrap();
+
+    let tool = EditTool::new(workspace.path().to_path_buf());
+    let result = tool
+        .execute(
+            "escape-absolute-edit",
+            json!({
+                "path": outside_file,
+                "old_string": "before",
+                "new_string": "after"
+            }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "should reject path outside workspace");
+    assert!(
+        tool_result_text(&result).contains("outside the workspace"),
+        "error should mention workspace boundary"
+    );
+    assert_eq!(std::fs::read_to_string(&outside_file).unwrap(), "before");
+}
+
+#[tokio::test]
 async fn read_tool_rejects_path_outside_workspace() {
     let dir = tempfile::tempdir().unwrap();
     let tool = ReadTool::new(dir.path().to_path_buf());
@@ -420,6 +610,31 @@ async fn read_tool_rejects_path_outside_workspace() {
     assert!(
         text.contains("outside the workspace"),
         "error should mention workspace boundary, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn read_tool_workspace_policy_rejects_absolute_outside_path() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("outside-read.txt");
+    std::fs::write(&outside_file, "outside").unwrap();
+
+    let tool = ReadTool::new(workspace.path().to_path_buf());
+    let result = tool
+        .execute(
+            "escape-absolute-read",
+            json!({ "path": outside_file }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "should reject path outside workspace");
+    assert!(
+        tool_result_text(&result).contains("outside the workspace"),
+        "error should mention workspace boundary"
     );
 }
 

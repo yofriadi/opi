@@ -21,7 +21,7 @@ use opi_ai::stream::AssistantStreamEvent;
 
 use crate::config::OpiConfig;
 use crate::harness::{CodingHarness, ResumeInfo};
-use crate::policy::{ToolSelection, is_mutating_tool};
+use crate::policy::{RunMode, ToolPolicyError, ToolRuntimeConfig, ToolSelection, is_mutating_tool};
 
 /// NDJSON output schema version.
 pub const NDJSON_SCHEMA_VERSION: u32 = 1;
@@ -86,6 +86,7 @@ impl NonInteractiveRunner {
             None,
             ToolSelection::Default,
         )
+        .expect("default non-interactive tool policy should be valid")
     }
 
     /// Create a new non-interactive runner, optionally adopting an existing
@@ -101,9 +102,11 @@ impl NonInteractiveRunner {
         initial_messages: Vec<AgentMessage>,
         resume_info: Option<ResumeInfo>,
         tool_selection: ToolSelection,
-    ) -> Self {
+    ) -> Result<Self, ToolPolicyError> {
+        let tool_config =
+            ToolRuntimeConfig::resolve(RunMode::NonInteractive, allow_mutating, tool_selection)?;
         let hooks = Box::new(NonInteractiveHooks { allow_mutating });
-        let harness = CodingHarness::new_with_hooks_and_resume(
+        let harness = CodingHarness::new_with_hooks_and_resume_tool_config(
             provider,
             model,
             config,
@@ -112,9 +115,9 @@ impl NonInteractiveRunner {
             user_system_prompt,
             initial_messages,
             resume_info,
-            tool_selection,
+            tool_config,
         );
-        Self { harness }
+        Ok(Self { harness })
     }
 
     /// Run a single prompt in JSON mode, returning NDJSON output in stdout.

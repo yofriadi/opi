@@ -11,7 +11,7 @@
 
 Current crate version: `0.3.0`.
 
-This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, nine provider prefixes, eight built-in tools, tool selection flags, image attachments, model/session pickers, shell completion generation, context file loading, session persistence, resume/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, retry, token usage totals, and best-effort cost summaries.
+This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, nine provider prefixes, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session pickers, shell completion generation, context file loading, session persistence, resume/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, retry, token usage totals, and best-effort cost summaries.
 
 ## Install
 
@@ -42,7 +42,7 @@ opi -m openai:gpt-4o "Explain crates/opi-coding-agent/src/main.rs"
 # Attach images to the first prompt
 opi --image screenshot.png "Review this screenshot."
 
-# Allow mutating tools such as write/edit/bash
+# Allow mutating tools in non-interactive automation
 opi --allow-mutating "Update the README."
 ```
 
@@ -55,14 +55,14 @@ opi --allow-mutating "Update the README."
 | `-c, --config <FILE>` | Explicit TOML config file; must exist |
 | `-s, --system <FILE>` | User system prompt file appended to the built-in coding prompt |
 | `--non-interactive` | Force non-interactive mode; prompt text is still required |
-| `--allow-mutating` | Allow `write`, `edit`, and `bash` |
+| `--allow-mutating` | Allow `write`, `edit`, and `bash` in non-interactive mode |
 | `--json` | Output NDJSON events to stdout; also uses non-interactive mode |
 | `--list-sessions` | List stored sessions and exit |
 | `--resume <ID>` | Resume a stored session by id |
 | `--delete-session <ID>` | Delete a stored session by id and exit |
 | `--generate-completion <SHELL>` | Generate shell completions for `bash`, `zsh`, `fish`, `powershell`, or `elvish` |
 | `-v, --verbose` | Enable debug tracing |
-| `--tools <TOOLS>` | Comma-separated built-in tool allowlist, for example `read,grep` |
+| `--tools <TOOLS>` | Comma-separated active tool allowlist, for example `read,grep` |
 | `--no-tools` | Disable all tools |
 | `--no-builtin-tools` | Disable built-in tools; reserved for extension/custom tools |
 | `--image <IMAGE>` | Attach one image file to the initial prompt; can be repeated |
@@ -194,7 +194,17 @@ Tools live in `src/tool/`.
 | `edit` | `path`, `old_string`, `new_string` | Replaces first exact match and records before/after details; sequential; mutating |
 | `bash` | `command`, optional `timeout_secs` | Runs in workspace root via `cmd /C` on Windows or `sh -c` on Unix; sequential; mutating |
 
-All file paths are validated against the harness workspace root. Mutating tools are denied unless `--allow-mutating` or `defaults.allow_mutating_tools = true` is set.
+Available built-in tools are `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, and additional `glob`.
+
+Default active tools depend on run mode:
+
+- Interactive mode: `read`, `write`, `edit`, `bash`.
+- Non-interactive mode: `read`, `grep`, `find`, `ls`, `glob`.
+- Non-interactive mode with `--allow-mutating` or `defaults.allow_mutating_tools = true`: `read`, `write`, `edit`, `bash`.
+
+Use `--tools <TOOLS>` to provide an explicit active tool allowlist. In non-interactive mode, allowlists containing `write`, `edit`, or `bash` require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
+
+Path policy is mode-aware. File writes and edits are restricted to the harness workspace root. Interactive `read` can resolve absolute paths and paths outside the workspace; non-interactive file tools remain workspace-only by default. File tool details include `workspace_root`, `resolved_path`, and `inside_workspace`.
 
 Tool selection precedence is `--no-tools` > `--tools` > `--no-builtin-tools` > default.
 

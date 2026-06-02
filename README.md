@@ -15,6 +15,20 @@ Current workspace version: `0.3.0`.
 
 `opi-web-ui` remains a placeholder crate with `publish = false`; it does not contain a real web UI yet.
 
+## Relationship to pi
+
+`opi` borrows pi's ideas and design boundaries, but it is not API-compatible with pi and does not read pi config or session files by default.
+
+| Area | pi direction | opi treatment |
+|------|--------------|---------------|
+| Product surface | Minimal terminal coding harness | Terminal-first Rust coding agent and reusable Rust crates |
+| Core coding tools | Default `read`, `write`, `edit`, `bash` | Same interactive default tool set |
+| Read-only navigation | `read`, `grep`, `find`, `ls` | Same core read-only set; `glob` is an extra convenience and core workflows should not depend on it |
+| Extensibility | Extensions, skills, prompt templates, themes, packages | Phase 4 focuses on RPC, SDK, extensions, skills, prompt fragments, themes, and packages |
+| Workflow-heavy features | MCP, sub-agents, plan mode, todos, and permission gates stay outside core | Keep them as extension/package examples instead of built-in core policy |
+| Config and sessions | `.pi` JSON settings and pi session files | TOML config and opi JSONL sessions |
+| Web UI | Available in pi's package set | Deferred until RPC/SDK surfaces are useful |
+
 ## Workspace
 
 Cargo workspace with lockstep versioning. Every crate inherits `version`, `edition`, `license`, `repository`, and `authors` from `[workspace.package]`.
@@ -30,9 +44,9 @@ Cargo workspace with lockstep versioning. Every crate inherits `version`, `editi
 Internal dependency shape:
 
 ```text
-opi-ai -> opi-agent
-opi-ai -> opi-web-ui
-opi-ai + opi-agent + opi-tui -> opi-coding-agent -> opi binary
+opi-agent -> opi-ai
+opi-web-ui -> opi-ai
+opi-coding-agent -> opi-ai + opi-agent + opi-tui -> opi binary
 ```
 
 ## Install
@@ -128,7 +142,7 @@ Tools are implemented by `opi-coding-agent` and exposed through the `opi-agent::
 | `edit` | `path`, `old_string`, `new_string` | sequential | yes |
 | `bash` | `command`, optional `timeout_secs` | sequential | yes |
 
-All file paths are constrained to the harness workspace root. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
+All file paths are constrained to the harness workspace root. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true`, so unattended and edge-device runs stay read-only unless the caller explicitly opts into writes or shell execution.
 
 Tool selection flags:
 
@@ -316,13 +330,13 @@ Key abstractions:
 - `opi_agent::AgentHooks`: lifecycle hooks around message conversion, tool policy, tool results, stopping, and next-turn preparation.
 - `opi_agent::SessionWriter` / `SessionReader`: append-only JSONL session storage with crash recovery.
 - `opi_agent::CompactionEngine`: threshold/manual/overflow compaction support.
-- `opi_agent::Transport`: stdio/SSE transport abstraction reserved for external tool servers; not wired into the main loop yet.
+- `opi_agent::Transport`: reserved transport abstraction; Phase 4 must either make it real RPC/proxy infrastructure, mark it unstable, or remove it before stable API claims.
 
 ## Still Not Implemented
 
-- Sub-agents and skills as product features.
+- Sub-agents, permission gates, plan/todo workflows, and skills as extension/package product features.
 - Prompt template registry.
-- MCP tool server integration through `Transport`.
+- MCP tool server integration through an extension/package path.
 - OAuth or subscription login flows.
 - Real web UI widgets in `opi-web-ui`.
 

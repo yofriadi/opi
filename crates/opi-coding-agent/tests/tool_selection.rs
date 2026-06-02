@@ -11,7 +11,7 @@ use opi_coding_agent::cli::Cli;
 use opi_coding_agent::config::OpiConfig;
 use opi_coding_agent::harness::CodingHarness;
 use opi_coding_agent::policy::{
-    ToolFlags, ToolSelection, filter_tool_names, resolve_tool_selection,
+    RunMode, ToolFlags, ToolRuntimeConfig, ToolSelection, filter_tool_names, resolve_tool_selection,
 };
 
 use clap::Parser;
@@ -105,10 +105,59 @@ fn tools_takes_precedence_over_no_builtin() {
 // --- Tool name filtering ---
 
 #[test]
-fn filter_default_includes_all() {
-    let all = vec!["read", "write", "edit", "bash", "glob", "grep"];
-    let result = filter_tool_names(&all, &ToolSelection::Default);
-    assert_eq!(result, all);
+fn interactive_default_active_tools_match_pi() {
+    let config = ToolRuntimeConfig::resolve(RunMode::Interactive, false, ToolSelection::Default)
+        .expect("interactive default should be valid");
+    assert_eq!(
+        config.active_tool_names,
+        vec!["read", "write", "edit", "bash"]
+    );
+}
+
+#[test]
+fn non_interactive_default_active_tools_are_read_only() {
+    let config = ToolRuntimeConfig::resolve(RunMode::NonInteractive, false, ToolSelection::Default)
+        .expect("non-interactive read-only default should be valid");
+    assert_eq!(
+        config.active_tool_names,
+        vec!["read", "grep", "find", "ls", "glob"]
+    );
+}
+
+#[test]
+fn non_interactive_mutating_opt_in_uses_coding_tools() {
+    let config = ToolRuntimeConfig::resolve(RunMode::NonInteractive, true, ToolSelection::Default)
+        .expect("non-interactive mutating default should be valid");
+    assert_eq!(
+        config.active_tool_names,
+        vec!["read", "write", "edit", "bash"]
+    );
+}
+
+#[test]
+fn non_interactive_allowlisted_mutating_tool_requires_opt_in() {
+    let error = ToolRuntimeConfig::resolve(
+        RunMode::NonInteractive,
+        false,
+        ToolSelection::Allowlist(vec!["read".into(), "bash".into()]),
+    )
+    .expect_err("bash should require mutating opt-in");
+    assert!(
+        error
+            .to_string()
+            .contains("mutating tool 'bash' requires --allow-mutating")
+    );
+}
+
+#[test]
+fn non_interactive_allowlisted_mutating_tool_allowed_with_opt_in() {
+    let config = ToolRuntimeConfig::resolve(
+        RunMode::NonInteractive,
+        true,
+        ToolSelection::Allowlist(vec!["read".into(), "bash".into()]),
+    )
+    .expect("bash should be valid with mutating opt-in");
+    assert_eq!(config.active_tool_names, vec!["read", "bash"]);
 }
 
 #[test]
@@ -147,14 +196,16 @@ fn filter_allowlist_unknown_names_excluded() {
 }
 
 #[test]
-fn filter_allowlist_preserves_order() {
-    let all = vec!["read", "write", "edit", "bash", "glob", "grep"];
+fn filter_allowlist_preserves_builtin_order() {
+    let all = vec![
+        "read", "write", "edit", "bash", "grep", "find", "ls", "glob",
+    ];
     let result = filter_tool_names(
         &all,
-        &ToolSelection::Allowlist(vec!["grep".into(), "read".into()]),
+        &ToolSelection::Allowlist(vec!["grep".into(), "read".into(), "bash".into()]),
     );
     // Result preserves the order from all_tools, not from the allowlist
-    assert_eq!(result, vec!["read", "grep"]);
+    assert_eq!(result, vec!["read", "bash", "grep"]);
 }
 
 #[test]
@@ -201,7 +252,7 @@ fn cli_parse_no_flags_defaults() {
 // --- Harness tool filtering (integration) ---
 
 #[tokio::test]
-async fn harness_default_includes_all_tools() {
+async fn harness_default_includes_interactive_coding_tools() {
     let workspace = create_temp_workspace();
     let mock = MockProvider::new("mock", vec![text_response("done")]);
 
@@ -213,10 +264,47 @@ async fn harness_default_includes_all_tools() {
     );
 
     let system = harness.system_prompt();
-    for tool in &["read", "write", "edit", "bash", "glob", "grep"] {
+    for tool in &["read", "write", "edit", "bash"] {
         assert!(
             system.contains(&format!("- {tool}:")),
-            "Default selection should include tool '{tool}' in system prompt"
+            "Default interactive selection should include tool '{tool}'"
+        );
+    }
+    for tool in &["grep", "find", "ls", "glob"] {
+        assert!(
+            !system.contains(&format!("- {tool}:")),
+            "Default interactive selection should not include tool '{tool}'"
+        );
+    }
+}
+
+#[tokio::test]
+async fn harness_non_interactive_default_includes_read_only_tools() {
+    let workspace = create_temp_workspace();
+    let mock = MockProvider::new("mock", vec![text_response("done")]);
+    let tool_config =
+        ToolRuntimeConfig::resolve(RunMode::NonInteractive, false, ToolSelection::Default)
+            .expect("tool config");
+
+    let harness = CodingHarness::new_with_tool_config(
+        Box::new(mock),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        tool_config,
+    );
+
+    let system = harness.system_prompt();
+    for tool in &["read", "grep", "find", "ls", "glob"] {
+        assert!(
+            system.contains(&format!("- {tool}:")),
+            "Non-interactive default should include tool '{tool}'"
+        );
+    }
+    for tool in &["bash", "edit", "write"] {
+        assert!(
+            !system.contains(&format!("- {tool}:")),
+            "Non-interactive default should not include tool '{tool}'"
         );
     }
 }

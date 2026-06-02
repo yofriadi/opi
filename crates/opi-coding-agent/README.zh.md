@@ -11,7 +11,7 @@
 
 当前 crate 版本：`0.3.0`。
 
-本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、9 个 Provider 前缀、8 个内置工具、工具选择参数、图片附件、模型/会话选择器、shell 补全生成、上下文文件加载、会话持久化、会话 resume/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、retry、token 用量统计，以及尽力而为的费用摘要。
+本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、9 个 Provider 前缀、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话选择器、shell 补全生成、上下文文件加载、会话持久化、会话 resume/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、retry、token 用量统计，以及尽力而为的费用摘要。
 
 ## 安装
 
@@ -42,7 +42,7 @@ opi -m openai:gpt-4o "解释 crates/opi-coding-agent/src/main.rs"
 # 为第一条提示词附加图片
 opi --image screenshot.png "审查这张截图。"
 
-# 允许 write/edit/bash 这类修改性工具
+# 在非交互自动化中允许修改性工具
 opi --allow-mutating "更新 README。"
 ```
 
@@ -55,14 +55,14 @@ opi --allow-mutating "更新 README。"
 | `-c, --config <FILE>` | 显式 TOML 配置文件；必须存在 |
 | `-s, --system <FILE>` | 用户系统提示词文件，会追加到内置编程提示词 |
 | `--non-interactive` | 强制非交互模式；仍需提示词文本 |
-| `--allow-mutating` | 允许 `write`、`edit`、`bash` |
+| `--allow-mutating` | 在非交互模式中允许 `write`、`edit` 和 `bash` |
 | `--json` | 输出 NDJSON 事件到 stdout；同时使用非交互模式 |
 | `--list-sessions` | 列出已保存会话并退出 |
 | `--resume <ID>` | 按 id 恢复会话 |
 | `--delete-session <ID>` | 按 id 删除会话并退出 |
 | `--generate-completion <SHELL>` | 为 `bash`、`zsh`、`fish`、`powershell` 或 `elvish` 生成 shell 补全 |
 | `-v, --verbose` | 启用 debug tracing |
-| `--tools <TOOLS>` | 逗号分隔的内置工具 allowlist，例如 `read,grep` |
+| `--tools <TOOLS>` | 逗号分隔的启用工具 allowlist，例如 `read,grep` |
 | `--no-tools` | 禁用所有工具 |
 | `--no-builtin-tools` | 禁用内置工具；为扩展/自定义工具预留 |
 | `--image <IMAGE>` | 给初始提示词附加一张图片；可重复 |
@@ -194,7 +194,17 @@ no_proxy = "localhost,127.0.0.1"
 | `edit` | `path`、`old_string`、`new_string` | 替换第一个精确匹配，并记录 before/after details；串行；修改性 |
 | `bash` | `command`，可选 `timeout_secs` | 在 workspace 根目录运行；Windows 使用 `cmd /C`，Unix 使用 `sh -c`；串行；修改性 |
 
-所有文件路径都会被校验，不能越出 harness 的 workspace 根目录。除非设置 `--allow-mutating` 或 `defaults.allow_mutating_tools = true`，否则修改性工具会被拒绝。
+可用内置工具包括 `read`、`write`、`edit`、`bash`、`grep`、`find`、`ls`，以及额外的 `glob`。
+
+默认启用工具取决于运行模式：
+
+- 交互模式：`read`、`write`、`edit`、`bash`。
+- 非交互模式：`read`、`grep`、`find`、`ls`、`glob`。
+- 非交互模式带 `--allow-mutating` 或 `defaults.allow_mutating_tools = true`：`read`、`write`、`edit`、`bash`。
+
+`--tools <TOOLS>` 用于显式指定启用工具 allowlist。非交互模式下，如果 allowlist 包含 `write`、`edit` 或 `bash`，必须同时设置 `--allow-mutating` 或 `defaults.allow_mutating_tools = true`。
+
+路径策略按模式区分。写入和编辑默认限制在 harness workspace 根目录内。交互模式的 `read` 可以解析绝对路径和 workspace 外路径；非交互模式的文件工具默认保持 workspace-only。文件工具 details 会记录 `workspace_root`、`resolved_path` 和 `inside_workspace`。
 
 工具选择优先级是 `--no-tools` > `--tools` > `--no-builtin-tools` > 默认。
 

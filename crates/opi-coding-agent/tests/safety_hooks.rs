@@ -61,7 +61,7 @@ fn make_before_ctx(tool_name: &str) -> BeforeToolCallContext {
 // --- InteractiveCodingHooks unit tests ---
 
 #[tokio::test]
-async fn interactive_allows_read_only_when_mutating_denied() {
+async fn interactive_allows_read_only_tools() {
     let hooks = InteractiveCodingHooks::new(false);
     for tool in &["read", "glob", "grep"] {
         let result = hooks.before_tool_call(make_before_ctx(tool)).await;
@@ -73,28 +73,14 @@ async fn interactive_allows_read_only_when_mutating_denied() {
 }
 
 #[tokio::test]
-async fn interactive_denies_mutating_when_not_allowed() {
+async fn interactive_allows_mutating_tools() {
     let hooks = InteractiveCodingHooks::new(false);
     for tool in &["write", "edit", "bash"] {
         let result = hooks.before_tool_call(make_before_ctx(tool)).await;
-        match result {
-            BeforeToolCallResult::Deny { reason } => {
-                assert!(
-                    reason.contains(tool),
-                    "Deny reason should mention tool '{tool}'"
-                );
-                assert!(
-                    reason.contains("--allow-mutating"),
-                    "Deny reason should mention --allow-mutating flag"
-                );
-            }
-            BeforeToolCallResult::Allow => {
-                panic!("mutating tool '{tool}' should be denied when allow_mutating=false");
-            }
-            _ => {
-                panic!("unexpected result for mutating tool '{tool}'");
-            }
-        }
+        assert!(
+            matches!(result, BeforeToolCallResult::Allow),
+            "interactive hook should pass through mutating tool '{tool}'"
+        );
     }
 }
 
@@ -138,11 +124,11 @@ async fn non_interactive_denies_mutating_by_default() {
         );
 
         let result = runner.run("test prompt").await;
-        // The tool denial should result in the tool error being sent back to the LLM,
-        // which then produces the "done" text response.
+        // The unavailable tool result is sent back to the LLM, which then
+        // produces the "done" text response.
         assert_eq!(
             result.exit_code, 0,
-            "Should succeed after denial + follow-up"
+            "Should succeed after unavailable-tool follow-up"
         );
         assert!(
             result.stdout.contains("done"),
@@ -211,12 +197,10 @@ async fn e2e_json_mode_tool_denial() {
         let result = runner.run_json("test prompt").await;
 
         let output = result.stdout;
-        // The tool denial should produce a tool_result event with is_error=true
+        // The unavailable tool should produce a tool_result event with is_error=true.
         assert!(
-            output.contains("is_error")
-                || output.contains("not allowed")
-                || output.contains("--allow-mutating"),
-            "JSON output should contain tool denial information: {output}"
+            output.contains("is_error") || output.contains("unknown tool: bash"),
+            "JSON output should contain unavailable tool information: {output}"
         );
     })
     .await
@@ -251,10 +235,10 @@ async fn session_audit_tool_denial() {
         let result = runner.run("test prompt").await;
         assert_eq!(
             result.exit_code, 0,
-            "Should succeed after denial + follow-up"
+            "Should succeed after unavailable-tool follow-up"
         );
 
-        // The session should exist and contain the tool denial
+        // The session should exist and contain the unavailable tool result.
         let session = runner.session().expect("session should exist");
         let session_path = session.session_path();
 
@@ -262,25 +246,24 @@ async fn session_audit_tool_denial() {
         let (_header, entries) = opi_agent::session::SessionReader::read_all(session_path)
             .expect("session should be readable");
 
-        // Find tool result entries that contain the denial message
-        let has_denial = entries.iter().any(|e| {
+        let has_unavailable_tool = entries.iter().any(|e| {
             let json = serde_json::to_string(e).unwrap_or_default();
-            json.contains("--allow-mutating") || json.contains("not allowed")
+            json.contains("unknown tool: write")
         });
         assert!(
-            has_denial,
-            "Session entries should contain tool denial audit record"
+            has_unavailable_tool,
+            "Session entries should contain unavailable tool audit record"
         );
     })
     .await
 }
 
-// --- Tool selection + hook interaction: allowlisted tool still denied by hook ---
+// --- Tool selection + hook interaction: allowlisted mutating tools are visible interactively ---
 
 #[tokio::test]
-async fn tool_selection_allowlist_does_not_override_hook() {
+async fn tool_selection_allowlist_includes_mutating_tool_interactively() {
     let workspace = create_temp_workspace();
-    // Allowlist includes "write" but hook denies mutating tools
+    // Interactive policy accepts mutating allowlists without an extra hook denial.
     let mock = MockProvider::new(
         "mock",
         vec![

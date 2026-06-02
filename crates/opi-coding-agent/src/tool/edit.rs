@@ -64,7 +64,11 @@ impl Tool for EditTool {
                 });
             }
         };
-        let file_path = match super::validate_workspace_path(&self.workspace_root, &args.path) {
+        let resolved_path = match super::resolve_tool_path(
+            &self.workspace_root,
+            &args.path,
+            super::PathPolicy::WorkspaceOnly,
+        ) {
             Ok(p) => p,
             Err(msg) => {
                 return Box::pin(async move {
@@ -77,6 +81,8 @@ impl Tool for EditTool {
                 });
             }
         };
+        let file_path = resolved_path.path;
+        let inside_workspace = resolved_path.inside_workspace;
         let workspace_root = self.workspace_root.clone();
         let path_for_display = args.path.clone();
         Box::pin(async move {
@@ -125,6 +131,8 @@ impl Tool for EditTool {
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
                 "path": path_for_display,
+                "resolved_path": file_path.to_string_lossy(),
+                "inside_workspace": inside_workspace,
                 "before": before,
                 "after": new_content,
             });

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use opi_ai::test_support::{self, MockProvider};
 use opi_coding_agent::config::OpiConfig;
+use opi_coding_agent::policy::{RunMode, ToolRuntimeConfig, ToolSelection};
 use opi_coding_agent::runner::{ExitCode, NonInteractiveRunner};
 
 fn temp_workspace() -> PathBuf {
@@ -47,10 +48,10 @@ async fn policy_write_blocked_by_default() {
 
     assert_eq!(result.exit_code, ExitCode::Success as i32);
     assert!(
-        result.stdout.contains("denied")
-            || result.stderr.contains("denied")
-            || result.stdout.contains("not allowed"),
-        "should indicate tool was denied, stdout: {:?}, stderr: {:?}",
+        result.stdout.contains("unknown tool: write")
+            || result.stderr.contains("unknown tool: write")
+            || result.stdout.contains("Write was denied"),
+        "should indicate write was not available, stdout: {:?}, stderr: {:?}",
         result.stdout,
         result.stderr
     );
@@ -85,10 +86,10 @@ async fn policy_edit_blocked_by_default() {
 
     assert_eq!(result.exit_code, ExitCode::Success as i32);
     assert!(
-        result.stdout.contains("denied")
-            || result.stderr.contains("denied")
-            || result.stdout.contains("not allowed"),
-        "should indicate tool was denied, stdout: {:?}, stderr: {:?}",
+        result.stdout.contains("unknown tool: edit")
+            || result.stderr.contains("unknown tool: edit")
+            || result.stdout.contains("Edit was denied"),
+        "should indicate edit was not available, stdout: {:?}, stderr: {:?}",
         result.stdout,
         result.stderr
     );
@@ -119,10 +120,10 @@ async fn policy_bash_blocked_by_default() {
 
     assert_eq!(result.exit_code, ExitCode::Success as i32);
     assert!(
-        result.stdout.contains("denied")
-            || result.stderr.contains("denied")
-            || result.stdout.contains("not allowed"),
-        "should indicate tool was denied, stdout: {:?}, stderr: {:?}",
+        result.stdout.contains("unknown tool: bash")
+            || result.stderr.contains("unknown tool: bash")
+            || result.stdout.contains("Bash was denied"),
+        "should indicate bash was not available, stdout: {:?}, stderr: {:?}",
         result.stdout,
         result.stderr
     );
@@ -197,24 +198,28 @@ async fn policy_all_tools_allowed_when_opted_in() {
 // Test 6: glob and grep are allowed by default
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn policy_readonly_tools_always_allowed() {
-    let first = test_support::tool_call_response("tc-1", "glob", r#"{"pattern":"*.rs"}"#);
-    let second = test_support::text_response("Glob succeeded.");
-
-    let provider = MockProvider::new("mock", vec![first, second]);
-
-    let mut runner = NonInteractiveRunner::new(
-        Box::new(provider),
-        "mock-model".into(),
-        OpiConfig::default(),
-        temp_workspace(),
-        false,
-        None,
-        Vec::new(),
+#[test]
+fn policy_readonly_tools_always_allowed() {
+    let config = ToolRuntimeConfig::resolve(RunMode::NonInteractive, false, ToolSelection::Default)
+        .expect("tool config");
+    assert_eq!(
+        config.active_tool_names,
+        vec!["read", "grep", "find", "ls", "glob"]
     );
+}
 
-    let result = runner.run("Find files").await;
+#[test]
+fn non_interactive_tools_bash_without_allow_mutating_is_policy_error() {
+    let error = ToolRuntimeConfig::resolve(
+        RunMode::NonInteractive,
+        false,
+        ToolSelection::Allowlist(vec!["bash".into()]),
+    )
+    .expect_err("bash should require opt-in");
 
-    assert_eq!(result.exit_code, ExitCode::Success as i32);
+    assert!(
+        error
+            .to_string()
+            .contains("mutating tool 'bash' requires --allow-mutating")
+    );
 }
