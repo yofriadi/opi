@@ -94,7 +94,19 @@ fn main() {
         no_builtin_tools: cli.no_builtin_tools,
     });
 
-    if cli.non_interactive || cli.json || !prompt_text.is_empty() {
+    // RPC mode: bidirectional JSONL protocol over stdin/stdout.
+    if cli.rpc {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("opi: runtime error: {e}");
+                std::process::exit(1);
+            }
+        };
+        let exit_code =
+            rt.block_on(async { run_rpc(&cli, &config, resumed_messages, tool_selection).await });
+        std::process::exit(exit_code);
+    } else if cli.non_interactive || cli.json || !prompt_text.is_empty() {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
@@ -240,6 +252,68 @@ async fn run_non_interactive(
     }
 
     result.exit_code
+}
+
+async fn run_rpc(
+    cli: &Cli,
+    config: &opi_coding_agent::config::OpiConfig,
+    resumed_messages: Option<Vec<opi_agent::message::AgentMessage>>,
+    _tool_selection: ToolSelection,
+) -> i32 {
+    use opi_coding_agent::rpc::RpcRunner;
+    use opi_coding_agent::runner::ExitCode;
+
+    let provider = match build_provider(config) {
+        Ok(p) => p,
+        Err(ProviderBuildError::Auth(msg)) => {
+            eprintln!("opi: {msg}");
+            return ExitCode::AuthFailure as i32;
+        }
+        Err(ProviderBuildError::Config(msg)) => {
+            eprintln!("opi: {msg}");
+            return ExitCode::ConfigError as i32;
+        }
+        Err(ProviderBuildError::Provider(e)) => {
+            eprintln!("opi: {e}");
+            return ExitCode::ConfigError as i32;
+        }
+    };
+
+    let allow_mutating = cli.allow_mutating || config.defaults.allow_mutating_tools;
+
+    let user_system_prompt =
+        cli.system
+            .as_ref()
+            .and_then(|path| match std::fs::read_to_string(path) {
+                Ok(content) => Some(content),
+                Err(e) => {
+                    eprintln!(
+                        "opi: warning: failed to read system prompt file {}: {e}",
+                        path.display()
+                    );
+                    None
+                }
+            });
+
+    let workspace_root = std::env::current_dir().unwrap_or_default();
+
+    let mut runner = match RpcRunner::new(
+        provider,
+        config.defaults.model.clone(),
+        config.clone(),
+        workspace_root,
+        allow_mutating,
+        user_system_prompt,
+        resumed_messages.unwrap_or_default(),
+    ) {
+        Ok(runner) => runner,
+        Err(e) => {
+            eprintln!("opi: {e}");
+            return ExitCode::ConfigError as i32;
+        }
+    };
+
+    runner.run().await
 }
 
 async fn run_interactive(

@@ -8,6 +8,7 @@ pub mod picker;
 pub mod policy;
 pub mod pricing;
 pub mod prompt;
+pub mod rpc;
 pub mod runner;
 pub mod session_cli;
 pub mod session_coordinator;

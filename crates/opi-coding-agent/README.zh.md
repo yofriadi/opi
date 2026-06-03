@@ -11,7 +11,7 @@
 
 当前 crate 版本：`0.4.0`。
 
-本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、9 个 Provider 前缀、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话选择器、shell 补全生成、上下文文件加载、会话持久化、会话 resume/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、retry、token 用量统计，以及尽力而为的费用摘要。
+本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、RPC JSONL 模式、9 个 Provider 前缀、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话选择器、shell 补全生成、上下文文件加载、会话持久化、会话 resume/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、retry、token 用量统计，以及尽力而为的费用摘要。
 
 ## 安装
 
@@ -67,6 +67,7 @@ opi --allow-mutating "更新 README。"
 | `--no-builtin-tools` | 禁用内置工具；为扩展/自定义工具预留 |
 | `--image <IMAGE>` | 给初始提示词附加一张图片；可重复 |
 | `--list-models` | 列出已配置 Provider 可用模型并退出 |
+| `--rpc` | RPC JSONL 模式：通过 stdin/stdout 双向命令/事件协议 |
 
 ## Provider
 
@@ -267,6 +268,43 @@ Slash 命令：
 ### JSON 非交互
 
 `--json` 会把 NDJSON 输出到 stdout。第一行是 schema header，随后是序列化的 session/agent 事件，最后输出带 token 总量和可选费用总量的 `session_summary`。
+
+### RPC JSONL 模式
+
+`--rpc` 启动一个通过 stdin/stdout 进行双向 JSONL 通信的持久会话。这是 IDE、自定义 UI 和外部工具集成的推荐嵌入模式。
+
+**这是一个不稳定的 0.x 协议。** schema 可能在次版本之间变更。客户端必须在 `rpc_ready` 头中检查 `schema_version`。
+
+```sh
+opi --rpc
+```
+
+启动时，`opi` 会输出 `rpc_ready` 头：
+
+```json
+{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.4.0"}
+```
+
+命令是以 JSON 对象形式发送到 stdin（每行一个）。响应和事件是以 JSON 对象形式输出到 stdout（每行一个）。诊断信息输出到 stderr。
+
+#### 命令
+
+| 命令 | 说明 |
+|------|------|
+| `prompt` | 发送用户提示词；agent 事件异步流式输出 |
+| `continue` | 用附加文本继续对话 |
+| `steer` | 在 agent 运行期间排队转向消息 |
+| `follow_up` | 排队后续消息，在 agent 停止后处理 |
+| `abort` | 取消当前 agent 操作 |
+| `set_model` | 切换 provider:model |
+| `set_thinking_level` | 设置推理/思考级别 |
+| `compact` | 触发手动压缩 |
+| `session_info` | 查询会话元数据 |
+| `quit` | 关闭 RPC 会话 |
+
+所有命令都支持可选的 `id` 字段用于请求/响应关联。
+
+对于 `prompt` 和 `continue`，`success: true` 表示命令已被接受。agent 事件（包括接受后的错误）以异步事件行到达。
 
 ## 上下文文件
 

@@ -501,6 +501,21 @@ impl CodingHarness {
         self.agent.messages_snapshot()
     }
 
+    /// Return the current model name.
+    pub fn model(&self) -> &str {
+        self.agent.model()
+    }
+
+    /// Queue a steering message for the next provider call.
+    pub fn steer(&self, message: String) {
+        self.agent.steer(message);
+    }
+
+    /// Queue a follow-up message for when the agent would otherwise stop.
+    pub fn follow_up(&self, message: String) {
+        self.agent.follow_up(message);
+    }
+
     /// Register an event subscriber.
     pub fn subscribe(&mut self, callback: Box<dyn Fn(&AgentEvent) + Send + Sync>) {
         self.agent.subscribe(callback);
@@ -529,6 +544,26 @@ impl CodingHarness {
     /// Return the session coordinator, if active.
     pub fn session(&self) -> Option<&SessionCoordinator> {
         self.session.as_ref()
+    }
+
+    /// Execute manual compaction on the session, if one is active.
+    /// Returns the compaction result, or None if compaction produced no output
+    /// or no session exists.
+    pub fn compact(
+        &mut self,
+        reason: opi_agent::session_event::CompactionReason,
+    ) -> Result<Option<opi_agent::session_event::CompactionResult>, String> {
+        let session = match &mut self.session {
+            Some(s) => s,
+            None => return Err("no active session".into()),
+        };
+        let result = session
+            .execute_compaction(reason)
+            .map_err(|e| format!("compaction failed: {e}"))?;
+        if let Some(out) = &result {
+            self.agent.replace_messages(out.new_agent_messages.clone());
+        }
+        Ok(result.map(|out| crate::session_coordinator::to_wire_result(&out)))
     }
 
     fn build_tools(workspace_root: &Path, tool_config: &ToolRuntimeConfig) -> Vec<Box<dyn Tool>> {

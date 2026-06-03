@@ -55,6 +55,10 @@ pub struct Cli {
     #[arg(long)]
     pub json: bool,
 
+    /// RPC JSONL mode: bidirectional command/event protocol over stdin/stdout.
+    #[arg(long)]
+    pub rpc: bool,
+
     /// List all sessions.
     #[arg(long)]
     pub list_sessions: bool,

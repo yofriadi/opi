@@ -11,7 +11,7 @@
 
 Current crate version: `0.4.0`.
 
-This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, nine provider prefixes, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session pickers, shell completion generation, context file loading, session persistence, resume/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, retry, token usage totals, and best-effort cost summaries.
+This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, RPC JSONL mode, nine provider prefixes, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session pickers, shell completion generation, context file loading, session persistence, resume/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, retry, token usage totals, and best-effort cost summaries.
 
 ## Install
 
@@ -67,6 +67,7 @@ opi --allow-mutating "Update the README."
 | `--no-builtin-tools` | Disable built-in tools; reserved for extension/custom tools |
 | `--image <IMAGE>` | Attach one image file to the initial prompt; can be repeated |
 | `--list-models` | List available models from configured providers and exit |
+| `--rpc` | RPC JSONL mode: bidirectional command/event protocol over stdin/stdout |
 
 ## Providers
 
@@ -267,6 +268,85 @@ Exit codes:
 ### JSON non-interactive
 
 `--json` emits NDJSON to stdout. The first line is a schema header, followed by serialized session/agent events and a final `session_summary` with token totals and optional cost totals.
+
+### RPC JSONL mode
+
+`--rpc` starts a persistent bidirectional JSONL session over stdin/stdout. This is the recommended embedding mode for IDEs, custom UIs, and external tool integration.
+
+**This is an unstable 0.x protocol.** The schema may change between minor versions. Clients MUST check `schema_version` in the `rpc_ready` header.
+
+```sh
+opi --rpc
+```
+
+On startup, `opi` emits a `rpc_ready` header:
+
+```json
+{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.4.0"}
+```
+
+Commands are JSON objects sent to stdin, one per line. Responses and events are JSON objects emitted to stdout, one per line. Diagnostics go to stderr.
+
+#### Commands
+
+| Command | Description |
+|---------|-------------|
+| `prompt` | Send user prompt; agent events stream asynchronously |
+| `continue` | Continue conversation with additional text |
+| `steer` | Queue steering message during agent operation |
+| `follow_up` | Queue follow-up message for after agent stops |
+| `abort` | Cancel current agent operation |
+| `set_model` | Switch provider:model |
+| `set_thinking_level` | Set reasoning/thinking level |
+| `compact` | Trigger manual compaction |
+| `session_info` | Query session metadata |
+| `quit` | Shut down the RPC session |
+
+All commands support an optional `id` field for request/response correlation.
+
+#### Response format
+
+```json
+{"type":"response","id":"req-1","command":"prompt","success":true}
+{"type":"response","id":"req-2","command":"set_model","success":false,"error":"model not found"}
+{"type":"response","id":"req-3","command":"session_info","success":true,"data":{"model":"anthropic:claude-sonnet-4"}}
+```
+
+For `prompt` and `continue`, `success: true` means the command was accepted. Agent events (including errors after acceptance) arrive as async event lines.
+
+#### Error semantics
+
+- **Parse errors**: `{"type":"response","command":"parse","success":false,"error":"..."}`
+- **Command rejected**: `{"type":"response","command":"<cmd>","success":false,"error":"..."}`
+- **Agent errors after acceptance**: emitted as regular agent events, not as a second response.
+
+#### Cancellation
+
+`abort` cancels the current agent operation via the cancellation token. The agent surfaces a `Cancelled` error through the normal event stream. A second `abort` while idle is a no-op.
+
+#### Example
+
+```python
+import subprocess, json
+
+proc = subprocess.Popen(
+    ["opi", "--rpc"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+)
+
+def send(cmd):
+    proc.stdin.write(json.dumps(cmd) + "\n")
+    proc.stdin.flush()
+
+def read_line():
+    return json.loads(proc.stdout.readline())
+
+header = read_line()  # rpc_ready
+send({"type": "session_info", "id": "1"})
+resp = read_line()    # response with session info
+send({"type": "quit"})
+resp = read_line()    # response: quit success
+```
 
 ## Context Files
 

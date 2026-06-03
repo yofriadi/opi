@@ -622,8 +622,15 @@ pub fn format_persist_errors(errors: &Arc<Mutex<Vec<String>>>) -> String {
 // ---------------------------------------------------------------------------
 
 /// Hooks for non-interactive mode with tool safety policy.
-struct NonInteractiveHooks {
+pub struct NonInteractiveHooks {
     allow_mutating: bool,
+}
+
+impl NonInteractiveHooks {
+    /// Create new hooks for non-interactive / RPC mode.
+    pub fn new(allow_mutating: bool) -> Self {
+        Self { allow_mutating }
+    }
 }
 
 impl AgentHooks for NonInteractiveHooks {
