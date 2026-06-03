@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod compaction;
 pub mod event;
+pub mod extension;
 pub mod hooks;
 pub mod loop_types;
 pub mod message;
@@ -18,6 +19,9 @@ pub mod validation;
 
 pub use agent::Agent;
 pub use event::{AgentEvent, AgentEventSink};
+pub use extension::{
+    Extension, ExtensionCommand, ExtensionError, ExtensionHookResult, ExtensionRegistry,
+};
 pub use hooks::AgentHooks;
 pub use loop_types::{AgentError, AgentLoopConfig, AgentLoopContext};
 pub use message::AgentMessage;
