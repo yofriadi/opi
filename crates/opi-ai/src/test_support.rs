@@ -60,6 +60,22 @@ impl MockProvider {
         }
     }
 
+    /// Create a mock provider with custom models.
+    pub fn new_with_models(
+        id: &str,
+        models: Vec<ModelInfo>,
+        responses: Vec<Vec<AssistantStreamEvent>>,
+    ) -> Self {
+        Self {
+            id: id.to_owned(),
+            models,
+            responses: Arc::new(Mutex::new(
+                responses.into_iter().map(MockResponse::Events).collect(),
+            )),
+            call_log: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
     /// Number of times `stream()` has been called.
     pub fn stream_call_count(&self) -> usize {
         self.call_log.lock().unwrap().len()

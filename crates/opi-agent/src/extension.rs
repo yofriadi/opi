@@ -64,6 +64,8 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use opi_ai::provider::{ModelInfo, Provider};
+
 use crate::event::AgentEvent;
 use crate::hooks::{
     AfterToolCallContext, AfterToolCallResult, AgentHooks, BeforeToolCallContext,
@@ -170,6 +172,28 @@ pub trait Extension: Send + Sync {
     /// Called once during [`ExtensionRegistry::collect_tools`] to gather
     /// extension tools for the agent's tool set.
     fn tools(&self) -> Vec<Box<dyn Tool>> {
+        vec![]
+    }
+
+    /// Custom providers provided by this extension.
+    ///
+    /// Called during [`ExtensionRegistry::collect_providers`] to gather
+    /// providers for registration with the provider registry. Extensions
+    /// should return new provider instances on each call since `Box<dyn
+    /// Provider>` is not `Clone`.
+    ///
+    /// Provider breadth should arrive through registration rather than core
+    /// provider additions.
+    fn providers(&self) -> Vec<Box<dyn Provider>> {
+        vec![]
+    }
+
+    /// Additional models to register for existing providers.
+    ///
+    /// Called during [`ExtensionRegistry::collect_model_overrides`] to gather
+    /// model metadata that supplements or overrides the models declared by
+    /// built-in providers. Each entry is `(provider_id, ModelInfo)`.
+    fn model_overrides(&self) -> Vec<(String, ModelInfo)> {
         vec![]
     }
 
@@ -294,6 +318,26 @@ impl ExtensionRegistry {
     /// Collect all tools from all registered extensions.
     pub fn collect_tools(&self) -> Vec<Box<dyn Tool>> {
         self.extensions.iter().flat_map(|e| e.tools()).collect()
+    }
+
+    /// Collect all custom providers from all registered extensions.
+    ///
+    /// Each extension's [`providers`](Extension::providers) method is called
+    /// and the results are concatenated. Extensions should return fresh
+    /// provider instances since `Box<dyn Provider>` is not `Clone`.
+    pub fn collect_providers(&self) -> Vec<Box<dyn Provider>> {
+        self.extensions.iter().flat_map(|e| e.providers()).collect()
+    }
+
+    /// Collect all model overrides from all registered extensions.
+    ///
+    /// Each extension's [`model_overrides`](Extension::model_overrides) method
+    /// is called and the results are concatenated.
+    pub fn collect_model_overrides(&self) -> Vec<(String, ModelInfo)> {
+        self.extensions
+            .iter()
+            .flat_map(|e| e.model_overrides())
+            .collect()
     }
 
     /// Dispatch an event to all registered extensions.
