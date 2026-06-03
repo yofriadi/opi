@@ -57,6 +57,7 @@ use std::sync::Arc;
 use opi_agent::event::AgentEvent;
 use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
+use opi_agent::sdk::{SDK_SCHEMA_VERSION, SdkCommand, SdkResponse, agent_event_to_value};
 use opi_agent::session_event::CompactionReason;
 use opi_ai::provider::Provider;
 
@@ -65,173 +66,15 @@ use crate::harness::CodingHarness;
 use crate::policy::{RunMode, ToolSelection};
 use crate::runner::ExitCode;
 
-/// RPC protocol schema version. Clients MUST check this.
-pub const RPC_SCHEMA_VERSION: u32 = 2;
+/// Re-export the SDK command type as the RPC command type.
+///
+/// The canonical definition lives in [`opi_agent::sdk::SdkCommand`]; this
+/// alias preserves the `RpcCommand` name for backward-compat within the
+/// crate while ensuring no protocol logic is duplicated.
+pub type RpcCommand = SdkCommand;
 
-// ---------------------------------------------------------------------------
-// Command types
-// ---------------------------------------------------------------------------
-
-/// An RPC command parsed from a stdin line.
-#[allow(non_camel_case_types)]
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(tag = "type")]
-pub enum RpcCommand {
-    /// Send a user prompt.
-    prompt {
-        #[serde(default)]
-        id: Option<String>,
-        message: String,
-    },
-    /// Continue conversation with additional text.
-    #[serde(rename = "continue")]
-    continue_ {
-        #[serde(default)]
-        id: Option<String>,
-        message: String,
-    },
-    /// Queue a steering message.
-    steer {
-        #[serde(default)]
-        id: Option<String>,
-        message: String,
-    },
-    /// Queue a follow-up message.
-    follow_up {
-        #[serde(default)]
-        id: Option<String>,
-        message: String,
-    },
-    /// Cancel current agent operation.
-    abort {
-        #[serde(default)]
-        id: Option<String>,
-    },
-    /// Switch model.
-    set_model {
-        #[serde(default)]
-        id: Option<String>,
-        model: String,
-    },
-    /// Set thinking/reasoning level.
-    set_thinking_level {
-        #[serde(default)]
-        id: Option<String>,
-        level: String,
-    },
-    /// Trigger manual compaction.
-    compact {
-        #[serde(default)]
-        id: Option<String>,
-    },
-    /// Query session metadata.
-    session_info {
-        #[serde(default)]
-        id: Option<String>,
-    },
-    /// Shut down the RPC session.
-    quit {
-        #[serde(default)]
-        id: Option<String>,
-    },
-}
-
-impl RpcCommand {
-    /// Return the optional correlation id.
-    pub fn id(&self) -> Option<&str> {
-        match self {
-            Self::prompt { id, .. }
-            | Self::continue_ { id, .. }
-            | Self::steer { id, .. }
-            | Self::follow_up { id, .. }
-            | Self::abort { id }
-            | Self::set_model { id, .. }
-            | Self::set_thinking_level { id, .. }
-            | Self::compact { id }
-            | Self::session_info { id }
-            | Self::quit { id } => id.as_deref(),
-        }
-    }
-
-    /// Return the command name for response correlation.
-    pub fn command_name(&self) -> &'static str {
-        match self {
-            Self::prompt { .. } => "prompt",
-            Self::continue_ { .. } => "continue",
-            Self::steer { .. } => "steer",
-            Self::follow_up { .. } => "follow_up",
-            Self::abort { .. } => "abort",
-            Self::set_model { .. } => "set_model",
-            Self::set_thinking_level { .. } => "set_thinking_level",
-            Self::compact { .. } => "compact",
-            Self::session_info { .. } => "session_info",
-            Self::quit { .. } => "quit",
-        }
-    }
-
-    /// Whether this is the quit command.
-    pub fn is_quit(&self) -> bool {
-        matches!(self, Self::quit { .. })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Response helpers
-// ---------------------------------------------------------------------------
-
-/// Build a success response.
-fn success_response(id: Option<&str>, command: &str) -> serde_json::Value {
-    let mut v = serde_json::json!({
-        "type": "response",
-        "command": command,
-        "success": true,
-    });
-    if let Some(id) = id {
-        v["id"] = serde_json::Value::String(id.to_owned());
-    }
-    v
-}
-
-/// Build a success response with data.
-fn success_response_with_data(
-    id: Option<&str>,
-    command: &str,
-    data: serde_json::Value,
-) -> serde_json::Value {
-    let mut v = success_response(id, command);
-    v["data"] = data;
-    v
-}
-
-/// Build an error response.
-fn error_response(id: Option<&str>, command: &str, error: &str) -> serde_json::Value {
-    let mut v = serde_json::json!({
-        "type": "response",
-        "command": command,
-        "success": false,
-        "error": error,
-    });
-    if let Some(id) = id {
-        v["id"] = serde_json::Value::String(id.to_owned());
-    }
-    v
-}
-
-// ---------------------------------------------------------------------------
-// Event mapping
-// ---------------------------------------------------------------------------
-
-/// Convert an AgentEvent to an RPC event JSON line.
-fn agent_event_to_rpc(event: &AgentEvent) -> serde_json::Value {
-    // Reuse the existing AgentEvent serialization (which includes the "type" tag).
-    match serde_json::to_value(event) {
-        Ok(v) => v,
-        Err(_) => serde_json::json!({
-            "type": "session_persist_error",
-            "message": "failed to serialize agent event",
-        }),
-    }
-}
+/// Re-export the SDK schema version for crate-level access (e.g. tests).
+pub const RPC_SCHEMA_VERSION: u32 = SDK_SCHEMA_VERSION;
 
 // ---------------------------------------------------------------------------
 // Runner
@@ -288,7 +131,7 @@ impl RpcRunner {
         // Write the rpc_ready header.
         let header = serde_json::json!({
             "type": "rpc_ready",
-            "schema_version": RPC_SCHEMA_VERSION,
+            "schema_version": SDK_SCHEMA_VERSION,
             "mode": "rpc",
             "version": env!("CARGO_PKG_VERSION"),
         });
@@ -305,7 +148,7 @@ impl RpcRunner {
         let event_tx = Arc::new(event_tx);
         let etx = event_tx.clone();
         self.harness.subscribe(Box::new(move |event: &AgentEvent| {
-            let rpc_event = agent_event_to_rpc(event);
+            let rpc_event = agent_event_to_value(event);
             let _ = etx.send(rpc_event);
         }));
 
@@ -345,11 +188,15 @@ impl RpcRunner {
             }
 
             // Parse command.
-            let cmd = match serde_json::from_str::<RpcCommand>(trimmed) {
+            let cmd = match serde_json::from_str::<SdkCommand>(trimmed) {
                 Ok(c) => c,
                 Err(e) => {
-                    let resp =
-                        error_response(None, "parse", &format!("failed to parse command: {e}"));
+                    let resp = serde_json::to_value(SdkResponse::error(
+                        None,
+                        "parse",
+                        &format!("failed to parse command: {e}"),
+                    ))
+                    .unwrap();
                     let _ = write_jsonl(&mut writer, &resp);
                     let _ = writer.flush();
                     continue;
@@ -360,7 +207,8 @@ impl RpcRunner {
             let cmd_name = cmd.command_name();
 
             if cmd.is_quit() {
-                let resp = success_response(cmd_id.as_deref(), cmd_name);
+                let resp = serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
+                    .unwrap();
                 let _ = write_jsonl(&mut writer, &resp);
                 let _ = writer.flush();
                 drain_events(&mut event_rx, &mut writer);
@@ -368,10 +216,12 @@ impl RpcRunner {
             }
 
             match cmd {
-                RpcCommand::prompt { message, .. } => {
+                SdkCommand::prompt { message, .. } => {
                     self.running = true;
                     // Respond immediately — success means accepted.
-                    let resp = success_response(cmd_id.as_deref(), cmd_name);
+                    let resp =
+                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
+                            .unwrap();
                     let _ = write_jsonl(&mut writer, &resp);
                     let _ = writer.flush();
 
@@ -380,10 +230,12 @@ impl RpcRunner {
                     self.handle_agent_result(&mut writer, result);
                     drain_events(&mut event_rx, &mut writer);
                 }
-                RpcCommand::continue_ { message, .. } => {
+                SdkCommand::continue_ { message, .. } => {
                     if !self.running {
                         self.running = true;
-                        let resp = success_response(cmd_id.as_deref(), cmd_name);
+                        let resp =
+                            serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
+                                .unwrap();
                         let _ = write_jsonl(&mut writer, &resp);
                         let _ = writer.flush();
 
@@ -392,55 +244,62 @@ impl RpcRunner {
                         self.handle_agent_result(&mut writer, result);
                         drain_events(&mut event_rx, &mut writer);
                     } else {
-                        let resp = error_response(
+                        let resp = serde_json::to_value(SdkResponse::error(
                             cmd_id.as_deref(),
                             cmd_name,
                             "agent is already running; use steer or follow_up to queue messages",
-                        );
+                        ))
+                        .unwrap();
                         let _ = write_jsonl(&mut writer, &resp);
                         let _ = writer.flush();
                     }
                 }
-                RpcCommand::abort { .. } => {
+                SdkCommand::abort { .. } => {
                     cancel_token.cancel();
-                    let resp = success_response(cmd_id.as_deref(), cmd_name);
+                    let resp =
+                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
+                            .unwrap();
                     let _ = write_jsonl(&mut writer, &resp);
                     let _ = writer.flush();
                 }
-                RpcCommand::set_model { model, .. } => {
+                SdkCommand::set_model { model, .. } => {
                     if self.running {
-                        let resp = error_response(
+                        let resp = serde_json::to_value(SdkResponse::error(
                             cmd_id.as_deref(),
                             cmd_name,
                             "cannot change model while agent is running",
-                        );
+                        ))
+                        .unwrap();
                         let _ = write_jsonl(&mut writer, &resp);
                         let _ = writer.flush();
                     } else {
                         self.harness.set_model(model);
-                        let resp = success_response(cmd_id.as_deref(), cmd_name);
+                        let resp =
+                            serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
+                                .unwrap();
                         let _ = write_jsonl(&mut writer, &resp);
                         let _ = writer.flush();
                     }
                 }
-                RpcCommand::set_thinking_level { level, .. } => {
+                SdkCommand::set_thinking_level { level, .. } => {
                     // Thinking level is controlled through AgentLoopConfig.
                     // For now, acknowledge the command. Full implementation
-                    // requires updating the agent config at runtime, which
-                    // will be addressed when the SDK surface (task 4.2) is
-                    // implemented.
+                    // requires updating the agent config at runtime.
                     let _ = level; // accepted but no-op until agent supports runtime config changes
-                    let resp = success_response(cmd_id.as_deref(), cmd_name);
+                    let resp =
+                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
+                            .unwrap();
                     let _ = write_jsonl(&mut writer, &resp);
                     let _ = writer.flush();
                 }
-                RpcCommand::compact { .. } => {
+                SdkCommand::compact { .. } => {
                     if self.running {
-                        let resp = error_response(
+                        let resp = serde_json::to_value(SdkResponse::error(
                             cmd_id.as_deref(),
                             cmd_name,
                             "cannot compact while agent is running",
-                        );
+                        ))
+                        .unwrap();
                         let _ = write_jsonl(&mut writer, &resp);
                         let _ = writer.flush();
                     } else {
@@ -452,29 +311,39 @@ impl RpcRunner {
                                     "tokens_before": result.tokens_before,
                                     "tokens_after": result.tokens_after,
                                 });
-                                let resp =
-                                    success_response_with_data(cmd_id.as_deref(), cmd_name, data);
+                                let resp = serde_json::to_value(SdkResponse::success_with_data(
+                                    cmd_id.as_deref(),
+                                    cmd_name,
+                                    data,
+                                ))
+                                .unwrap();
                                 let _ = write_jsonl(&mut writer, &resp);
                                 let _ = writer.flush();
                             }
                             Ok(None) => {
-                                let resp = error_response(
+                                let resp = serde_json::to_value(SdkResponse::error(
                                     cmd_id.as_deref(),
                                     cmd_name,
                                     "compaction produced no output",
-                                );
+                                ))
+                                .unwrap();
                                 let _ = write_jsonl(&mut writer, &resp);
                                 let _ = writer.flush();
                             }
                             Err(e) => {
-                                let resp = error_response(cmd_id.as_deref(), cmd_name, &e);
+                                let resp = serde_json::to_value(SdkResponse::error(
+                                    cmd_id.as_deref(),
+                                    cmd_name,
+                                    &e,
+                                ))
+                                .unwrap();
                                 let _ = write_jsonl(&mut writer, &resp);
                                 let _ = writer.flush();
                             }
                         }
                     }
                 }
-                RpcCommand::session_info { .. } => {
+                SdkCommand::session_info { .. } => {
                     let mut data = serde_json::json!({
                         "model": self.harness.model(),
                     });
@@ -482,21 +351,28 @@ impl RpcRunner {
                         data["session_id"] =
                             serde_json::Value::String(session.session_id().to_owned());
                     }
-                    let resp = success_response_with_data(cmd_id.as_deref(), cmd_name, data);
+                    let resp = serde_json::to_value(SdkResponse::success_with_data(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        data,
+                    ))
+                    .unwrap();
                     let _ = write_jsonl(&mut writer, &resp);
                     let _ = writer.flush();
                 }
-                RpcCommand::steer { message, .. } => {
-                    // Steering is queued via the agent's steer method.
+                SdkCommand::steer { message, .. } => {
                     self.harness.steer(message);
-                    let resp = success_response(cmd_id.as_deref(), cmd_name);
+                    let resp =
+                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
+                            .unwrap();
                     let _ = write_jsonl(&mut writer, &resp);
                     let _ = writer.flush();
                 }
-                RpcCommand::follow_up { message, .. } => {
-                    // Follow-up is queued via the agent's follow_up method.
+                SdkCommand::follow_up { message, .. } => {
                     self.harness.follow_up(message);
-                    let resp = success_response(cmd_id.as_deref(), cmd_name);
+                    let resp =
+                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
+                            .unwrap();
                     let _ = write_jsonl(&mut writer, &resp);
                     let _ = writer.flush();
                 }
