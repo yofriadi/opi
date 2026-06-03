@@ -61,11 +61,13 @@ digraph mode {
 ```
 
 **Auto-pick rule:** Lowest task ID (lexicographic, numerically aware) whose
-`status` is `failing` AND every `depends_on` entry is `passing`. Tasks with
-`status: blocked` are skipped until `--clear-blocker`.
+`status` is `failing` AND every `depends_on` entry is `passing`. A dependency
+is satisfied if it appears as `passing` in the active `tasks` array OR in any
+`phase_exit[*].task_summary` entry. Tasks with `status: blocked` are skipped
+until `--clear-blocker`.
 
-**User-override rule:** Refuse if any `depends_on` is not `passing`; print
-which dep is missing.
+**User-override rule:** Refuse if any `depends_on` is not satisfied by the
+active tasks or archived phase summaries; print which dep is missing.
 
 ## Six Phases Per Invocation
 

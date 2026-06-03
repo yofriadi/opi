@@ -127,6 +127,19 @@ Skip commit creation only if:
 
 If footer missing: print required footer text and stop (do NOT amend).
 
+## Task Graph Verification Checks
+
+Before confirming an init or reinit graph:
+
+1. Every `behavioral_tests` path must be covered by `task_owned_paths`.
+2. If `behavioral_tests` spans multiple crates, use `workspace` tier or include per-crate `cargo test`, `cargo clippy`, and rustdoc gates for every referenced crate.
+3. If any behavioral or snapshot test lives under `crates/opi-tui/tests/`, set `snapshot_tests` for the affected snapshot path and mark snapshot acceptance as explicit human approval.
+4. Direct spec rows use `parent_spec_row = null`; only dotted sub-task IDs use a parent row string.
+5. Rows with open crate labels such as `examples / package template` must include the concrete test paths they declare, even when implementation files live under `examples/**`.
+6. Example/package tasks must not own `docs/**`; use a task-specific docs subtree such as `docs/extension-examples/**`.
+7. Public protocol or extension substrate tasks must include documentation requirements in their DoD when they introduce RPC, SDK, extension, provider/model registration, transport, or proxy surfaces.
+8. No task may include `docs/opi-spec.md` in `task_owned_paths`.
+
 ## Risk Evaluator Gate
 
 A task has `evaluator_required = true` when ANY of:

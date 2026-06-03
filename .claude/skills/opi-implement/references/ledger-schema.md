@@ -85,7 +85,7 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | `tasks[].phase` | int | const | From row's phase grouping |
 | `tasks[].title` | string | const | Spec row title |
 | `tasks[].crate` | string | const | One of opi's five crates, `workspace`, or any free-string identifier (e.g. `examples`, `package-template`) when the spec row uses an open identifier. Review-gate warns for unknown values but does not refuse. |
-| `tasks[].parent_spec_row` | string/null | const | Source spec row ID when this task is a sub-task expansion (e.g. `"4.6"` for `4.6.1`). `null` for direct spec rows. |
+| `tasks[].parent_spec_row` | string/null | const | Source spec row ID when this task is a sub-task expansion (e.g. `"4.7"` for `4.7.1`). Direct spec rows MUST use `null`, not an empty string. |
 | `tasks[].definition_of_done` | string | const | Verbatim from spec |
 | `tasks[].definition_source` | enum | const | `verbatim`, `inferred`, or `draft-reviewed`; inferred values require review gate confirmation |
 | `tasks[].replaces` | string/null | const | Prior task title/meaning superseded during reinit, when the same task ID was repurposed by spec changes |
@@ -110,6 +110,12 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | `phase_exit[N]` | object | runtime | `completed_at` + `exit_criteria_met` + evaluator summary |
 | `phase_exit[N].snapshot_path` | string/null | runtime | Path to a committed full-ledger snapshot at the moment phase `N` exited. `null` while the phase is incomplete. Written under `docs/snapshots/phase<N>/`. |
 | `phase_exit[N].task_summary` | array | runtime | `[{id, title, status, verified_at_commit}]` for every task that belonged to phase `N` at exit time. Lets `--status` report completed phases without reading the snapshot file. |
+
+Validation rule: every path listed in `tasks[].verification.behavioral_tests` MUST be matched by at least one `task_owned_paths` glob before the task graph is confirmed. This prevents Phase C from needing an immediate ownership expansion just to create the task's declared tests.
+
+Validation rule: when `behavioral_tests` references more than one crate, either `tier` MUST be `workspace` or `verification.library_gates` MUST include mechanical gates for every referenced crate. Snapshot-bearing tests also require `snapshot_tests` and explicit snapshot approval under the `tui` rules.
+
+Validation rule: `task_owned_paths` MUST NOT include broad documentation globs such as `docs/**` when a narrower subtree can satisfy the task. Use a purpose-specific path such as `docs/extension-examples/**` for example packages. `docs/opi-spec.md` is normative input and MUST NOT be task-owned.
 
 ## Durable Evidence Contract
 

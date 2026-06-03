@@ -30,8 +30,14 @@ Some spec roadmap rows describe N independent deliverables in one line
 (e.g. `4.6 | extension examples: permission gate, sub-agent, plan mode, todo, MCP adapter`).
 These rows MUST NOT become a single ledger task.
 
-Trigger heuristic: the row title contains `:` followed by ≥ 2
-comma-separated items, OR a leading `examples:` / `task family:` marker.
+Trigger heuristic: a roadmap row is composite when any of these is true:
+
+- the row title contains `:` followed by at least two comma-separated items;
+- the row title begins with `examples:` or `task family:`;
+- the row title is a Phase 4 resource-family row listing at least three independent resource nouns joined by commas or `and`, such as `skills, prompt fragments, themes, and packages`;
+- the row's crate column is an open packaging identifier such as `examples / package template` and the title lists at least two deliverables.
+
+Do not split a row merely because the DoD contains commas. The split decision is based on the roadmap row title and crate column.
 
 For each composite row:
 
@@ -48,6 +54,11 @@ For each composite row:
   placeholder entry with id `<row>`.
 - The task-graph review gate MUST surface composite decompositions in a
   dedicated section so the user reviews them as a unit before confirmation.
+
+Phase 4 examples:
+
+- `4.7 | skills, prompt fragments, themes, and packages with progressive discovery` becomes `4.7.1` skills, `4.7.2` prompt fragments/templates, `4.7.3` themes, and `4.7.4` packages.
+- `4.8 | extension/package examples: permission gate, protected paths, sub-agent, plan mode, todo, MCP adapter` becomes six package/example tasks; the parent row is not executable.
 
 ### A.init.3 Task-Graph Review Gate
 
