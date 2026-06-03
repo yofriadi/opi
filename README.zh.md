@@ -330,7 +330,7 @@ transform_context
 - `opi_agent::AgentHooks`：围绕消息转换、工具策略、工具结果、停止条件、下一轮准备的生命周期 hooks。
 - `opi_agent::SessionWriter` / `SessionReader`：append-only JSONL 会话存储，带崩溃恢复。
 - `opi_agent::CompactionEngine`：支持阈值、手动、溢出触发的上下文压缩。
-- `opi_agent::Transport`：预留的 transport 抽象；Phase 4 必须将它落地为真实 RPC/proxy 基础设施、标记为不稳定，或在稳定 API 声明前移除。
+- `opi_agent::sdk`：共享的 SDK/RPC 命令与事件类型，用于程序化嵌入。
 
 ## 尚未实现
 

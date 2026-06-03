@@ -1,7 +1,7 @@
-//! General-purpose agent runtime with tool calling and transport abstraction.
+//! General-purpose agent runtime with tool calling and session management.
 //!
 //! Provides the foundation for building specialized agents with pluggable
-//! tool systems and communication transports.
+//! tool systems, hooks, queues, and session persistence.
 
 pub mod agent;
 pub mod compaction;
@@ -14,7 +14,6 @@ pub mod session;
 pub mod session_event;
 pub mod state;
 pub mod tool;
-pub mod transport;
 pub mod validation;
 
 pub use agent::Agent;
@@ -26,7 +25,6 @@ pub use sdk::{SDK_SCHEMA_VERSION, SdkCommand, SdkResponse};
 pub use session_event::AgentSessionEvent;
 pub use state::AgentState;
 pub use tool::{ExecutionMode, Tool, ToolError, ToolResult};
-pub use transport::Transport;
 
 // Re-export provider-facing types needed at the agent boundary.
 pub use opi_ai::message::ToolDef;

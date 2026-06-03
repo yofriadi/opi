@@ -1,6 +1,6 @@
 [package]
 name = "opi-agent"
-description = "General-purpose agent runtime with tool calling and transport abstraction"
+description = "General-purpose agent runtime with tool calling and session management"
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
@@ -15,7 +15,6 @@ tokio-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-async-trait = { workspace = true }
 schemars = { workspace = true }
 jsonschema = { workspace = true }
 uuid = { workspace = true }

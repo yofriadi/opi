@@ -13,8 +13,6 @@ Current crate version: `0.4.0`.
 
 `opi-agent` provides the provider-independent runtime used by the `opi` binary. It handles the turn loop, JSON Schema validation for tools, parallel/sequential tool execution, retry-aware provider streaming, image-capability checks, event subscriptions, steering/follow-up queues, JSONL session storage, and threshold/manual/overflow compaction primitives.
 
-The `Transport` trait is available as an abstraction for stdio/SSE tool transports, but external transport-backed tools are not wired into the main loop yet.
-
 ## Core Abstractions
 
 ```rust
@@ -148,7 +146,6 @@ Create an `Agent` with a boxed `opi_ai::Provider`, tool list, model, optional sy
 | `message` | Agent-level message variants |
 | `loop_types` | Loop context, config, and errors |
 | `validation` | JSON Schema argument validation |
-| `transport` | Transport trait for external tool servers |
 
 ## License
 

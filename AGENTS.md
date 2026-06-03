@@ -100,7 +100,6 @@ Key abstractions in `opi-agent`:
 - `SessionWriter` / `SessionReader`: append-only JSONL session storage with crash recovery.
 - `CompactionEngine`: threshold/manual/overflow compaction primitives with hook support.
 - `AgentSessionEvent`: session-level event protocol used by JSON mode.
-- `Transport`: abstraction over stdio/SSE for MCP-style tool servers; not wired into the main loop yet.
 
 Provider implementations live in `opi-ai`:
 

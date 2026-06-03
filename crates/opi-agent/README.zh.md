@@ -13,8 +13,6 @@
 
 `opi-agent` 提供 `opi` 二进制使用的 Provider 无关运行时。它负责 turn 主循环、工具参数 JSON Schema 校验、并行/串行工具执行、支持 retry 的 Provider streaming、图片能力校验、事件订阅、steering/follow-up 队列、JSONL 会话存储，以及阈值/手动/溢出触发的上下文压缩基础能力。
 
-`Transport` trait 已作为 stdio/SSE 工具传输抽象存在，但基于外部 transport 的工具服务器尚未接入主循环。
-
 ## 核心抽象
 
 ```rust
@@ -148,7 +146,6 @@ impl Tool for EchoTool {
 | `message` | Agent 层消息变体 |
 | `loop_types` | 主循环上下文、配置和错误 |
 | `validation` | JSON Schema 参数校验 |
-| `transport` | 外部工具服务器 transport trait |
 
 ## 许可证
 

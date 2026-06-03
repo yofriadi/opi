@@ -330,7 +330,7 @@ Key abstractions:
 - `opi_agent::AgentHooks`: lifecycle hooks around message conversion, tool policy, tool results, stopping, and next-turn preparation.
 - `opi_agent::SessionWriter` / `SessionReader`: append-only JSONL session storage with crash recovery.
 - `opi_agent::CompactionEngine`: threshold/manual/overflow compaction support.
-- `opi_agent::Transport`: reserved transport abstraction; Phase 4 must either make it real RPC/proxy infrastructure, mark it unstable, or remove it before stable API claims.
+- `opi_agent::sdk`: shared SDK/RPC command and event types for programmatic embedding.
 
 ## Still Not Implemented
 

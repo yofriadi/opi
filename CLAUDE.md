@@ -36,7 +36,7 @@ Cargo workspace with **lockstep versioning** (all crates share `version.workspac
 ```
 opi-ai      (no internal deps)        — unified multi-provider LLM API
 opi-tui     (no internal deps)        — terminal UI with differential rendering
-opi-agent   → opi-ai                  — agent runtime, tool calling, transport
+opi-agent   → opi-ai                  — agent runtime, tool calling, session management
 opi-web-ui  → opi-ai                  — web chat components
 opi-coding-agent → opi-ai, opi-agent, opi-tui  — produces the `opi` binary
 ```
@@ -71,7 +71,6 @@ Key abstractions:
 - **`opi_agent::Tool`** trait — `definition()` returns JSON schema, `execute()` runs the tool, `execution_mode()` controls parallel vs sequential batching.
 - **`opi_agent::SessionWriter` / `SessionReader`** — append-only JSONL session storage with crash recovery.
 - **`opi_agent::CompactionEngine`** — threshold/manual/overflow context compaction.
-- **`opi_agent::Transport`** trait — stdio/SSE abstraction reserved for external (MCP-style) tool servers; not wired into the main loop yet.
 
 Provider implementations in `opi-ai`: `anthropic`, `openai`, `openai-responses`, `openrouter`, `mistral`, `gemini`, `bedrock` (AWS SigV4), `azure` (Azure OpenAI deployment), `vertex` (Google Vertex AI).
 

@@ -3,10 +3,6 @@
 //! **Unstable 0.x API** — these types may change between minor versions without
 //! notice. Embedders MUST pin an exact version and test against upgrades.
 //!
-//! The [`Transport`](crate::Transport) trait is not yet settled (task 4.3); SDK
-//! consumers should not rely on a specific transport implementation until that
-//! task ships.
-//!
 //! # Overview
 //!
 //! This module provides shared command, response, and event types used by both
