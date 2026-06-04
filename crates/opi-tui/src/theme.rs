@@ -1,10 +1,142 @@
-//! Theme struct and palette model for TUI rendering.
+//! Theme struct, palette model, and color parsing for TUI rendering.
 //!
 //! Provides a [`Theme`] with semantic color fields covering all widget roles,
-//! built-in themes ("default" and "monokai"), and a [`resolve_theme`] function
-//! for name-based lookup.
+//! built-in themes ("default" and "monokai"), a [`resolve_theme`] function
+//! for name-based lookup, and [`parse_color`] / [`THEME_TOKENS`] for
+//! progressive theme discovery.
+//!
+//! # Theme Token Schema
+//!
+//! The [`THEME_TOKENS`] constant lists all valid color token names that can
+//! appear in a theme definition file. Each token maps to a field on [`Theme`].
+//!
+//! # Color Format
+//!
+//! Color values are parsed by [`parse_color`] and support:
+//!
+//! - **Named colors**: `"Red"`, `"DarkGray"`, `"LightCyan"`, etc.
+//! - **Hex RGB**: `"#rrggbb"` (e.g. `"#ff6600"`)
+//!
+//! # Unstable
+//!
+//! Theme discovery types are part of the **unstable 0.x extension API**.
+//! Breaking changes may occur between minor versions without a major version
+//! bump.
 
 use ratatui::style::Color;
+
+// ---------------------------------------------------------------------------
+// Color parsing
+// ---------------------------------------------------------------------------
+
+/// Errors from color string parsing.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum ColorParseError {
+    /// The color string is not a recognized named color or valid hex RGB.
+    #[error("invalid color: {0:?}")]
+    InvalidColor(String),
+}
+
+/// Parse a color string into a ratatui [`Color`].
+///
+/// Supports:
+/// - Named colors matching ratatui `Color` enum variants (case-sensitive):
+///   `"Black"`, `"Red"`, `"Green"`, `"Yellow"`, `"Blue"`, `"Magenta"`,
+///   `"Cyan"`, `"Gray"`, `"DarkGray"`, `"LightRed"`, `"LightGreen"`,
+///   `"LightYellow"`, `"LightBlue"`, `"LightMagenta"`, `"LightCyan"`,
+///   `"White"`, `"Reset"`.
+/// - Hex RGB: `"#rrggbb"` (case-insensitive hex digits).
+pub fn parse_color(s: &str) -> Result<Color, ColorParseError> {
+    // Named color lookup
+    match s {
+        "Black" => return Ok(Color::Black),
+        "Red" => return Ok(Color::Red),
+        "Green" => return Ok(Color::Green),
+        "Yellow" => return Ok(Color::Yellow),
+        "Blue" => return Ok(Color::Blue),
+        "Magenta" => return Ok(Color::Magenta),
+        "Cyan" => return Ok(Color::Cyan),
+        "Gray" => return Ok(Color::Gray),
+        "DarkGray" => return Ok(Color::DarkGray),
+        "LightRed" => return Ok(Color::LightRed),
+        "LightGreen" => return Ok(Color::LightGreen),
+        "LightYellow" => return Ok(Color::LightYellow),
+        "LightBlue" => return Ok(Color::LightBlue),
+        "LightMagenta" => return Ok(Color::LightMagenta),
+        "LightCyan" => return Ok(Color::LightCyan),
+        "White" => return Ok(Color::White),
+        "Reset" => return Ok(Color::Reset),
+        _ => {}
+    }
+
+    // Hex RGB: #rrggbb
+    if let Some(hex) = s.strip_prefix('#')
+        && hex.len() == 6
+    {
+        let r = u8::from_str_radix(&hex[0..2], 16)
+            .map_err(|_| ColorParseError::InvalidColor(s.to_string()))?;
+        let g = u8::from_str_radix(&hex[2..4], 16)
+            .map_err(|_| ColorParseError::InvalidColor(s.to_string()))?;
+        let b = u8::from_str_radix(&hex[4..6], 16)
+            .map_err(|_| ColorParseError::InvalidColor(s.to_string()))?;
+        return Ok(Color::Rgb(r, g, b));
+    }
+
+    Err(ColorParseError::InvalidColor(s.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Theme token schema
+// ---------------------------------------------------------------------------
+
+/// All valid color token names for theme definitions.
+///
+/// Each token corresponds to a field on [`Theme`]. Theme files may specify
+/// any subset; unspecified tokens inherit from the default theme.
+pub static THEME_TOKENS: &[&str] = &[
+    "role_user",
+    "role_assistant",
+    "role_system",
+    "role_tool",
+    "status_bg",
+    "status_idle",
+    "status_thinking",
+    "status_streaming",
+    "status_tool",
+    "status_tokens",
+    "editor_title",
+    "editor_placeholder",
+    "code_title",
+    "code_content",
+    "heading_h1",
+    "heading_h2",
+    "heading_h3",
+    "italic",
+    "diff_border",
+    "diff_header",
+    "diff_context",
+    "diff_added",
+    "diff_removed",
+    "diff_no_changes",
+    "tool_running",
+    "tool_success",
+    "tool_error",
+    "picker_title",
+    "picker_selected_bg",
+    "picker_selected_fg",
+    "picker_filter",
+    "picker_metadata",
+    "picker_empty",
+];
+
+/// Check whether a token name is a valid theme color token.
+pub fn is_valid_token(token: &str) -> bool {
+    THEME_TOKENS.contains(&token)
+}
+
+// ---------------------------------------------------------------------------
+// Theme struct
+// ---------------------------------------------------------------------------
 
 /// Semantic color palette for all TUI widgets.
 ///
@@ -13,7 +145,7 @@ use ratatui::style::Color;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theme {
     /// Theme identifier (e.g. "default", "monokai").
-    pub name: &'static str,
+    pub name: String,
     // -- Role colors (MessageList) --
     /// User message label color.
     pub role_user: Color,
@@ -93,7 +225,7 @@ impl Default for Theme {
     /// The "default" theme matching the original hardcoded colors.
     fn default() -> Self {
         Self {
-            name: "default",
+            name: String::from("default"),
             // Role colors
             role_user: Color::Green,
             role_assistant: Color::Cyan,
@@ -142,7 +274,7 @@ impl Theme {
     /// Monokai-inspired dark theme with warm accent colors.
     pub fn monokai() -> Self {
         Self {
-            name: "monokai",
+            name: String::from("monokai"),
             // Role colors
             role_user: Color::Rgb(166, 226, 46),       // green
             role_assistant: Color::Rgb(102, 217, 239), // cyan-blue
@@ -183,6 +315,111 @@ impl Theme {
             picker_filter: Color::Rgb(230, 219, 116), // yellow
             picker_metadata: Color::Rgb(117, 113, 94), // dim
             picker_empty: Color::Rgb(117, 113, 94),  // dim
+        }
+    }
+
+    /// Build a theme from a name and a partial color map, filling missing
+    /// tokens from the default theme.
+    ///
+    /// The `colors` map keys must be valid theme token names (see
+    /// [`THEME_TOKENS`]). Invalid tokens produce an error. Valid tokens not
+    /// present in the map inherit their values from [`Theme::default`].
+    pub fn from_color_map(
+        name: String,
+        colors: &std::collections::HashMap<String, Color>,
+    ) -> Result<Self, ColorParseError> {
+        // Validate all keys are recognized tokens
+        for key in colors.keys() {
+            if !is_valid_token(key) {
+                return Err(ColorParseError::InvalidColor(format!(
+                    "unknown theme token: {key}"
+                )));
+            }
+        }
+
+        let defaults = Theme::default();
+        let get = |token: &str| -> Color {
+            colors
+                .get(token)
+                .copied()
+                .unwrap_or_else(|| Self::get_field(&defaults, token))
+        };
+
+        Ok(Self {
+            name,
+            role_user: get("role_user"),
+            role_assistant: get("role_assistant"),
+            role_system: get("role_system"),
+            role_tool: get("role_tool"),
+            status_bg: get("status_bg"),
+            status_idle: get("status_idle"),
+            status_thinking: get("status_thinking"),
+            status_streaming: get("status_streaming"),
+            status_tool: get("status_tool"),
+            status_tokens: get("status_tokens"),
+            editor_title: get("editor_title"),
+            editor_placeholder: get("editor_placeholder"),
+            code_title: get("code_title"),
+            code_content: get("code_content"),
+            heading_h1: get("heading_h1"),
+            heading_h2: get("heading_h2"),
+            heading_h3: get("heading_h3"),
+            italic: get("italic"),
+            diff_border: get("diff_border"),
+            diff_header: get("diff_header"),
+            diff_context: get("diff_context"),
+            diff_added: get("diff_added"),
+            diff_removed: get("diff_removed"),
+            diff_no_changes: get("diff_no_changes"),
+            tool_running: get("tool_running"),
+            tool_success: get("tool_success"),
+            tool_error: get("tool_error"),
+            picker_title: get("picker_title"),
+            picker_selected_bg: get("picker_selected_bg"),
+            picker_selected_fg: get("picker_selected_fg"),
+            picker_filter: get("picker_filter"),
+            picker_metadata: get("picker_metadata"),
+            picker_empty: get("picker_empty"),
+        })
+    }
+
+    /// Get a single color field by token name. Panics if the token is unknown.
+    fn get_field(theme: &Theme, token: &str) -> Color {
+        match token {
+            "role_user" => theme.role_user,
+            "role_assistant" => theme.role_assistant,
+            "role_system" => theme.role_system,
+            "role_tool" => theme.role_tool,
+            "status_bg" => theme.status_bg,
+            "status_idle" => theme.status_idle,
+            "status_thinking" => theme.status_thinking,
+            "status_streaming" => theme.status_streaming,
+            "status_tool" => theme.status_tool,
+            "status_tokens" => theme.status_tokens,
+            "editor_title" => theme.editor_title,
+            "editor_placeholder" => theme.editor_placeholder,
+            "code_title" => theme.code_title,
+            "code_content" => theme.code_content,
+            "heading_h1" => theme.heading_h1,
+            "heading_h2" => theme.heading_h2,
+            "heading_h3" => theme.heading_h3,
+            "italic" => theme.italic,
+            "diff_border" => theme.diff_border,
+            "diff_header" => theme.diff_header,
+            "diff_context" => theme.diff_context,
+            "diff_added" => theme.diff_added,
+            "diff_removed" => theme.diff_removed,
+            "diff_no_changes" => theme.diff_no_changes,
+            "tool_running" => theme.tool_running,
+            "tool_success" => theme.tool_success,
+            "tool_error" => theme.tool_error,
+            "picker_title" => theme.picker_title,
+            "picker_selected_bg" => theme.picker_selected_bg,
+            "picker_selected_fg" => theme.picker_selected_fg,
+            "picker_filter" => theme.picker_filter,
+            "picker_metadata" => theme.picker_metadata,
+            "picker_empty" => theme.picker_empty,
+            _ => unreachable!("invalid token already validated: {token}"),
         }
     }
 }

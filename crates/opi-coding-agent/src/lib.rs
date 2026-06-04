@@ -15,4 +15,5 @@ pub mod runner;
 pub mod session_cli;
 pub mod session_coordinator;
 pub mod skill;
+pub mod theme_discovery;
 pub mod tool;

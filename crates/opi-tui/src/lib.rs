@@ -29,7 +29,7 @@ pub use terminal_image::{
     CapabilitySource, ImageData, MediaType, TerminalGraphicsProtocol, detect_graphics_protocol,
     iterm_escape, kitty_escape, sixel_escape, text_fallback,
 };
-pub use theme::{Theme, resolve_theme};
+pub use theme::{ColorParseError, THEME_TOKENS, Theme, is_valid_token, parse_color, resolve_theme};
 pub use tool_call::ToolCallView;
 
 use std::fmt;
