@@ -1,0 +1,7 @@
+[package]
+name = "mcp-adapter"
+description = "Example package demonstrating an MCP adapter extension that maps MCP-style tools/resources through the extension API"
+version = "0.1.0"
+
+[package.extensions]
+include = ["mcp-adapter"]
