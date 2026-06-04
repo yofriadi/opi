@@ -15,6 +15,7 @@ pub mod session;
 pub mod session_branch;
 pub mod session_event;
 pub mod state;
+pub mod streaming_proxy;
 pub mod tool;
 pub mod validation;
 
@@ -29,6 +30,9 @@ pub use message::AgentMessage;
 pub use sdk::{SDK_SCHEMA_VERSION, SdkCommand, SdkResponse};
 pub use session_event::AgentSessionEvent;
 pub use state::AgentState;
+pub use streaming_proxy::{
+    ProxyConfig, ProxyEvent, ProxyHandler, SecretRedactor, StreamingProxy, StreamingProxyError,
+};
 pub use tool::{ExecutionMode, Tool, ToolError, ToolResult};
 
 // Re-export provider-facing types needed at the agent boundary.
