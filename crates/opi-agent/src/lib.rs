@@ -12,6 +12,7 @@ pub mod loop_types;
 pub mod message;
 pub mod sdk;
 pub mod session;
+pub mod session_branch;
 pub mod session_event;
 pub mod state;
 pub mod tool;

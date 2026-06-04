@@ -5,6 +5,7 @@
 //! [`MarkdownView`], [`CodeBlock`], [`DiffView`], composed by [`Shell`].
 //! Themes via [`Theme`]/[`resolve_theme`] and configurable [`Keybindings`].
 
+pub mod branch_picker;
 pub mod diff_view;
 pub mod editor;
 pub mod keybindings;
@@ -17,6 +18,7 @@ pub mod terminal_image;
 pub mod theme;
 pub mod tool_call;
 
+pub use branch_picker::{BranchItem, BranchPicker, BranchPickerOutcome, BranchPickerState};
 pub use diff_view::DiffView;
 pub use editor::InputEditor;
 pub use keybindings::{Key, KeyCombo, KeyComboParseError, Keybindings, Modifiers};
