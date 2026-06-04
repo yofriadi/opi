@@ -310,6 +310,48 @@ opi --rpc
 
 `CodingHarness` 会从 workspace 目录向上查找 `AGENTS.md` 和 `CLAUDE.md`，直到 git root，然后再查找用户配置目录。空文件和超过 128 KiB 的文件会被跳过。
 
+## 技能（Skills）
+
+技能通过渐进式发现从项目、用户、显式和包资源中加载。每个技能是一个包含 `SKILL.md` 文件的目录，`SKILL.md` 使用 YAML frontmatter。
+
+**这是一个不稳定的 0.x API。** 技能格式和发现规则可能在次版本之间变更。
+
+### 技能格式
+
+技能目录包含一个 `SKILL.md`：
+
+```markdown
+---
+name: my-skill
+description: 技能功能描述和适用场景。
+disable-model-invocation: false
+---
+
+完整技能指令写在这里。
+```
+
+字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` | 是 | 小写 `a-z`、`0-9`、连字符。最长 64 字符。 |
+| `description` | 是 | 最长 1024 字符。 |
+| `disable-model-invocation` | 否 | 默认 `false`。设为 `true` 时，技能不会被模型自动调用，但仍可由用户手动使用。 |
+
+### 发现位置
+
+技能从多个层级发现，采用基于优先级的去重（高优先级在名称冲突时覆盖）：
+
+1. **用户级**（Unix: `~/.config/opi/skills/`，Windows: `%APPDATA%\opi\skills\`）— 优先级 0
+2. **项目级**（workspace 根目录的 `.opi/skills/`）— 优先级 1
+3. **显式**（扩展路径或配置 `extensions.paths`）— 优先级 2
+
+每个技能是扫描位置下的一个子目录，包含 `SKILL.md` 文件。
+
+### 渐进式披露
+
+技能元数据（名称、描述）无需加载完整技能正文即可使用。完整指令仅在技能被调用时按需加载。这保持了初始上下文的精简，同时支持丰富的专业化指令。
+
 ## 作为库使用
 
 ```rust

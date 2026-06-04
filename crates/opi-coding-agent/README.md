@@ -352,6 +352,48 @@ resp = read_line()    # response: quit success
 
 `CodingHarness` discovers `AGENTS.md` and `CLAUDE.md` from the workspace directory upward to the git root, then from the user config directory. Empty files and files larger than 128 KiB are skipped.
 
+## Skills
+
+Skills are progressively discovered from project, user, explicit, and package resources. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter.
+
+**This is an unstable 0.x API.** The skill format and discovery rules may change between minor versions.
+
+### Skill format
+
+A skill directory contains a `SKILL.md`:
+
+```markdown
+---
+name: my-skill
+description: What this skill does and when to use it.
+disable-model-invocation: false
+---
+
+Full skill instructions go here.
+```
+
+Fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Lowercase `a-z`, `0-9`, hyphens. Max 64 characters. |
+| `description` | Yes | Max 1024 characters. |
+| `disable-model-invocation` | No | Defaults to `false`. When `true`, the skill is excluded from automatic model invocation but still available for human use. |
+
+### Discovery locations
+
+Skills are discovered from multiple layers with precedence-based deduplication (higher precedence wins on name collision):
+
+1. **User-level** (`~/.config/opi/skills/` on Unix, `%APPDATA%\opi\skills\` on Windows) — precedence 0
+2. **Project-level** (`.opi/skills/` in workspace root) — precedence 1
+3. **Explicit** (extension paths or config `extensions.paths`) — precedence 2
+
+Each skill is a subdirectory of a scan location containing a `SKILL.md` file.
+
+### Progressive disclosure
+
+Skill metadata (name, description) is available without loading the full skill body. The complete instructions are loaded on demand only when the skill is invoked. This keeps the initial context small while supporting rich, specialized instructions.
+
 ## Library Use
 
 ```rust
