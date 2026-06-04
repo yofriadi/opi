@@ -4,6 +4,7 @@ pub mod context_files;
 pub mod harness;
 pub mod image;
 pub mod interactive;
+pub mod package_discovery;
 pub mod picker;
 pub mod policy;
 pub mod pricing;
