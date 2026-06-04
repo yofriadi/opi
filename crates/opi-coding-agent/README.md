@@ -394,6 +394,50 @@ Each skill is a subdirectory of a scan location containing a `SKILL.md` file.
 
 Skill metadata (name, description) is available without loading the full skill body. The complete instructions are loaded on demand only when the skill is invoked. This keeps the initial context small while supporting rich, specialized instructions.
 
+## Prompt Fragments
+
+Prompt fragments (templates) are progressively discovered from project, user, explicit, and package resources. Each fragment is a directory containing a `FRAGMENT.md` file with YAML frontmatter.
+
+**This is an unstable 0.x API.** The fragment format and discovery rules may change between minor versions.
+
+### Fragment format
+
+A fragment directory contains a `FRAGMENT.md`:
+
+```markdown
+---
+name: translate
+description: Translate text between languages.
+arguments: text, from=en, to=fr
+---
+
+Translate {{text}} from {{from}} to {{to}}.
+```
+
+Fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Lowercase `a-z`, `0-9`, hyphens. Max 64 characters. |
+| `description` | Yes | Max 1024 characters. |
+| `arguments` | No | Comma-separated list. Required: `name`. Optional: `name=default`. |
+
+### Argument expansion
+
+Arguments declared in the frontmatter are referenced as `{{name}}` placeholders in the body. During expansion:
+
+- Required arguments must be provided.
+- Optional arguments use their declared default when not provided.
+- Undeclared placeholders are left as-is.
+
+### Discovery locations
+
+Fragments use the same precedence-based discovery as skills and extensions (higher precedence wins on name collision):
+
+1. **User-level** (`~/.config/opi/fragments/` on Unix, `%APPDATA%\opi\fragments\` on Windows) — precedence 0
+2. **Project-level** (`.opi/fragments/` in workspace root) — precedence 1
+3. **Explicit** (extension paths or config `extensions.paths`) — precedence 2
+
 ## Library Use
 
 ```rust

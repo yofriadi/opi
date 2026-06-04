@@ -352,6 +352,50 @@ disable-model-invocation: false
 
 技能元数据（名称、描述）无需加载完整技能正文即可使用。完整指令仅在技能被调用时按需加载。这保持了初始上下文的精简，同时支持丰富的专业化指令。
 
+## 提示词片段（Prompt Fragments）
+
+提示词片段（模板）通过渐进式发现从项目、用户、显式和包资源中加载。每个片段是一个包含 `FRAGMENT.md` 文件的目录，`FRAGMENT.md` 使用 YAML frontmatter。
+
+**这是一个不稳定的 0.x API。** 片段格式和发现规则可能在次版本之间变更。
+
+### 片段格式
+
+片段目录包含一个 `FRAGMENT.md`：
+
+```markdown
+---
+name: translate
+description: 在语言之间翻译文本。
+arguments: text, from=en, to=fr
+---
+
+将 {{text}} 从 {{from}} 翻译为 {{to}}。
+```
+
+字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` | 是 | 小写 `a-z`、`0-9`、连字符。最长 64 字符。 |
+| `description` | 是 | 最长 1024 字符。 |
+| `arguments` | 否 | 逗号分隔列表。必填参数：`name`。可选参数：`name=default`。 |
+
+### 参数展开
+
+在 frontmatter 中声明的参数在正文中以 `{{name}}` 占位符引用。展开时：
+
+- 必填参数必须提供。
+- 可选参数未提供时使用声明的默认值。
+- 未声明的占位符保持原样。
+
+### 发现位置
+
+片段使用与技能和扩展相同的基于优先级的发现机制（高优先级在名称冲突时覆盖）：
+
+1. **用户级**（Unix: `~/.config/opi/fragments/`，Windows: `%APPDATA%\opi\fragments\`）— 优先级 0
+2. **项目级**（workspace 根目录的 `.opi/fragments/`）— 优先级 1
+3. **显式**（扩展路径或配置 `extensions.paths`）— 优先级 2
+
 ## 作为库使用
 
 ```rust
