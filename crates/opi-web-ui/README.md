@@ -1,6 +1,6 @@
 # opi-web-ui
 
-> Reserved web UI component crate in the [opi](https://github.com/OdradekAI/opi) workspace.
+> Embeddable web UI component layer for the [opi](https://github.com/OdradekAI/opi) agent toolkit.
 
 [Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
@@ -8,29 +8,56 @@
 
 Current crate version: `0.4.0`.
 
-`opi-web-ui` is still a placeholder and is not published to crates.io (`publish = false`). The crate exists to keep the workspace layout stable and reserve the package boundary for future reusable web chat components.
+`opi-web-ui` is `publish = false` and provides a concrete component layer that consumes RPC/SDK events from the opi agent toolkit and renders them as typed Rust state and HTML components. A separate release decision may change the publish status in the future.
 
-Current source contents:
+## Architecture
 
-- `lib.rs`: module declaration and `ChatWidget` re-export.
-- `components.rs`: empty `ChatWidget` type with `new()` and `Default`.
+- **`event`** — Parses raw JSON values from the RPC JSONL protocol into typed `WebUiEvent` variants.
+- **`state`** — `ConversationState` processes events and maintains message history, tool call state, thinking blocks, session metadata, and compaction status.
+- **`components`** — Typed UI component models: `ChatMessage`, `ToolCallView`, `ThinkingBlock`, `StatusBar`, `ConversationView`.
+- **`render`** — `Render` trait for HTML output with XSS-safe escaping.
 
-There are no real widgets, rendering adapters, HTTP integrations, browser bindings, document preview components, or tests yet. The crate depends on `opi-ai`, `serde`, `serde_json`, and `thiserror`, but the placeholder implementation does not meaningfully exercise those dependencies.
+## Unstable 0.x API
 
-## Public API
+All types are subject to change between versions. Pin an exact version and test against upgrades.
+
+## Usage
 
 ```rust
-use opi_web_ui::ChatWidget;
+use opi_web_ui::event::WebUiEvent;
+use opi_web_ui::state::ConversationState;
+use opi_web_ui::render::Render;
 
-let widget = ChatWidget::new();
-let default_widget = ChatWidget::default();
+let mut state = ConversationState::new();
+
+// Parse RPC JSONL events
+let raw = serde_json::json!({"type": "AgentStart"});
+let event = WebUiEvent::parse(&raw).unwrap();
+state.process(event);
+
+// Stream text
+state.process(WebUiEvent::MessageStart {
+    model: "claude-sonnet-4-5".to_owned(),
+    provider: "anthropic".to_owned(),
+});
+state.process(WebUiEvent::TextDelta { index: 0, delta: "Hello".to_owned() });
+state.process(WebUiEvent::MessageEnd);
+
+// Render to HTML
+let view = state.to_conversation_view();
+let html = view.render_html();
 ```
+
+## Dependencies
+
+- `opi-ai` — provider-neutral stream event and message types
+- `opi-agent` — SDK command/response types and agent events
+- `serde`, `serde_json` — JSON serialization
+- `thiserror` — error types
 
 ## Boundary
 
 Future work belongs here only when it implements reusable web-facing UI components. The terminal coding agent lives in `opi-coding-agent`; provider and message types live in `opi-ai`; agent runtime primitives live in `opi-agent`.
-
-Do not describe this crate as an implemented web UI until real components exist.
 
 ## License
 
