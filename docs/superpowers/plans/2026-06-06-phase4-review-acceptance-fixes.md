@@ -31,7 +31,7 @@ test helpers, workspace dependency `sha2`, Cargo workspace verification.
 2. `docs/snapshots/phase4/opi-impl-state.json` records a stale
    `spec_files_sha256["docs/opi-spec.md"]` value. Current expected value from
    the review is:
-   `2edd15575b7b6772c06fca07db2a6f87cfb27aa95dc3185b0ed71d5b7f51b5ee`.
+   `5ef729fae53b478794921af26a135bc98245f190d26bf05421f6c692444495f6`.
 3. `README.md` and `README.zh.md` still describe `opi-agent` as exposing a
    transport abstraction even though the transport stub was removed.
 
@@ -138,7 +138,8 @@ registry tests continue to pass.
   - Resolve the repo root with
     `Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")`.
   - Read `docs/opi-spec.md`.
-  - Compute SHA-256 with `sha2::{Digest, Sha256}`.
+  - Normalize CRLF to LF and compute SHA-256 with
+    `sha2::{Digest, Sha256}`.
   - Read `docs/snapshots/phase4/opi-impl-state.json` as
     `serde_json::Value`.
   - Compare the computed hex string to
@@ -158,7 +159,7 @@ the ledger.
   `spec_files_sha256["docs/opi-spec.md"]` to:
 
 ```text
-2edd15575b7b6772c06fca07db2a6f87cfb27aa95dc3185b0ed71d5b7f51b5ee
+5ef729fae53b478794921af26a135bc98245f190d26bf05421f6c692444495f6
 ```
 
 - [ ] Do not edit task evidence, commit hashes, evaluator fields, or the current
@@ -167,7 +168,10 @@ the ledger.
 
 ```powershell
 cargo test -p opi-coding-agent --test phase4_ledger -- --nocapture
-$actual = (Get-FileHash docs\opi-spec.md -Algorithm SHA256).Hash.ToLower()
+$spec = (Get-Content -Raw docs\opi-spec.md) -replace "`r`n", "`n"
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($spec)
+$sha = [System.Security.Cryptography.SHA256]::Create()
+$actual = ([System.BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLower()
 $ledger = (Get-Content -Raw docs\snapshots\phase4\opi-impl-state.json | ConvertFrom-Json).spec_files_sha256.'docs/opi-spec.md'
 if ($actual -ne $ledger) { throw "phase4 ledger hash mismatch: actual=$actual ledger=$ledger" }
 ```

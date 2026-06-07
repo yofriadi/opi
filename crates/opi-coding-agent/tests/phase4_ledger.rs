@@ -9,8 +9,9 @@ fn phase4_ledger_spec_hash_matches_current_spec() {
     let spec_path = repo_root.join("docs/opi-spec.md");
     let ledger_path = repo_root.join("docs/snapshots/phase4/opi-impl-state.json");
 
-    let spec = fs::read(&spec_path).expect("read docs/opi-spec.md");
-    let actual = format!("{:x}", Sha256::digest(spec));
+    let spec = fs::read_to_string(&spec_path).expect("read docs/opi-spec.md");
+    let normalized_spec = spec.replace("\r\n", "\n");
+    let actual = format!("{:x}", Sha256::digest(normalized_spec.as_bytes()));
 
     let ledger_bytes =
         fs::read(&ledger_path).expect("read docs/snapshots/phase4/opi-impl-state.json");
