@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-06-07
+
+Phase 4: extension system, RPC JSONL protocol, SDK embedding surface,
+progressive resource discovery, session branching, streaming proxy,
+custom provider registration, and six extension examples.
 
 ### Added
 
@@ -17,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `opi-coding-agent`: interactive `/branch` session branch selection.
 - `opi-agent`: streaming proxy primitives with framing, cancellation, backpressure, and secret redaction.
 - `opi-web-ui`: unpublished RPC/SDK event parser, conversation state, component models, and HTML rendering helpers.
+- `opi-agent`: session branching with tree reconstruction, branch picker, and branch-aware session writer.
+- `opi-tui`: branch picker widget with snapshot-tested rendering.
+- `opi-coding-agent`: extension examples for MCP adapter, todo, plan mode, sub-agent, protected paths, and permission gate patterns.
+- `opi-coding-agent`: progressive discovery for themes, prompt fragments, skills, and package resources.
 
 ### Changed
 
@@ -33,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `opi-agent`: default secret redaction no longer redacts short benign `sk-` or `eyJ`-like strings.
 - `opi-agent`: `SdkResponse` now round-trips through JSON and serialization fallback events use `SdkSerializationError`.
 - `opi-web-ui`: `ThinkingBlock` is re-exported from the crate root with the other component models.
+- `opi-coding-agent`: phase 4 ledger hash check normalized for cross-platform consistency.
 
 ### Removed
 
@@ -213,6 +222,7 @@ boundaries; functional implementations land in subsequent releases.
 - This release is published as a GitHub Release only; crates.io publish
   is deferred until the crates have real implementations.
 
+[0.5.0]: https://github.com/OdradekAI/opi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/OdradekAI/opi/releases/tag/v0.4.0
 [0.3.0]: https://github.com/OdradekAI/opi/releases/tag/v0.3.0
 [0.2.0]: https://github.com/OdradekAI/opi/releases/tag/v0.2.0
