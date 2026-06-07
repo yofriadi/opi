@@ -42,5 +42,4 @@ futures-util = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 base64 = { workspace = true }
-opi-web-ui = { workspace = true }
 sha2 = { workspace = true }

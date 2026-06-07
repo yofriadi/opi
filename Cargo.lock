@@ -1650,7 +1650,6 @@ dependencies = [
  "opi-agent",
  "opi-ai",
  "opi-tui",
- "opi-web-ui",
  "ratatui",
  "regex",
  "reqwest",
