@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::Theme;
 
@@ -219,7 +220,7 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
     let mut width = 0;
     let mut result = String::new();
     for ch in s.chars() {
-        let cw = if ch.is_control() { 0 } else { 1 };
+        let cw = ch.width().unwrap_or(0);
         if width + cw > max_width {
             break;
         }
@@ -230,5 +231,16 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
 }
 
 fn unicode_display_width(s: &str) -> usize {
-    s.chars().map(|c| if c.is_control() { 0 } else { 1 }).sum()
+    UnicodeWidthStr::width(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unicode_width_counts_cjk_as_double_width() {
+        assert_eq!(unicode_display_width("分支"), 4);
+        assert_eq!(truncate_to_width("分支A", 4), "分支");
+    }
 }

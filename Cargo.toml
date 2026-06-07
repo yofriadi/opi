@@ -53,6 +53,7 @@ toml = "0.8"
 # TUI
 ratatui = "0.30"
 crossterm = "0.29"
+unicode-width = "0.2"
 
 # schema
 schemars = "1"

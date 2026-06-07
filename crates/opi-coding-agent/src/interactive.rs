@@ -58,12 +58,14 @@ struct PickerOverlay {
 enum PickerKind {
     Model,
     Session,
+    Branch,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum PickerAction {
     SelectModel(String),
     SelectSession(String),
+    SelectBranch(String),
     Cancel,
 }
 
@@ -73,7 +75,7 @@ pub async fn run_interactive_tui(
     theme_name: &str,
     keybindings: Keybindings,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let theme = resolve_theme(theme_name);
+    let theme = resolve_interactive_theme(&harness, theme_name);
     if theme.name != theme_name {
         eprintln!("opi: warning: unknown theme {theme_name:?}, using default");
     }
@@ -406,6 +408,23 @@ async fn tui_event_loop(
                             )),
                         }
                     }
+                    PickerAction::SelectBranch(tip_id) => {
+                        let result = {
+                            let mut h = harness.lock().await;
+                            h.resume_session_branch_tip(&tip_id)
+                        };
+                        let mut s = state.lock().unwrap();
+                        match result {
+                            Ok(count) => s.messages.push(TuiMessage::new(
+                                TuiRole::System,
+                                format!("[branch selected: {tip_id}, {count} messages]"),
+                            )),
+                            Err(e) => s.messages.push(TuiMessage::new(
+                                TuiRole::System,
+                                format!("[branch select failed: {e}]"),
+                            )),
+                        }
+                    }
                     PickerAction::Cancel => {}
                 }
                 continue;
@@ -472,6 +491,36 @@ async fn tui_event_loop(
                             title: "Resume session".into(),
                             state: SelectListState::new(items),
                         });
+                    }
+                    continue;
+                }
+
+                if input == "/branch" {
+                    let items_result = {
+                        let h = harness.lock().await;
+                        h.branch_picker_items()
+                    };
+                    let mut s = state.lock().unwrap();
+                    match items_result {
+                        Ok(items) if items.is_empty() => {
+                            s.messages.push(TuiMessage::new(
+                                TuiRole::System,
+                                "[branch picker: no branches available]",
+                            ));
+                        }
+                        Ok(items) => {
+                            s.picker = Some(PickerOverlay {
+                                kind: PickerKind::Branch,
+                                title: "Select branch".into(),
+                                state: SelectListState::new(items),
+                            });
+                        }
+                        Err(e) => {
+                            s.messages.push(TuiMessage::new(
+                                TuiRole::System,
+                                format!("[branch picker failed: {e}]"),
+                            ));
+                        }
                     }
                     continue;
                 }
@@ -558,6 +607,12 @@ async fn tui_event_loop(
     }
 }
 
+fn resolve_interactive_theme(harness: &CodingHarness, theme_name: &str) -> Theme {
+    harness
+        .resolve_theme(theme_name)
+        .unwrap_or_else(|_| resolve_theme(theme_name))
+}
+
 fn build_shell(s: &TuiState) -> Shell {
     let mut shell = Shell::new(s.model.clone())
         .input_text(s.input_text.clone())
@@ -601,6 +656,7 @@ fn handle_picker_key(s: &mut TuiState, code: KeyCode) -> Option<PickerAction> {
             match (kind, item) {
                 (PickerKind::Model, Some(item)) => Some(PickerAction::SelectModel(item.id)),
                 (PickerKind::Session, Some(item)) => Some(PickerAction::SelectSession(item.id)),
+                (PickerKind::Branch, Some(item)) => Some(PickerAction::SelectBranch(item.id)),
                 (_, None) => Some(PickerAction::Cancel),
             }
         }
@@ -656,6 +712,9 @@ fn matches_key_combo(code: KeyCode, modifiers: KeyModifiers, combo: &KeyCombo) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OpiConfig;
+    use crate::resource::{DiscoveryLayer, ResourceDiscoveryLayers};
+    use opi_ai::test_support::MockProvider;
     use opi_tui::SelectItem;
 
     fn state_with_picker(kind: PickerKind) -> TuiState {
@@ -697,5 +756,53 @@ mod tests {
         let action = handle_picker_key(&mut state, KeyCode::Enter);
         assert_eq!(action, Some(PickerAction::SelectSession("mock:new".into())));
         assert!(state.picker.is_none());
+    }
+
+    #[test]
+    fn branch_picker_enter_returns_selected_tip() {
+        let mut state = state_with_picker(PickerKind::Branch);
+        let action = handle_picker_key(&mut state, KeyCode::Enter);
+        assert_eq!(action, Some(PickerAction::SelectBranch("mock:new".into())));
+        assert!(state.picker.is_none());
+    }
+
+    #[test]
+    fn interactive_theme_resolver_uses_harness_discovered_themes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let theme_dir = tmp.path().join("operator-theme");
+        std::fs::create_dir_all(&theme_dir).unwrap();
+        std::fs::write(
+            theme_dir.join("theme.toml"),
+            r##"
+name = "operator-theme"
+description = "Operator theme"
+
+[colors]
+role_user = "Red"
+status_bg = "#1a1a2e"
+"##,
+        )
+        .unwrap();
+
+        let provider = MockProvider::new("mock", vec![]);
+        let harness = CodingHarness::builder(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            tmp.path().to_path_buf(),
+        )
+        .resource_layers(ResourceDiscoveryLayers {
+            themes: vec![DiscoveryLayer {
+                root: theme_dir,
+                subdirectory: None,
+                precedence: 2,
+            }],
+            ..Default::default()
+        })
+        .build();
+
+        let theme = resolve_interactive_theme(&harness, "operator-theme");
+
+        assert_eq!(theme.name, "operator-theme");
     }
 }

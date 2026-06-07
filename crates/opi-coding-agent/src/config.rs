@@ -26,6 +26,8 @@ pub struct OpiConfig {
     pub keybindings: KeybindingsConfig,
     pub retry: opi_ai::retry::RetryConfig,
     pub compaction: CompactionConfigSection,
+    pub extensions: ExtensionsConfig,
+    pub packages: PackagesConfig,
 }
 
 /// `[defaults]` section.
@@ -209,6 +211,18 @@ impl Default for CompactionConfigSection {
     }
 }
 
+/// `[extensions]` section.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ExtensionsConfig {
+    pub paths: Vec<PathBuf>,
+}
+
+/// `[packages]` section.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PackagesConfig {
+    pub paths: Vec<PathBuf>,
+}
+
 // ---------------------------------------------------------------------------
 // TOML deserialization structs (Option fields detect presence)
 // ---------------------------------------------------------------------------
@@ -222,6 +236,8 @@ struct TomlConfig {
     keybindings: TomlKeybindings,
     retry: TomlRetry,
     compaction: TomlCompaction,
+    extensions: TomlResourcePaths,
+    packages: TomlResourcePaths,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -342,6 +358,12 @@ struct TomlRetry {
 struct TomlCompaction {
     enabled: Option<bool>,
     threshold_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlResourcePaths {
+    paths: Option<Vec<PathBuf>>,
 }
 
 impl TomlConfig {
@@ -549,6 +571,12 @@ impl TomlConfig {
         }
         if let Some(v) = self.compaction.threshold_tokens {
             config.compaction.threshold_tokens = v;
+        }
+        if let Some(paths) = self.extensions.paths {
+            config.extensions.paths.extend(paths);
+        }
+        if let Some(paths) = self.packages.paths {
+            config.packages.paths.extend(paths);
         }
     }
 }

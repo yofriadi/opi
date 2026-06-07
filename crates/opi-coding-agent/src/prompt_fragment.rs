@@ -71,6 +71,9 @@ pub enum FragmentDiscoveryError {
     /// A required field is missing or empty in the frontmatter.
     #[error("missing required field '{field}' in fragment at {path}")]
     MissingField { field: String, path: PathBuf },
+    /// Two fragments in the same precedence layer use the same name.
+    #[error("duplicate fragment name '{name}' in discovery layer at {path}")]
+    DuplicateName { name: String, path: PathBuf },
     /// The fragment name contains invalid characters or exceeds the length limit.
     #[error("invalid fragment name in {path}: {reason}")]
     InvalidName { path: PathBuf, reason: String },
@@ -403,7 +406,8 @@ fn extract_body(content: &str) -> String {
 ///
 /// Each layer's scan directory is enumerated for subdirectories containing
 /// `FRAGMENT.md` files. When multiple layers produce fragments with the same
-/// name, the one with the highest `precedence` value is kept.
+/// name, the one with the highest `precedence` value is kept. Duplicate names
+/// within the same precedence layer are reported as an error.
 ///
 /// Returns the deduplicated list of discovered fragment resources, sorted by
 /// name. Missing scan directories are silently skipped.
@@ -415,6 +419,11 @@ pub fn discover_fragments(
     for layer in layers {
         let scan_dir = layer.scan_dir();
         if !scan_dir.is_dir() {
+            continue;
+        }
+
+        if scan_dir.join("FRAGMENT.md").exists() {
+            discover_fragment_dir(&scan_dir, layer, &mut seen)?;
             continue;
         }
 
@@ -436,33 +445,48 @@ pub fn discover_fragments(
                 continue;
             }
 
-            let content = std::fs::read_to_string(&fragment_md)?;
-            let manifest = FragmentManifest::from_fragment_md(&content, &fragment_md)?;
-
-            let canonical = path.canonicalize().unwrap_or(path);
-
-            let should_insert = match seen.get(&manifest.name) {
-                Some(existing) => layer.precedence > existing.layer_precedence,
-                None => true,
-            };
-
-            if should_insert {
-                seen.insert(
-                    manifest.name.clone(),
-                    FragmentResource {
-                        manifest,
-                        path: canonical,
-                        fragment_md_path: fragment_md,
-                        layer_precedence: layer.precedence,
-                    },
-                );
-            }
+            discover_fragment_dir(&path, layer, &mut seen)?;
         }
     }
 
     let mut resources: Vec<FragmentResource> = seen.into_values().collect();
     resources.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
     Ok(resources)
+}
+
+fn discover_fragment_dir(
+    path: &Path,
+    layer: &crate::resource::DiscoveryLayer,
+    seen: &mut HashMap<String, FragmentResource>,
+) -> Result<(), FragmentDiscoveryError> {
+    let fragment_md = path.join("FRAGMENT.md");
+    let content = std::fs::read_to_string(&fragment_md)?;
+    let manifest = FragmentManifest::from_fragment_md(&content, &fragment_md)?;
+
+    let canonical = path.canonicalize()?;
+
+    match seen.get(&manifest.name) {
+        Some(existing) if layer.precedence == existing.layer_precedence => {
+            return Err(FragmentDiscoveryError::DuplicateName {
+                name: manifest.name,
+                path: canonical,
+            });
+        }
+        Some(existing) if layer.precedence < existing.layer_precedence => return Ok(()),
+        Some(_) | None => {
+            seen.insert(
+                manifest.name.clone(),
+                FragmentResource {
+                    manifest,
+                    path: canonical,
+                    fragment_md_path: fragment_md,
+                    layer_precedence: layer.precedence,
+                },
+            );
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

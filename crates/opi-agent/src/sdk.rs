@@ -174,10 +174,11 @@ impl SdkCommand {
 /// ```json
 /// {"type":"response","command":"session_info","success":true,"data":{...}}
 /// ```
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct SdkResponse {
     /// Always `"response"`.
-    r#type: &'static str,
+    #[serde(default = "response_type")]
+    r#type: String,
     /// The command name this response correlates to.
     pub command: String,
     /// Whether the command succeeded.
@@ -197,7 +198,7 @@ impl SdkResponse {
     /// Build a success response.
     pub fn success(id: Option<&str>, command: &str) -> Self {
         Self {
-            r#type: "response",
+            r#type: response_type(),
             command: command.to_owned(),
             success: true,
             id: id.map(|s| s.to_owned()),
@@ -209,7 +210,7 @@ impl SdkResponse {
     /// Build a success response with a data payload.
     pub fn success_with_data(id: Option<&str>, command: &str, data: serde_json::Value) -> Self {
         Self {
-            r#type: "response",
+            r#type: response_type(),
             command: command.to_owned(),
             success: true,
             id: id.map(|s| s.to_owned()),
@@ -221,7 +222,7 @@ impl SdkResponse {
     /// Build an error response.
     pub fn error(id: Option<&str>, command: &str, message: &str) -> Self {
         Self {
-            r#type: "response",
+            r#type: response_type(),
             command: command.to_owned(),
             success: false,
             id: id.map(|s| s.to_owned()),
@@ -229,6 +230,10 @@ impl SdkResponse {
             data: None,
         }
     }
+}
+
+fn response_type() -> String {
+    "response".to_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +249,7 @@ pub fn agent_event_to_value(event: &AgentEvent) -> serde_json::Value {
     match serde_json::to_value(event) {
         Ok(v) => v,
         Err(_) => serde_json::json!({
-            "type": "SessionPersistError",
+            "type": "SdkSerializationError",
             "message": "failed to serialize agent event",
         }),
     }

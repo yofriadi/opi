@@ -89,6 +89,9 @@ pub enum PackageDiscoveryError {
     /// A required field is missing or empty in the manifest.
     #[error("missing required field '{field}' in package at {path}")]
     MissingField { field: String, path: PathBuf },
+    /// Two packages in the same precedence layer use the same name.
+    #[error("duplicate package name '{name}' in discovery layer at {path}")]
+    DuplicateName { name: String, path: PathBuf },
     /// The package name is invalid (bad characters or too long).
     #[error("invalid package name in {path}: {reason}")]
     InvalidName { path: PathBuf, reason: String },
@@ -292,6 +295,16 @@ pub struct ComposedResource {
     pub path: PathBuf,
 }
 
+/// Discovery layers produced by composing package-contained resources.
+#[derive(Debug, Clone, Default)]
+pub struct PackageComposedResourceLayers {
+    pub extensions: Vec<crate::resource::DiscoveryLayer>,
+    pub skills: Vec<crate::resource::DiscoveryLayer>,
+    pub fragments: Vec<crate::resource::DiscoveryLayer>,
+    pub themes: Vec<crate::resource::DiscoveryLayer>,
+    pub diagnostics: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Package resource
 // ---------------------------------------------------------------------------
@@ -372,10 +385,7 @@ impl PackageResource {
             return Ok(());
         }
 
-        let canonical_package = self
-            .path
-            .canonicalize()
-            .unwrap_or_else(|_| self.path.clone());
+        let canonical_package = self.path.canonicalize()?;
 
         if let Some(includes) = include_list {
             // Validated manifest mode: only include listed resources
@@ -403,9 +413,7 @@ impl PackageResource {
                 }
 
                 // Security check
-                let canonical_resource = resource_dir
-                    .canonicalize()
-                    .unwrap_or_else(|_| resource_dir.clone());
+                let canonical_resource = resource_dir.canonicalize()?;
                 if !canonical_resource.starts_with(&canonical_package) {
                     return Err(PackageDiscoveryError::SecurityDiagnostic {
                         package_name: self.manifest.name.clone(),
@@ -451,9 +459,7 @@ impl PackageResource {
                 }
 
                 // Security check
-                let canonical_resource = resource_dir
-                    .canonicalize()
-                    .unwrap_or_else(|_| resource_dir.clone());
+                let canonical_resource = resource_dir.canonicalize()?;
                 if !canonical_resource.starts_with(&canonical_package) {
                     return Err(PackageDiscoveryError::SecurityDiagnostic {
                         package_name: self.manifest.name.clone(),
@@ -486,7 +492,8 @@ impl PackageResource {
 ///
 /// Each layer's scan directory is enumerated for subdirectories containing
 /// `package.toml` files. When multiple layers produce packages with the same
-/// name, the one with the highest `precedence` value is kept.
+/// name, the one with the highest `precedence` value is kept. Duplicate names
+/// within the same precedence layer are reported as an error.
 ///
 /// Returns the deduplicated list of discovered package resources, sorted by
 /// name. Missing scan directories are silently skipped.
@@ -499,6 +506,11 @@ pub fn discover_packages(
     for layer in layers {
         let scan_dir = layer.scan_dir();
         if !scan_dir.is_dir() {
+            continue;
+        }
+
+        if scan_dir.join("package.toml").exists() {
+            discover_package_dir(&scan_dir, layer, &mut seen)?;
             continue;
         }
 
@@ -520,33 +532,105 @@ pub fn discover_packages(
                 continue;
             }
 
-            let content = std::fs::read_to_string(&pkg_toml)?;
-            let manifest = PackageManifest::from_toml(&content, &pkg_toml)?;
-
-            let canonical = path.canonicalize().unwrap_or(path);
-
-            let should_insert = match seen.get(&manifest.name) {
-                Some(existing) => layer.precedence > existing.layer_precedence,
-                None => true,
-            };
-
-            if should_insert {
-                seen.insert(
-                    manifest.name.clone(),
-                    PackageResource {
-                        manifest,
-                        path: canonical,
-                        package_toml_path: pkg_toml,
-                        layer_precedence: layer.precedence,
-                    },
-                );
-            }
+            discover_package_dir(&path, layer, &mut seen)?;
         }
     }
 
     let mut resources: Vec<PackageResource> = seen.into_values().collect();
     resources.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
     Ok(resources)
+}
+
+fn discover_package_dir(
+    path: &Path,
+    layer: &crate::resource::DiscoveryLayer,
+    seen: &mut std::collections::HashMap<String, PackageResource>,
+) -> Result<(), PackageDiscoveryError> {
+    let pkg_toml = path.join("package.toml");
+    let content = std::fs::read_to_string(&pkg_toml)?;
+    let manifest = PackageManifest::from_toml(&content, &pkg_toml)?;
+
+    let canonical = path.canonicalize()?;
+
+    match seen.get(&manifest.name) {
+        Some(existing) if layer.precedence == existing.layer_precedence => {
+            return Err(PackageDiscoveryError::DuplicateName {
+                name: manifest.name,
+                path: canonical,
+            });
+        }
+        Some(existing) if layer.precedence < existing.layer_precedence => return Ok(()),
+        Some(_) | None => {
+            seen.insert(
+                manifest.name.clone(),
+                PackageResource {
+                    manifest,
+                    path: canonical,
+                    package_toml_path: pkg_toml,
+                    layer_precedence: layer.precedence,
+                },
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Compose package resources into direct discovery layers grouped by kind.
+///
+/// Composition diagnostics are collected instead of panicking so production
+/// harness construction can surface them in metadata.
+pub fn package_composed_resource_layers(
+    packages: &[PackageResource],
+) -> PackageComposedResourceLayers {
+    let mut result = PackageComposedResourceLayers::default();
+    let mut ordered: Vec<&PackageResource> = packages.iter().collect();
+    ordered.sort_by(|a, b| {
+        a.layer_precedence
+            .cmp(&b.layer_precedence)
+            .then_with(|| a.manifest.name.cmp(&b.manifest.name))
+    });
+
+    for package in ordered {
+        let mut resources = match package.compose() {
+            Ok(resources) => resources,
+            Err(e) => {
+                result
+                    .diagnostics
+                    .push(format!("package '{}': {e}", package.manifest.name));
+                continue;
+            }
+        };
+        resources.sort_by(|a, b| {
+            resource_kind_order(a.kind)
+                .cmp(&resource_kind_order(b.kind))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        for resource in resources {
+            let layer = crate::resource::DiscoveryLayer {
+                root: resource.path,
+                subdirectory: None,
+                precedence: package.layer_precedence,
+            };
+            match resource.kind {
+                ResourceKind::Extension => result.extensions.push(layer),
+                ResourceKind::Skill => result.skills.push(layer),
+                ResourceKind::Fragment => result.fragments.push(layer),
+                ResourceKind::Theme => result.themes.push(layer),
+            }
+        }
+    }
+
+    result
+}
+
+fn resource_kind_order(kind: ResourceKind) -> u8 {
+    match kind {
+        ResourceKind::Extension => 0,
+        ResourceKind::Skill => 1,
+        ResourceKind::Fragment => 2,
+        ResourceKind::Theme => 3,
+    }
 }
 
 // ---------------------------------------------------------------------------

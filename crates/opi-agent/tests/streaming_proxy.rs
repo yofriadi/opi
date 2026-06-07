@@ -100,7 +100,7 @@ async fn run_proxy_with_config(input: &str, handler: MockHandler, config: ProxyC
 
     let proxy = StreamingProxy::new(handler, config);
     let cancel = CancellationToken::new();
-    let result = proxy.run(reader, writer, cancel).await;
+    let result = proxy.run(reader, writer, cancel);
 
     match result {
         Ok(writer) => {
@@ -314,18 +314,13 @@ async fn cancellation_stops_proxy_cleanly() {
     let proxy = StreamingProxy::new(handler, ProxyConfig::default());
 
     cancel.cancel();
-    let result = proxy.run(reader, writer, cancel).await;
+    let result = proxy.run(reader, writer, cancel);
 
-    // Should return Ok (clean shutdown) or an error that indicates cancellation
-    match result {
-        Ok(_) => {}
-        Err(e) => {
-            assert!(
-                e.to_string().contains("cancel"),
-                "error should mention cancellation: {e}"
-            );
-        }
-    }
+    let writer = result.expect("pre-cancelled input should shut down cleanly");
+    let output = String::from_utf8(writer.into_inner()).unwrap();
+    let messages = parse_jsonl(&output);
+    let cancelled = messages.iter().any(|m| m["type"] == "proxy_cancelled");
+    assert!(cancelled, "should emit proxy_cancelled event");
 }
 
 #[tokio::test]
@@ -343,7 +338,7 @@ async fn cancellation_emits_proxy_cancelled_event() {
 
     // Cancel immediately after starting
     cancel.cancel();
-    let result = proxy.run(reader, writer, cancel).await;
+    let result = proxy.run(reader, writer, cancel);
 
     if let Ok(w) = result {
         let output = String::from_utf8(w.into_inner()).unwrap();
@@ -557,7 +552,7 @@ async fn write_error_handled_gracefully() {
     let cancel = CancellationToken::new();
 
     // Should not panic; should return an error or handle gracefully
-    let _ = proxy.run(reader, writer, cancel).await;
+    let _ = proxy.run(reader, writer, cancel);
     // If we get here without panic, the test passes.
 }
 
@@ -674,6 +669,21 @@ fn redactor_preserves_non_matching_values() {
 
     let redacted = redactor.redact(&event);
     assert_eq!(redacted, event, "non-matching event should be unchanged");
+}
+
+#[test]
+fn redactor_preserves_short_secret_like_prefixes() {
+    let redactor = SecretRedactor::default();
+
+    let event = json!({
+        "status": "short marker sk-test and JWT prefix eyJ are not credentials"
+    });
+
+    let redacted = redactor.redact(&event);
+    assert_eq!(
+        redacted, event,
+        "short credential-like prefixes should not be redacted"
+    );
 }
 
 // ---------------------------------------------------------------------------

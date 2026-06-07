@@ -62,6 +62,9 @@ pub enum SkillDiscoveryError {
     /// A required field is missing or empty in the frontmatter.
     #[error("missing required field '{field}' in skill at {path}")]
     MissingField { field: String, path: PathBuf },
+    /// Two skills in the same precedence layer use the same name.
+    #[error("duplicate skill name '{name}' in discovery layer at {path}")]
+    DuplicateName { name: String, path: PathBuf },
     /// The skill name contains invalid characters or exceeds the length limit.
     #[error("invalid skill name in {path}: {reason}")]
     InvalidName { path: PathBuf, reason: String },
@@ -318,7 +321,8 @@ fn extract_body(content: &str) -> String {
 ///
 /// Each layer's scan directory is enumerated for subdirectories containing
 /// `SKILL.md` files. When multiple layers produce skills with the same name,
-/// the one with the highest `precedence` value is kept.
+/// the one with the highest `precedence` value is kept. Duplicate names within
+/// the same precedence layer are reported as an error.
 ///
 /// Returns the deduplicated list of discovered skill resources, sorted by name.
 /// Missing scan directories are silently skipped.
@@ -331,6 +335,11 @@ pub fn discover_skills(
     for layer in layers {
         let scan_dir = layer.scan_dir();
         if !scan_dir.is_dir() {
+            continue;
+        }
+
+        if scan_dir.join("SKILL.md").exists() {
+            discover_skill_dir(&scan_dir, layer, &mut seen)?;
             continue;
         }
 
@@ -353,33 +362,48 @@ pub fn discover_skills(
                 continue;
             }
 
-            let content = std::fs::read_to_string(&skill_md)?;
-            let manifest = SkillManifest::from_skill_md(&content, &skill_md)?;
-
-            let canonical = path.canonicalize().unwrap_or(path);
-
-            let should_insert = match seen.get(&manifest.name) {
-                Some(existing) => layer.precedence > existing.layer_precedence,
-                None => true,
-            };
-
-            if should_insert {
-                seen.insert(
-                    manifest.name.clone(),
-                    SkillResource {
-                        manifest,
-                        path: canonical,
-                        skill_md_path: skill_md,
-                        layer_precedence: layer.precedence,
-                    },
-                );
-            }
+            discover_skill_dir(&path, layer, &mut seen)?;
         }
     }
 
     let mut resources: Vec<SkillResource> = seen.into_values().collect();
     resources.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
     Ok(resources)
+}
+
+fn discover_skill_dir(
+    path: &Path,
+    layer: &crate::resource::DiscoveryLayer,
+    seen: &mut std::collections::HashMap<String, SkillResource>,
+) -> Result<(), SkillDiscoveryError> {
+    let skill_md = path.join("SKILL.md");
+    let content = std::fs::read_to_string(&skill_md)?;
+    let manifest = SkillManifest::from_skill_md(&content, &skill_md)?;
+
+    let canonical = path.canonicalize()?;
+
+    match seen.get(&manifest.name) {
+        Some(existing) if layer.precedence == existing.layer_precedence => {
+            return Err(SkillDiscoveryError::DuplicateName {
+                name: manifest.name,
+                path: canonical,
+            });
+        }
+        Some(existing) if layer.precedence < existing.layer_precedence => return Ok(()),
+        Some(_) | None => {
+            seen.insert(
+                manifest.name.clone(),
+                SkillResource {
+                    manifest,
+                    path: canonical,
+                    skill_md_path: skill_md,
+                    layer_precedence: layer.precedence,
+                },
+            );
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

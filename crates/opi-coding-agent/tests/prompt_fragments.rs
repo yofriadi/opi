@@ -466,6 +466,32 @@ fn test_discover_precedence_mixed_names() {
     assert_eq!(frag_b.manifest.description, "high-b");
 }
 
+#[test]
+fn test_discover_duplicate_name_same_layer_returns_error() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let dir = tmp.path().join("fragments");
+    fs::create_dir_all(&dir).unwrap();
+    write_fragment(
+        &dir,
+        "first",
+        "name: shared-frag\ndescription: First",
+        "First body.",
+    );
+    write_fragment(
+        &dir,
+        "second",
+        "name: shared-frag\ndescription: Second",
+        "Second body.",
+    );
+
+    let err = discover_fragments(&[layer(tmp.path(), "fragments", 0)]).unwrap_err();
+    assert!(matches!(
+        err,
+        FragmentDiscoveryError::DuplicateName { ref name, .. } if name == "shared-frag"
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // 6. Discovery — missing / invalid resources
 // ---------------------------------------------------------------------------

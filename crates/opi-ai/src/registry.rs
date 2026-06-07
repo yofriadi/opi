@@ -71,6 +71,7 @@ use crate::provider::{ModelInfo, Provider};
 
 /// Error type for registry operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RegistryError {
     #[error("invalid model spec: {0}")]
     InvalidSpec(String),
@@ -82,6 +83,7 @@ pub enum RegistryError {
 
 /// Error type for provider/model registration.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RegistrationError {
     /// Provider id is empty.
     #[error("provider id cannot be empty")]
@@ -273,8 +275,16 @@ impl ProviderRegistry {
             }
         }
 
-        // Override models (supplement or shadow provider models).
-        for ((provider_id, _model_id), model) in &self.model_overrides {
+        // Override models (supplement or shadow provider models). HashMap
+        // iteration is intentionally normalized so list-models/pickers stay
+        // deterministic once overrides are present.
+        let mut overrides = self.model_overrides.iter().collect::<Vec<_>>();
+        overrides.sort_by(|((provider_a, model_a), _), ((provider_b, model_b), _)| {
+            provider_a
+                .cmp(provider_b)
+                .then_with(|| model_a.cmp(model_b))
+        });
+        for ((provider_id, _model_id), model) in overrides {
             result.push((provider_id.as_str(), model));
         }
 

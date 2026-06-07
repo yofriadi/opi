@@ -126,6 +126,27 @@ fn parse_message_update_thinking_delta() {
 }
 
 #[test]
+fn parse_message_update_tool_call_delta_is_not_visible_text() {
+    let raw = serde_json::json!({
+        "type": "MessageUpdate",
+        "assistant_event": {
+            "type": "tool_call_delta",
+            "content_index": 0,
+            "delta": r#"{"name":"bash"}"#
+        }
+    });
+    let event = WebUiEvent::parse(&raw).expect("should parse MessageUpdate");
+
+    assert!(matches!(
+        event,
+        WebUiEvent::Unknown {
+            event_type,
+            ..
+        } if event_type == "MessageUpdate/tool_call_delta"
+    ));
+}
+
+#[test]
 fn parse_tool_execution_start_event() {
     let raw = serde_json::json!({
         "type": "ToolExecutionStart",
@@ -491,6 +512,62 @@ fn state_handles_session_info() {
 }
 
 #[test]
+fn rpc_session_info_response_updates_status_state() {
+    let raw = serde_json::json!({
+        "type": "response",
+        "command": "session_info",
+        "success": true,
+        "id": "si-1",
+        "data": {
+            "model": "anthropic:claude-sonnet-4",
+            "session_id": "abc123",
+            "turn_count": 2,
+            "message_count": 5
+        }
+    });
+    let event = WebUiEvent::parse(&raw).unwrap();
+    let mut state = ConversationState::new();
+    state.process(event);
+    assert_eq!(state.model(), Some("anthropic:claude-sonnet-4"));
+    assert_eq!(state.session_id(), Some("abc123"));
+    assert_eq!(state.turn_count(), 2);
+    assert_eq!(state.message_count(), 5);
+}
+
+#[test]
+fn rpc_set_model_response_updates_status_state() {
+    let raw = serde_json::json!({
+        "type": "response",
+        "command": "set_model",
+        "success": true,
+        "id": "sm-1",
+        "data": {
+            "model": "anthropic:claude-opus-4"
+        }
+    });
+    let event = WebUiEvent::parse(&raw).unwrap();
+    let mut state = ConversationState::new();
+    state.process(event);
+    assert_eq!(state.model(), Some("anthropic:claude-opus-4"));
+}
+
+#[test]
+fn state_ignores_tool_call_stream_fragments_for_visible_text() {
+    let mut state = ConversationState::new();
+    state.process(WebUiEvent::MessageStart {
+        model: "test".to_owned(),
+        provider: "test".to_owned(),
+    });
+    state.process(WebUiEvent::Unknown {
+        event_type: "MessageUpdate/tool_call_delta".to_owned(),
+        raw: serde_json::json!({"delta": r#"{"arguments":"<script>"}"#}),
+    });
+    state.process(WebUiEvent::MessageEnd);
+
+    assert!(state.messages().is_empty());
+}
+
+#[test]
 fn state_handles_compaction_events() {
     let mut state = ConversationState::new();
 
@@ -549,6 +626,7 @@ fn state_handles_rpc_response_success() {
         success: true,
         id: Some("42".to_owned()),
         error: None,
+        data: None,
     });
     assert!(state.last_response().is_some());
     let resp = state.last_response().unwrap();
@@ -564,6 +642,7 @@ fn state_handles_rpc_response_error() {
         success: false,
         id: None,
         error: Some("model not found".to_owned()),
+        data: None,
     });
     let resp = state.last_response().unwrap();
     assert!(!resp.success);
@@ -784,6 +863,60 @@ fn render_escaping_prevents_xss() {
     assert!(html.contains("&lt;script&gt;"));
 }
 
+#[test]
+fn render_thinking_escapes_dynamic_content() {
+    let msg = ChatMessage::new("Answer".to_owned(), "test".to_owned(), "test".to_owned())
+        .with_thinking(r#"<img src=x onerror="alert(1)">"#.to_owned());
+    let html = msg.render_html();
+
+    assert!(!html.contains("<img"));
+    assert!(!html.contains("onerror=\"alert(1)\""));
+    assert!(html.contains("&lt;img"));
+    assert!(html.contains("&quot;alert(1)&quot;"));
+}
+
+#[test]
+fn render_tool_name_and_result_escape_dynamic_content() {
+    let mut tc = ToolCallView::new(
+        r#"bad"><script>alert(1)</script>"#.to_owned(),
+        r#"<svg onload="alert(1)">"#.to_owned(),
+        serde_json::json!({}),
+    );
+    tc.complete(serde_json::json!(r#"<script>alert("result")</script>"#));
+    let html = tc.render_html();
+
+    assert!(!html.contains("<svg"));
+    assert!(!html.contains("<script>"));
+    assert!(html.contains("&lt;svg"));
+    assert!(html.contains("&lt;script&gt;alert(&quot;result&quot;)&lt;/script&gt;"));
+}
+
+#[test]
+fn render_status_bar_escapes_model_and_session() {
+    let mut sb = StatusBar::new();
+    sb.set_model(r#"" onmouseover="alert(1)"#.to_owned());
+    sb.set_session_id(r#"<script>alert('session')</script>"#.to_owned());
+    let html = sb.render_html();
+
+    assert!(!html.contains("onmouseover=\"alert(1)\""));
+    assert!(!html.contains("<script>"));
+    assert!(html.contains("&quot; onmouseover=&quot;alert(1)"));
+    assert!(html.contains("&lt;script&gt;alert(&#39;session&#39;)&lt;/script&gt;"));
+}
+
+#[test]
+fn render_attribute_like_message_content_is_escaped() {
+    let msg = ChatMessage::new(
+        r#"" autofocus onfocus="alert(1)" data-x=""#.to_owned(),
+        "test".to_owned(),
+        "test".to_owned(),
+    );
+    let html = msg.render_html();
+
+    assert!(!html.contains("autofocus onfocus=\"alert(1)\""));
+    assert!(html.contains("&quot; autofocus onfocus=&quot;alert(1)&quot; data-x=&quot;"));
+}
+
 // ---------------------------------------------------------------------------
 // 5. End-to-end flow — simulate full RPC event stream through state to HTML
 // ---------------------------------------------------------------------------
@@ -804,6 +937,7 @@ fn full_prompt_flow_produces_renderable_html() {
         success: true,
         id: Some("1".to_owned()),
         error: None,
+        data: None,
     });
 
     // Agent starts

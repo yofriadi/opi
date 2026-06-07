@@ -57,6 +57,9 @@ pub enum ResourceDiscoveryError {
     /// A required field is missing or empty in the manifest.
     #[error("missing required field '{field}' in manifest at {path}")]
     MissingField { field: String, path: PathBuf },
+    /// Two resources in the same precedence layer use the same name.
+    #[error("duplicate extension name '{name}' in discovery layer at {path}")]
+    DuplicateName { name: String, path: PathBuf },
     /// An I/O error occurred during discovery.
     #[error("I/O error discovering extensions: {0}")]
     Io(#[from] std::io::Error),
@@ -125,7 +128,7 @@ impl ExtensionManifest {
 /// precedence value.
 ///
 /// Higher precedence values override lower ones for duplicate extension names.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryLayer {
     /// Root directory for this discovery layer.
     pub root: PathBuf,
@@ -143,6 +146,114 @@ impl DiscoveryLayer {
             Some(sub) => self.root.join(sub),
             None => self.root.clone(),
         }
+    }
+}
+
+/// Explicit resource paths from resolved configuration or embedder setup.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExplicitResourcePaths {
+    pub extensions: Vec<PathBuf>,
+    pub packages: Vec<PathBuf>,
+    pub skills: Vec<PathBuf>,
+    pub fragments: Vec<PathBuf>,
+    pub themes: Vec<PathBuf>,
+}
+
+/// Discovery layers for every metadata-backed resource kind.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResourceDiscoveryLayers {
+    pub extensions: Vec<DiscoveryLayer>,
+    pub packages: Vec<DiscoveryLayer>,
+    pub skills: Vec<DiscoveryLayer>,
+    pub fragments: Vec<DiscoveryLayer>,
+    pub themes: Vec<DiscoveryLayer>,
+}
+
+const USER_LAYER_PRECEDENCE: u32 = 0;
+const PROJECT_LAYER_PRECEDENCE: u32 = 1;
+const EXPLICIT_LAYER_PRECEDENCE: u32 = 2;
+
+/// Build the standard user/project/explicit discovery layers for a workspace.
+///
+/// Missing directories are handled by the per-kind discovery functions. Relative
+/// explicit paths are resolved against `workspace_root`.
+pub fn standard_discovery_layers(
+    workspace_root: &Path,
+    user_config_dir: Option<&Path>,
+    explicit: ExplicitResourcePaths,
+) -> ResourceDiscoveryLayers {
+    ResourceDiscoveryLayers {
+        extensions: standard_layers_for_kind(
+            workspace_root,
+            user_config_dir,
+            "extensions",
+            ".opi/extensions",
+            &explicit.extensions,
+        ),
+        packages: standard_layers_for_kind(
+            workspace_root,
+            user_config_dir,
+            "packages",
+            ".opi/packages",
+            &explicit.packages,
+        ),
+        skills: standard_layers_for_kind(
+            workspace_root,
+            user_config_dir,
+            "skills",
+            ".opi/skills",
+            &explicit.skills,
+        ),
+        fragments: standard_layers_for_kind(
+            workspace_root,
+            user_config_dir,
+            "fragments",
+            ".opi/fragments",
+            &explicit.fragments,
+        ),
+        themes: standard_layers_for_kind(
+            workspace_root,
+            user_config_dir,
+            "themes",
+            ".opi/themes",
+            &explicit.themes,
+        ),
+    }
+}
+
+fn standard_layers_for_kind(
+    workspace_root: &Path,
+    user_config_dir: Option<&Path>,
+    user_subdir: &str,
+    project_subdir: &str,
+    explicit_paths: &[PathBuf],
+) -> Vec<DiscoveryLayer> {
+    let mut layers = Vec::new();
+    if let Some(user_config_dir) = user_config_dir {
+        layers.push(DiscoveryLayer {
+            root: user_config_dir.to_path_buf(),
+            subdirectory: Some(user_subdir.to_owned()),
+            precedence: USER_LAYER_PRECEDENCE,
+        });
+    }
+    layers.push(DiscoveryLayer {
+        root: workspace_root.to_path_buf(),
+        subdirectory: Some(project_subdir.to_owned()),
+        precedence: PROJECT_LAYER_PRECEDENCE,
+    });
+    layers.extend(explicit_paths.iter().map(|path| DiscoveryLayer {
+        root: resolve_explicit_path(workspace_root, path),
+        subdirectory: None,
+        precedence: EXPLICIT_LAYER_PRECEDENCE,
+    }));
+    layers
+}
+
+fn resolve_explicit_path(workspace_root: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace_root.join(path)
     }
 }
 
@@ -168,7 +279,8 @@ pub struct ExtensionResource {
 /// Layers are processed in order. For each layer, the scan directory is
 /// enumerated for subdirectories containing `extension.toml` files. When
 /// multiple layers produce extensions with the same name, the one with the
-/// highest `precedence` value is kept.
+/// highest `precedence` value is kept. Duplicate names within the same
+/// precedence layer are reported as an error.
 ///
 /// Returns the deduplicated list of discovered resources, or the first error
 /// encountered during manifest parsing.
@@ -181,6 +293,11 @@ pub fn discover_extension_resources(
     for layer in layers {
         let scan_dir = layer.scan_dir();
         if !scan_dir.is_dir() {
+            continue;
+        }
+
+        if scan_dir.join("extension.toml").exists() {
+            discover_extension_dir(&scan_dir, layer, &mut seen)?;
             continue;
         }
 
@@ -203,28 +320,7 @@ pub fn discover_extension_resources(
                 continue;
             }
 
-            let content = std::fs::read_to_string(&manifest_path)?;
-            let manifest = ExtensionManifest::from_toml(&content, &manifest_path)?;
-
-            let canonical = path.canonicalize().unwrap_or(path);
-
-            // Precedence: higher wins. Insert if new or if this layer has
-            // higher precedence than the existing entry.
-            let should_insert = match seen.get(&manifest.name) {
-                Some(existing) => layer.precedence > existing.layer_precedence,
-                None => true,
-            };
-
-            if should_insert {
-                seen.insert(
-                    manifest.name.clone(),
-                    ExtensionResource {
-                        manifest,
-                        path: canonical,
-                        layer_precedence: layer.precedence,
-                    },
-                );
-            }
+            discover_extension_dir(&path, layer, &mut seen)?;
         }
     }
 
@@ -232,4 +328,38 @@ pub fn discover_extension_resources(
     let mut resources: Vec<ExtensionResource> = seen.into_values().collect();
     resources.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
     Ok(resources)
+}
+
+fn discover_extension_dir(
+    path: &Path,
+    layer: &DiscoveryLayer,
+    seen: &mut std::collections::HashMap<String, ExtensionResource>,
+) -> Result<(), ResourceDiscoveryError> {
+    let manifest_path = path.join("extension.toml");
+    let content = std::fs::read_to_string(&manifest_path)?;
+    let manifest = ExtensionManifest::from_toml(&content, &manifest_path)?;
+
+    let canonical = path.canonicalize()?;
+
+    match seen.get(&manifest.name) {
+        Some(existing) if layer.precedence == existing.layer_precedence => {
+            return Err(ResourceDiscoveryError::DuplicateName {
+                name: manifest.name,
+                path: canonical,
+            });
+        }
+        Some(existing) if layer.precedence < existing.layer_precedence => return Ok(()),
+        Some(_) | None => {
+            seen.insert(
+                manifest.name.clone(),
+                ExtensionResource {
+                    manifest,
+                    path: canonical,
+                    layer_precedence: layer.precedence,
+                },
+            );
+        }
+    }
+
+    Ok(())
 }

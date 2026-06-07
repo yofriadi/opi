@@ -167,6 +167,25 @@ fn branched_session_has_multiple_branches() {
 }
 
 #[test]
+fn branched_session_child_branches_are_sorted_by_tip_id() {
+    // Entries arrive in b/a order, but branch presentation must be stable.
+    let entries = vec![
+        user_msg("e1", None, "Hello"),
+        assistant_msg("e2b", Some("e1"), "Branch B"),
+        assistant_msg("e2a", Some("e1"), "Branch A"),
+    ];
+
+    let tree = SessionTree::from_entries(&entries);
+    let tips = tree
+        .branches()
+        .iter()
+        .map(|branch| branch.tip_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(tips, vec!["e1", "e2a", "e2b"]);
+}
+
+#[test]
 fn branched_session_leaf_determines_active() {
     // e1 -> e2a -> e3a
     // e1 -> e2b

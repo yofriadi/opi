@@ -4,7 +4,7 @@
     "docs/opi-spec.md"
   ],
   "spec_files_sha256": {
-    "docs/opi-spec.md": "48b0a3ae7dc42f780044aa5e415c4daf5325e9f87a7442a34fd2c92b3465efbb"
+    "docs/opi-spec.md": "2edd15575b7b6772c06fca07db2a6f87cfb27aa95dc3185b0ed71d5b7f51b5ee"
   },
   "task_graph_confirmed_at": "2026-06-02T11:10:46Z",
   "current_phase": 4,
@@ -2255,6 +2255,133 @@
         "Added: --list-models CLI flag (table + NDJSON), --image non-interactive runtime, prompt_with_content agent method.",
         "Deferred to Phase 4: Picker TUI integration, interactive --image with TUI preview.",
         "Documented scope limitations: Bedrock full ambient credential chain (IMDS/SSO/credential_process), Vertex service-account/ADC."
+      ]
+    },
+    "4": {
+      "completed_at": "2026-06-05T15:23:47Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "Phase 4 audit blockers closed: RPC control semantics, tool-selection policy, runtime resource wiring, provider/model registry usage, Web UI RPC data consumption, package schemas, branch UI reachability, security/API hardening, docs synchronization, and full verification gates passing.",
+      "snapshot_path": "docs/snapshots/phase4/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "4.1",
+          "title": "RPC JSONL mode",
+          "status": "passing",
+          "verified_at_commit": "b64397b"
+        },
+        {
+          "id": "4.2",
+          "title": "SDK embedding surface",
+          "status": "passing",
+          "verified_at_commit": "0dc0dd7"
+        },
+        {
+          "id": "4.3",
+          "title": "settle opi-agent::Transport",
+          "status": "passing",
+          "verified_at_commit": "691ee33"
+        },
+        {
+          "id": "4.4",
+          "title": "extension trait, lifecycle hooks, custom tools, custom commands, custom messages, and extension state",
+          "status": "passing",
+          "verified_at_commit": "9caed40"
+        },
+        {
+          "id": "4.5",
+          "title": "extension/resource loading strategy",
+          "status": "passing",
+          "verified_at_commit": "8977118"
+        },
+        {
+          "id": "4.6",
+          "title": "custom provider/model registration",
+          "status": "passing",
+          "verified_at_commit": "196b6cf"
+        },
+        {
+          "id": "4.7.1",
+          "title": "skills with progressive discovery",
+          "status": "passing",
+          "verified_at_commit": "d93b3ef"
+        },
+        {
+          "id": "4.7.2",
+          "title": "prompt fragments/templates with progressive discovery",
+          "status": "passing",
+          "verified_at_commit": "f625b5f"
+        },
+        {
+          "id": "4.7.3",
+          "title": "themes with progressive discovery",
+          "status": "passing",
+          "verified_at_commit": "286d4a8"
+        },
+        {
+          "id": "4.7.4",
+          "title": "packages with progressive resource composition",
+          "status": "passing",
+          "verified_at_commit": "ce83b35"
+        },
+        {
+          "id": "4.8.1",
+          "title": "permission gate extension/package example",
+          "status": "passing",
+          "verified_at_commit": "5cfc356"
+        },
+        {
+          "id": "4.8.2",
+          "title": "protected paths extension/package example",
+          "status": "passing",
+          "verified_at_commit": "02e0bea"
+        },
+        {
+          "id": "4.8.3",
+          "title": "sub-agent extension/package example",
+          "status": "passing",
+          "verified_at_commit": "be79c3b"
+        },
+        {
+          "id": "4.8.4",
+          "title": "plan mode extension/package example",
+          "status": "passing",
+          "verified_at_commit": "9bcf12302af164d34646083987ec3b0b7f6814e4"
+        },
+        {
+          "id": "4.8.5",
+          "title": "todo extension/package example",
+          "status": "passing",
+          "verified_at_commit": "575823e"
+        },
+        {
+          "id": "4.8.6",
+          "title": "MCP adapter extension/package example",
+          "status": "passing",
+          "verified_at_commit": "8c3ec06"
+        },
+        {
+          "id": "4.9",
+          "title": "session branching UI",
+          "status": "passing",
+          "verified_at_commit": "df3ddec"
+        },
+        {
+          "id": "4.10",
+          "title": "streaming proxy",
+          "status": "passing",
+          "verified_at_commit": "82d9392"
+        },
+        {
+          "id": "4.11",
+          "title": "web UI implementation that consumes RPC/SDK events",
+          "status": "passing",
+          "verified_at_commit": "a3103f3"
+        }
+      ],
+      "audit_notes": [
+        "Phase 4 exit recorded after audit remediation on 2026-06-05.",
+        "The exit covers the extensibility substrate and reusable web-facing component/state/rendering layer. It does not claim dynamic Rust plugin loading or a standalone browser application.",
+        "Symlink traversal tests are present but skipped on this Windows run when symlink creation lacks privileges (os error 1314)."
       ]
     }
   }

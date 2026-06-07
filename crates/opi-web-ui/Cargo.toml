@@ -10,8 +10,9 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-opi-ai = { workspace = true }
-opi-agent = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+opi-agent = { workspace = true }

@@ -283,6 +283,19 @@ fn sdk_response_success_with_data() {
 }
 
 #[test]
+fn sdk_response_roundtrips_through_json() {
+    let data = serde_json::json!({"model": "test", "session_id": "abc"});
+    let resp = SdkResponse::success_with_data(Some("1"), "session_info", data.clone());
+    let json = serde_json::to_string(&resp).unwrap();
+    let parsed: SdkResponse = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed.command, "session_info");
+    assert!(parsed.success);
+    assert_eq!(parsed.id.as_deref(), Some("1"));
+    assert_eq!(parsed.data, Some(data));
+}
+
+#[test]
 fn sdk_response_error_serializes() {
     let resp = SdkResponse::error(Some("1"), "set_model", "cannot change while running");
     let val = serde_json::to_value(&resp).unwrap();

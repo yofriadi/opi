@@ -317,6 +317,32 @@ fn test_discover_precedence_mixed_names() {
     assert_eq!(skill_b.manifest.description, "high-b");
 }
 
+#[test]
+fn test_discover_duplicate_name_same_layer_returns_error() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let dir = tmp.path().join("skills");
+    fs::create_dir_all(&dir).unwrap();
+    write_skill(
+        &dir,
+        "first",
+        "name: shared-skill\ndescription: First",
+        "First body.",
+    );
+    write_skill(
+        &dir,
+        "second",
+        "name: shared-skill\ndescription: Second",
+        "Second body.",
+    );
+
+    let err = discover_skills(&[layer(tmp.path(), "skills", 0)]).unwrap_err();
+    assert!(matches!(
+        err,
+        SkillDiscoveryError::DuplicateName { ref name, .. } if name == "shared-skill"
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // 4. Discovery — missing / invalid resources
 // ---------------------------------------------------------------------------

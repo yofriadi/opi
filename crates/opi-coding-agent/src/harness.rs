@@ -7,17 +7,19 @@ use std::path::{Path, PathBuf};
 
 use opi_agent::Agent;
 use opi_agent::event::AgentEvent;
+use opi_agent::extension::ExtensionRegistry;
 use opi_agent::hooks::AgentHooks;
 use opi_agent::loop_types::{AgentError, AgentLoopConfig};
 use opi_agent::message::AgentMessage;
 use opi_agent::tool::Tool;
 use opi_ai::message::Message;
-use opi_ai::provider::Provider;
+use opi_ai::provider::{EventStream, ModelInfo, Provider, ThinkingConfig};
 
 use crate::config::OpiConfig;
 use crate::context_files;
 use crate::policy::{RunMode, ToolRuntimeConfig, ToolSelection};
 use crate::prompt::SystemPromptBuilder;
+use crate::resource::{ExplicitResourcePaths, ResourceDiscoveryLayers, standard_discovery_layers};
 use crate::session_coordinator::{SessionCoordinator, to_wire_result};
 use crate::tool::{BashTool, EditTool, FindTool, GlobTool, GrepTool, LsTool, ReadTool, WriteTool};
 
@@ -37,6 +39,8 @@ pub struct CodingHarness {
     agent: Agent,
     config: OpiConfig,
     system_prompt: String,
+    resources: HarnessResources,
+    model_registry: opi_ai::ProviderRegistry,
     session: Option<SessionCoordinator>,
     /// Message count before the current turn — used to slice only new messages for persistence.
     turn_offset: usize,
@@ -44,7 +48,314 @@ pub struct CodingHarness {
     pending_images: Vec<opi_ai::message::InputContent>,
 }
 
+pub struct RuntimeThinkingState {
+    pub level: String,
+    pub enabled: bool,
+    pub budget_tokens: Option<u64>,
+}
+
+/// Public metadata for resources discovered by the coding harness.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct DiscoveredResourceMetadata {
+    pub extensions: Vec<ResourceMetadataEntry>,
+    pub packages: Vec<ResourceMetadataEntry>,
+    pub skills: Vec<ResourceMetadataEntry>,
+    pub fragments: Vec<ResourceMetadataEntry>,
+    pub themes: Vec<ResourceMetadataEntry>,
+    pub diagnostics: Vec<String>,
+}
+
+/// One metadata entry exposed to prompts, RPC clients, and embedders.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ResourceMetadataEntry {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct HarnessResources {
+    metadata: DiscoveredResourceMetadata,
+    theme_resources: Vec<crate::theme_discovery::ThemeResource>,
+}
+
+struct MetadataProvider {
+    id: String,
+    models: Vec<ModelInfo>,
+}
+
+impl MetadataProvider {
+    fn from_provider(provider: &dyn Provider) -> Self {
+        Self {
+            id: provider.id().to_owned(),
+            models: provider.models().to_vec(),
+        }
+    }
+}
+
+impl Provider for MetadataProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn models(&self) -> &[ModelInfo] {
+        &self.models
+    }
+
+    fn stream(&self, _request: opi_ai::provider::Request) -> EventStream {
+        Box::pin(futures_util::stream::empty())
+    }
+}
+
+impl DiscoveredResourceMetadata {
+    fn format_for_system_prompt(&self) -> String {
+        let mut sections = Vec::new();
+        push_metadata_section(&mut sections, "Discovered packages", &self.packages);
+        push_metadata_section(&mut sections, "Discovered extensions", &self.extensions);
+        push_metadata_section(&mut sections, "Discovered skills", &self.skills);
+        push_metadata_section(
+            &mut sections,
+            "Discovered prompt fragments",
+            &self.fragments,
+        );
+        push_metadata_section(&mut sections, "Discovered themes", &self.themes);
+        if !self.diagnostics.is_empty() {
+            sections.push(format!(
+                "Resource discovery diagnostics:\n{}",
+                self.diagnostics
+                    .iter()
+                    .map(|diagnostic| format!("- {diagnostic}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+        sections.join("\n\n")
+    }
+
+    pub fn to_rpc_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "extensions": metadata_names(&self.extensions),
+            "packages": metadata_names(&self.packages),
+            "skills": metadata_names(&self.skills),
+            "fragments": metadata_names(&self.fragments),
+            "themes": metadata_names(&self.themes),
+            "diagnostics": self.diagnostics.clone(),
+        })
+    }
+
+    fn add_extension_name(&mut self, name: String) {
+        if self.extensions.iter().any(|entry| entry.name == name) {
+            return;
+        }
+        self.extensions.push(ResourceMetadataEntry {
+            name,
+            description: None,
+            version: None,
+        });
+        self.extensions.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+}
+
+fn metadata_names(entries: &[ResourceMetadataEntry]) -> Vec<&str> {
+    entries.iter().map(|entry| entry.name.as_str()).collect()
+}
+
+fn push_metadata_section(
+    sections: &mut Vec<String>,
+    title: &str,
+    entries: &[ResourceMetadataEntry],
+) {
+    if entries.is_empty() {
+        return;
+    }
+    let lines = entries
+        .iter()
+        .map(|entry| {
+            let mut line = format!("- {}", entry.name);
+            if let Some(description) = &entry.description {
+                line.push_str(": ");
+                line.push_str(description);
+            }
+            if let Some(version) = &entry.version {
+                line.push_str(" v");
+                line.push_str(version);
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    sections.push(format!("{title}:\n{lines}"));
+}
+
+fn filter_extension_tools(
+    tools: Vec<Box<dyn Tool>>,
+    selection: &ToolSelection,
+) -> Vec<Box<dyn Tool>> {
+    match selection {
+        ToolSelection::Default | ToolSelection::NoBuiltin => tools,
+        ToolSelection::Disabled => Vec::new(),
+        ToolSelection::Allowlist(names) => tools
+            .into_iter()
+            .filter(|tool| {
+                let name = tool.definition().name;
+                names.iter().any(|allowed| allowed == &name)
+            })
+            .collect(),
+    }
+}
+
+/// Builder for SDK embedders that need to inject extension registries or
+/// precomputed discovery metadata without dynamic loading.
+pub struct CodingHarnessBuilder {
+    provider: Box<dyn Provider>,
+    model: String,
+    config: OpiConfig,
+    workspace_root: PathBuf,
+    hooks: Option<Box<dyn AgentHooks>>,
+    user_system_prompt: Option<String>,
+    initial_messages: Vec<AgentMessage>,
+    resume: Option<ResumeInfo>,
+    tool_config: Option<ToolRuntimeConfig>,
+    tool_selection: ToolSelection,
+    global_config_dir: Option<PathBuf>,
+    extension_registry: Option<ExtensionRegistry>,
+    resource_layers: Option<ResourceDiscoveryLayers>,
+    resource_metadata: Option<DiscoveredResourceMetadata>,
+}
+
+impl CodingHarnessBuilder {
+    fn new(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+    ) -> Self {
+        Self {
+            provider,
+            model,
+            config,
+            workspace_root,
+            hooks: None,
+            user_system_prompt: None,
+            initial_messages: Vec::new(),
+            resume: None,
+            tool_config: None,
+            tool_selection: ToolSelection::Default,
+            global_config_dir: None,
+            extension_registry: None,
+            resource_layers: None,
+            resource_metadata: None,
+        }
+    }
+
+    pub fn hooks(mut self, hooks: Box<dyn AgentHooks>) -> Self {
+        self.hooks = Some(hooks);
+        self
+    }
+
+    pub fn user_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.user_system_prompt = Some(prompt.into());
+        self
+    }
+
+    pub fn initial_messages(mut self, messages: Vec<AgentMessage>) -> Self {
+        self.initial_messages = messages;
+        self
+    }
+
+    pub fn resume(mut self, resume: ResumeInfo) -> Self {
+        self.resume = Some(resume);
+        self
+    }
+
+    pub fn tool_selection(mut self, selection: ToolSelection) -> Self {
+        self.tool_selection = selection;
+        self
+    }
+
+    pub fn tool_config(mut self, config: ToolRuntimeConfig) -> Self {
+        self.tool_config = Some(config);
+        self
+    }
+
+    pub fn global_config_dir(mut self, dir: PathBuf) -> Self {
+        self.global_config_dir = Some(dir);
+        self
+    }
+
+    pub fn extension_registry(mut self, registry: ExtensionRegistry) -> Self {
+        self.extension_registry = Some(registry);
+        self
+    }
+
+    pub fn resource_layers(mut self, layers: ResourceDiscoveryLayers) -> Self {
+        self.resource_layers = Some(layers);
+        self
+    }
+
+    pub fn resource_metadata(mut self, metadata: DiscoveredResourceMetadata) -> Self {
+        self.resource_metadata = Some(metadata);
+        self
+    }
+
+    pub fn build(self) -> CodingHarness {
+        let tool_selection = self.tool_selection;
+        let tool_config = self.tool_config.unwrap_or_else(|| {
+            ToolRuntimeConfig::resolve(RunMode::Interactive, true, tool_selection.clone())
+                .expect("interactive tool config should be valid")
+        });
+        CodingHarness::new_with_build_options(
+            self.provider,
+            self.model,
+            self.config,
+            self.workspace_root,
+            self.hooks.unwrap_or_else(|| Box::new(CodingAgentHooks)),
+            self.user_system_prompt,
+            self.initial_messages,
+            self.resume,
+            tool_config,
+            self.global_config_dir,
+            HarnessBuildOptions {
+                extension_registry: self.extension_registry,
+                resource_layers: self.resource_layers,
+                resource_metadata: self.resource_metadata,
+                tool_selection,
+            },
+        )
+    }
+}
+
+struct HarnessBuildOptions {
+    extension_registry: Option<ExtensionRegistry>,
+    resource_layers: Option<ResourceDiscoveryLayers>,
+    resource_metadata: Option<DiscoveredResourceMetadata>,
+    tool_selection: ToolSelection,
+}
+
+impl Default for HarnessBuildOptions {
+    fn default() -> Self {
+        Self {
+            extension_registry: None,
+            resource_layers: None,
+            resource_metadata: None,
+            tool_selection: ToolSelection::Default,
+        }
+    }
+}
+
 impl CodingHarness {
+    /// Start building a harness for SDK/embedder use.
+    pub fn builder(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+    ) -> CodingHarnessBuilder {
+        CodingHarnessBuilder::new(provider, model, config, workspace_root)
+    }
+
     /// Create a new harness with the given provider, model, config, and workspace root.
     pub fn new(
         provider: Box<dyn Provider>,
@@ -235,33 +546,106 @@ impl CodingHarness {
         tool_config: ToolRuntimeConfig,
         global_config_dir: Option<PathBuf>,
     ) -> Self {
-        let tools = Self::build_tools(&workspace_root, &tool_config);
+        Self::new_with_build_options(
+            provider,
+            model,
+            config,
+            workspace_root,
+            hooks,
+            user_system_prompt,
+            initial_messages,
+            resume,
+            tool_config,
+            global_config_dir,
+            HarnessBuildOptions::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_build_options(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        hooks: Box<dyn AgentHooks>,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        resume: Option<ResumeInfo>,
+        tool_config: ToolRuntimeConfig,
+        global_config_dir: Option<PathBuf>,
+        build_options: HarnessBuildOptions,
+    ) -> Self {
+        let mut hooks = hooks;
+        let mut extension_tools = Vec::new();
+        let mut injected_extension_names = Vec::new();
+        let mut extension_event_registry = None;
+        let extension_registry = build_options.extension_registry;
+        let (model_registry, model_registry_diagnostics) =
+            Self::build_model_registry(provider.as_ref(), extension_registry.as_ref());
+        if let Some(registry) = extension_registry {
+            extension_event_registry = Some(registry.clone());
+            injected_extension_names = registry
+                .names()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            extension_tools =
+                filter_extension_tools(registry.collect_tools(), &build_options.tool_selection);
+            hooks = registry.wrap_hooks(hooks);
+        }
+
+        let mut tools = Self::build_tools(&workspace_root, &tool_config);
+        tools.extend(extension_tools);
         let tool_defs: Vec<_> = tools.iter().map(|t| t.definition()).collect();
         let mut builder = SystemPromptBuilder::new().tools(tool_defs);
         if let Some(content) = user_system_prompt {
             builder = builder.user_system(content);
         }
         let resolved_global_dir = global_config_dir.unwrap_or_else(crate::config::user_config_dir);
+        let mut resources = match build_options.resource_metadata {
+            Some(metadata) => HarnessResources {
+                metadata,
+                theme_resources: Vec::new(),
+            },
+            None => Self::discover_resources(
+                &workspace_root,
+                &config,
+                Some(resolved_global_dir.as_path()),
+                build_options.resource_layers,
+            ),
+        };
+        resources
+            .metadata
+            .diagnostics
+            .extend(model_registry_diagnostics);
+        for name in injected_extension_names {
+            resources.metadata.add_extension_name(name);
+        }
+
         let context = context_files::discover_context_files(
             &workspace_root,
             Some(resolved_global_dir.as_path()),
         );
-        if !context.content.is_empty() {
-            builder = builder.context_files(context.content);
+        let resource_prompt = resources.metadata.format_for_system_prompt();
+        let mut context_content = context.content;
+        if !resource_prompt.is_empty() {
+            if !context_content.is_empty() {
+                context_content.push_str("\n\n");
+            }
+            context_content.push_str(&resource_prompt);
+        }
+        if !context_content.is_empty() {
+            builder = builder.context_files(context_content);
         }
         let system_prompt = builder.build();
 
+        let (thinking, max_tokens) =
+            initial_thinking_request_config(&model_registry, &model, &config);
         let agent_config = AgentLoopConfig {
             max_turns: config.defaults.max_iterations,
+            max_tokens,
             retry: Some(config.retry.clone()),
-            thinking: if config.thinking.enabled {
-                Some(opi_ai::provider::ThinkingConfig {
-                    enabled: true,
-                    budget_tokens: Some(config.thinking.budget_tokens as u64),
-                })
-            } else {
-                None
-            },
+            thinking,
             ..Default::default()
         };
 
@@ -273,6 +657,9 @@ impl CodingHarness {
             agent_config,
             hooks,
         );
+        if let Some(registry) = extension_event_registry {
+            agent.subscribe(Box::new(move |event| registry.dispatch_event(event)));
+        }
 
         let initial_len = initial_messages.len();
         if !initial_messages.is_empty() {
@@ -314,6 +701,8 @@ impl CodingHarness {
             agent,
             config,
             system_prompt,
+            resources,
+            model_registry,
             session,
             turn_offset: initial_len,
             pending_images: Vec::new(),
@@ -337,12 +726,105 @@ impl CodingHarness {
 
     /// Return model picker items from the active provider.
     pub fn model_picker_items(&self) -> Vec<opi_tui::SelectItem> {
-        crate::picker::model_picker_items_from_provider(self.agent.provider())
+        let current_provider = self.agent.provider().id();
+        crate::picker::model_picker_items(&self.model_registry)
+            .into_iter()
+            .filter(|item| item.metadata == current_provider)
+            .collect()
     }
 
     /// Change the model used by subsequent prompts.
     pub fn set_model(&mut self, model: String) {
         self.agent.set_model(model);
+    }
+
+    /// Validate and change the model used by subsequent prompts.
+    pub fn set_model_validated(&mut self, model: String) -> Result<&str, String> {
+        let (requested_provider, requested_model) = parse_model_spec(&model)?;
+        let current_provider = self.agent.provider().id();
+        if requested_provider != current_provider {
+            return Err(format!(
+                "cannot switch provider from {current_provider} to {requested_provider} at runtime"
+            ));
+        }
+
+        let requested_model_info = self.model_info(requested_model);
+        let Some(requested_model_info) = requested_model_info else {
+            return Err(format!(
+                "unknown model '{requested_model}' for provider '{requested_provider}'"
+            ));
+        };
+
+        self.validate_current_thinking_for_model(&requested_model_info)?;
+
+        self.agent.set_model(model);
+        Ok(self.agent.model())
+    }
+
+    /// Change the thinking level used by subsequent provider requests.
+    pub fn set_thinking_level(&mut self, level: &str) -> Result<RuntimeThinkingState, String> {
+        let default_budget = self.config.thinking.budget_tokens as u64;
+        let budget_tokens = match level {
+            "off" => None,
+            "low" => Some(2_048),
+            "medium" => Some(default_budget),
+            "high" => Some(default_budget.max(20_000)),
+            _ => {
+                return Err(format!(
+                    "invalid thinking level '{level}': expected off, low, medium, or high"
+                ));
+            }
+        };
+
+        let (thinking, max_tokens) = match budget_tokens {
+            Some(budget_tokens) => {
+                let (thinking, max_tokens) = request_config_for_thinking_budget(budget_tokens)?;
+                if let Some(model) = self.active_model_info() {
+                    validate_thinking_budget_for_model(&model, budget_tokens, max_tokens)?;
+                }
+                (Some(thinking), Some(max_tokens))
+            }
+            None => (None, None),
+        };
+
+        self.agent.set_max_tokens(max_tokens);
+        self.agent.set_thinking_config(thinking);
+        let state = self.agent.thinking_config();
+        Ok(RuntimeThinkingState {
+            level: level.to_owned(),
+            enabled: state.enabled,
+            budget_tokens: state.budget_tokens,
+        })
+    }
+
+    fn active_model_info(&self) -> Option<ModelInfo> {
+        let Ok((provider_id, model_id)) = parse_model_spec(self.agent.model()) else {
+            return None;
+        };
+        if provider_id != self.agent.provider().id() {
+            return None;
+        }
+        self.model_info(model_id)
+    }
+
+    fn model_info(&self, model_id: &str) -> Option<ModelInfo> {
+        let spec = format!("{}:{model_id}", self.agent.provider().id());
+        self.model_registry
+            .resolve(&spec)
+            .ok()
+            .map(|(_, model)| model.clone())
+    }
+
+    fn validate_current_thinking_for_model(&self, model: &ModelInfo) -> Result<(), String> {
+        let thinking = self.agent.thinking_config();
+        if !thinking.enabled {
+            return Ok(());
+        }
+        let Some(budget_tokens) = thinking.budget_tokens else {
+            return Ok(());
+        };
+        let max_tokens = max_tokens_for_thinking_budget(budget_tokens)?;
+        validate_thinking_budget_for_model(model, budget_tokens, max_tokens)
     }
 
     /// Resume an existing session by ID into this harness.
@@ -367,6 +849,61 @@ impl CodingHarness {
             self.agent.model().to_string(),
         )
         .ok();
+        self.turn_offset = message_count;
+        Ok(message_count)
+    }
+
+    /// Return branch picker items for the currently active session.
+    pub fn branch_picker_items(&self) -> Result<Vec<opi_tui::SelectItem>, String> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| "no active session".to_owned())?;
+        let (_, entries) = opi_agent::session::SessionReader::read_all(session.session_path())
+            .map_err(|e| format!("failed to read session: {e}"))?;
+        let tree = opi_agent::session_branch::SessionTree::from_entries(&entries);
+        Ok(crate::picker::branch_picker_items(&tree))
+    }
+
+    /// Switch the current session to the branch ending at `tip_id`.
+    pub fn resume_session_branch_tip(&mut self, tip_id: &str) -> Result<usize, String> {
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| "no active session".to_owned())?;
+        let path = session.session_path().to_path_buf();
+        let session_id = session.session_id().to_owned();
+        let (_, entries) = opi_agent::session::SessionReader::read_all(&path)
+            .map_err(|e| format!("failed to read session: {e}"))?;
+        let tree = opi_agent::session_branch::SessionTree::from_entries(&entries);
+        if !tree.branches().iter().any(|branch| branch.tip_id == tip_id) {
+            return Err(format!("unknown branch tip: {tip_id}"));
+        }
+
+        session
+            .append_leaf(tip_id)
+            .map_err(|e| format!("failed to select branch: {e}"))?;
+        let (_, entries) = opi_agent::session::SessionReader::read_all(&path)
+            .map_err(|e| format!("failed to read selected branch: {e}"))?;
+        let messages = crate::session_cli::reconstruct_context(&entries);
+        let message_count = messages.len();
+        self.agent.replace_messages(messages);
+
+        let compaction_config = opi_agent::compaction::CompactionConfig {
+            enabled: self.config.compaction.enabled,
+            threshold_tokens: self.config.compaction.threshold_tokens,
+        };
+        self.session = Some(
+            SessionCoordinator::open_existing(
+                path,
+                session_id,
+                &entries,
+                message_count,
+                compaction_config,
+                self.agent.model().to_string(),
+            )
+            .map_err(|e| format!("failed to reopen selected branch: {e}"))?,
+        );
         self.turn_offset = message_count;
         Ok(message_count)
     }
@@ -526,6 +1063,27 @@ impl CodingHarness {
         &self.system_prompt
     }
 
+    /// Return read-only discovered resource metadata.
+    pub fn resource_metadata(&self) -> &DiscoveredResourceMetadata {
+        &self.resources.metadata
+    }
+
+    /// Return resource metadata in the compact RPC/session-info shape.
+    pub fn resource_metadata_json(&self) -> serde_json::Value {
+        self.resources.metadata.to_rpc_json()
+    }
+
+    /// Resolve a theme using discovered themes first, then built-ins.
+    pub fn resolve_theme(
+        &self,
+        name: &str,
+    ) -> Result<opi_tui::Theme, crate::theme_discovery::ThemeDiscoveryError> {
+        crate::theme_discovery::ThemeRegistry::from_resources(
+            self.resources.theme_resources.clone(),
+        )
+        .resolve_theme(name)
+    }
+
     /// Return a reference to the config.
     pub fn config(&self) -> &OpiConfig {
         &self.config
@@ -539,6 +1097,16 @@ impl CodingHarness {
     /// Return a clonable cancellation token for external cancellation.
     pub fn cancel_token(&self) -> tokio_util::sync::CancellationToken {
         self.agent.cancel_token()
+    }
+
+    /// Return a clonable control handle for an active agent turn.
+    pub fn control_handle(&self) -> opi_agent::agent::AgentControl {
+        self.agent.control_handle()
+    }
+
+    /// Reset cancellation state before cloning a control handle for a new turn.
+    pub fn reset_cancel_if_cancelled(&mut self) {
+        self.agent.reset_cancel_if_cancelled();
     }
 
     /// Return the session coordinator, if active.
@@ -618,6 +1186,251 @@ impl CodingHarness {
             .map(|(_, tool)| tool)
             .collect()
     }
+
+    fn discover_resources(
+        workspace_root: &Path,
+        config: &OpiConfig,
+        user_config_dir: Option<&Path>,
+        resource_layers: Option<ResourceDiscoveryLayers>,
+    ) -> HarnessResources {
+        let explicit = ExplicitResourcePaths {
+            extensions: config.extensions.paths.clone(),
+            packages: config.packages.paths.clone(),
+            ..Default::default()
+        };
+        let mut layers = resource_layers.unwrap_or_else(|| {
+            standard_discovery_layers(workspace_root, user_config_dir, explicit)
+        });
+        let mut metadata = DiscoveredResourceMetadata::default();
+
+        let packages = match crate::package_discovery::discover_packages(&layers.packages) {
+            Ok(packages) => packages,
+            Err(e) => {
+                metadata
+                    .diagnostics
+                    .push(format!("package discovery failed: {e}"));
+                Vec::new()
+            }
+        };
+        metadata.packages = packages
+            .iter()
+            .map(|package| ResourceMetadataEntry {
+                name: package.manifest.name.clone(),
+                description: Some(package.manifest.description.clone()),
+                version: package.manifest.version.clone(),
+            })
+            .collect();
+
+        let package_layers = crate::package_discovery::package_composed_resource_layers(&packages);
+        metadata.diagnostics.extend(package_layers.diagnostics);
+        layers.extensions.extend(package_layers.extensions);
+        layers.skills.extend(package_layers.skills);
+        layers.fragments.extend(package_layers.fragments);
+        layers.themes.extend(package_layers.themes);
+
+        match crate::resource::discover_extension_resources(&layers.extensions) {
+            Ok(extensions) => {
+                metadata.extensions = extensions
+                    .iter()
+                    .map(|extension| ResourceMetadataEntry {
+                        name: extension.manifest.name.clone(),
+                        description: extension.manifest.description.clone(),
+                        version: extension.manifest.version.clone(),
+                    })
+                    .collect();
+            }
+            Err(e) => metadata
+                .diagnostics
+                .push(format!("extension discovery failed: {e}")),
+        }
+
+        match crate::skill::discover_skills(&layers.skills) {
+            Ok(skills) => {
+                metadata.skills = skills
+                    .iter()
+                    .map(|skill| ResourceMetadataEntry {
+                        name: skill.manifest.name.clone(),
+                        description: Some(skill.manifest.description.clone()),
+                        version: None,
+                    })
+                    .collect();
+            }
+            Err(e) => metadata
+                .diagnostics
+                .push(format!("skill discovery failed: {e}")),
+        }
+
+        match crate::prompt_fragment::discover_fragments(&layers.fragments) {
+            Ok(fragments) => {
+                metadata.fragments = fragments
+                    .iter()
+                    .map(|fragment| ResourceMetadataEntry {
+                        name: fragment.manifest.name.clone(),
+                        description: Some(fragment.manifest.description.clone()),
+                        version: None,
+                    })
+                    .collect();
+            }
+            Err(e) => metadata
+                .diagnostics
+                .push(format!("fragment discovery failed: {e}")),
+        }
+
+        let theme_resources = match crate::theme_discovery::discover_themes(&layers.themes) {
+            Ok(themes) => {
+                metadata.themes = themes
+                    .iter()
+                    .map(|theme| ResourceMetadataEntry {
+                        name: theme.manifest.name.clone(),
+                        description: Some(theme.manifest.description.clone()),
+                        version: None,
+                    })
+                    .collect();
+                themes
+            }
+            Err(e) => {
+                metadata
+                    .diagnostics
+                    .push(format!("theme discovery failed: {e}"));
+                Vec::new()
+            }
+        };
+
+        HarnessResources {
+            metadata,
+            theme_resources,
+        }
+    }
+
+    fn build_model_registry(
+        provider: &dyn Provider,
+        extension_registry: Option<&ExtensionRegistry>,
+    ) -> (opi_ai::ProviderRegistry, Vec<String>) {
+        let mut registry = opi_ai::ProviderRegistry::new();
+        let mut diagnostics = Vec::new();
+
+        if let Some(extension_registry) = extension_registry {
+            for provider in extension_registry.collect_providers() {
+                if let Err(e) = registry.register_provider(provider) {
+                    diagnostics.push(format!("extension provider registration failed: {e}"));
+                }
+            }
+        }
+
+        if let Err(e) =
+            registry.register_provider(Box::new(MetadataProvider::from_provider(provider)))
+        {
+            diagnostics.push(format!("active provider metadata registration failed: {e}"));
+        }
+
+        if let Some(extension_registry) = extension_registry {
+            for (provider_id, model) in extension_registry.collect_model_overrides() {
+                if let Err(e) = registry.register_model(&provider_id, model) {
+                    diagnostics.push(format!("extension model override registration failed: {e}"));
+                }
+            }
+        }
+
+        (registry, diagnostics)
+    }
+}
+
+fn parse_model_spec(spec: &str) -> Result<(&str, &str), String> {
+    let Some((provider, model)) = spec.split_once(':') else {
+        return Err("invalid model spec: expected provider:model".into());
+    };
+    if provider.is_empty() || model.is_empty() {
+        return Err("invalid model spec: expected provider:model".into());
+    }
+    Ok((provider, model))
+}
+
+fn initial_thinking_request_config(
+    registry: &opi_ai::ProviderRegistry,
+    model: &str,
+    config: &OpiConfig,
+) -> (Option<ThinkingConfig>, Option<u64>) {
+    if !config.thinking.enabled {
+        return (None, None);
+    }
+
+    let budget_tokens = config.thinking.budget_tokens as u64;
+    let Ok((mut thinking, mut max_tokens)) = request_config_for_thinking_budget(budget_tokens)
+    else {
+        return (None, None);
+    };
+
+    if let Ok((_, model)) = registry.resolve(model) {
+        if !model.supports_thinking {
+            return (None, None);
+        }
+        if max_tokens > model.max_output_tokens {
+            if model.max_output_tokens <= 1 {
+                return (None, None);
+            }
+            let adjusted_budget = model.max_output_tokens - 1;
+            let Ok((adjusted_thinking, adjusted_max_tokens)) =
+                request_config_for_thinking_budget(adjusted_budget)
+            else {
+                return (None, None);
+            };
+            thinking = adjusted_thinking;
+            max_tokens = adjusted_max_tokens;
+        }
+    }
+
+    (Some(thinking), Some(max_tokens))
+}
+
+fn request_config_for_thinking_budget(budget_tokens: u64) -> Result<(ThinkingConfig, u64), String> {
+    let max_tokens = max_tokens_for_thinking_budget(budget_tokens)?;
+    Ok((
+        ThinkingConfig {
+            enabled: true,
+            budget_tokens: Some(budget_tokens),
+        },
+        max_tokens,
+    ))
+}
+
+fn max_tokens_for_thinking_budget(budget_tokens: u64) -> Result<u64, String> {
+    budget_tokens.checked_add(1).ok_or_else(|| {
+        format!("thinking budget {budget_tokens} cannot fit a valid max_tokens value")
+    })
+}
+
+fn validate_thinking_budget_for_model(
+    model: &ModelInfo,
+    budget_tokens: u64,
+    max_tokens: u64,
+) -> Result<(), String> {
+    if !model.supports_thinking {
+        return Err(model_does_not_support_thinking(&model.id));
+    }
+    if max_tokens > model.max_output_tokens {
+        return Err(thinking_budget_exceeds_model_limit(
+            budget_tokens,
+            max_tokens,
+            model.max_output_tokens,
+            &model.id,
+        ));
+    }
+    Ok(())
+}
+
+fn model_does_not_support_thinking(model_id: &str) -> String {
+    format!("model '{model_id}' does not support thinking")
+}
+
+fn thinking_budget_exceeds_model_limit(
+    budget_tokens: u64,
+    max_tokens: u64,
+    max_output_tokens: u64,
+    model_id: &str,
+) -> String {
+    format!(
+        "thinking budget {budget_tokens} requires max_tokens {max_tokens}, exceeding max output tokens {max_output_tokens} for model '{model_id}'"
+    )
 }
 
 // ---------------------------------------------------------------------------

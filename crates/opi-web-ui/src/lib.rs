@@ -24,7 +24,7 @@ pub mod event;
 pub mod render;
 pub mod state;
 
-pub use components::{ChatMessage, ConversationView, StatusBar, ToolCallView};
+pub use components::{ChatMessage, ConversationView, StatusBar, ThinkingBlock, ToolCallView};
 pub use event::WebUiEvent;
 pub use render::Render;
 pub use state::ConversationState;

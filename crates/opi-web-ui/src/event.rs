@@ -25,6 +25,7 @@ pub enum WebUiEvent {
         success: bool,
         id: Option<String>,
         error: Option<String>,
+        data: Option<serde_json::Value>,
     },
 
     // -- Agent lifecycle --
@@ -176,6 +177,7 @@ impl WebUiEvent {
                 .get("error")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_owned()),
+            data: obj.get("data").cloned(),
         }
     }
 
@@ -266,19 +268,10 @@ impl WebUiEvent {
                     .to_owned();
                 Self::ThinkingEnd { index, content }
             }
-            "tool_call_start" | "tool_call_delta" | "tool_call_end" => {
-                // Tool call stream events — extract minimal info for UI
-                let index = inner
-                    .get("content_index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize;
-                let delta = inner
-                    .get("delta")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_owned();
-                Self::TextDelta { index, delta }
-            }
+            "tool_call_start" | "tool_call_delta" | "tool_call_end" => Self::Unknown {
+                event_type: format!("MessageUpdate/{inner_type}"),
+                raw: serde_json::Value::Object(inner),
+            },
             _ => Self::Unknown {
                 event_type: format!("MessageUpdate/{inner_type}"),
                 raw: serde_json::Value::Object(inner),

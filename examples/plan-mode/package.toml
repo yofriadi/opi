@@ -1,7 +1,5 @@
-[package]
 name = "plan-mode"
 description = "Example package demonstrating a plan mode extension that blocks mutating tools during planning"
 version = "0.1.0"
 
-[package.extensions]
-include = ["plan-mode"]
+extensions = ["plan-mode"]

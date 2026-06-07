@@ -3,7 +3,7 @@
 //! DoD: "missing defaults and malformed errors tested"
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use opi_coding_agent::config::{ConfigSource, OpiConfig, load_config_file, resolve_config};
 
@@ -97,6 +97,97 @@ api_key_env = "MY_ANTHROPIC_KEY"
     );
     let config = load_config_file(&path).unwrap();
     assert_eq!(config.providers.anthropic.api_key_env, "MY_ANTHROPIC_KEY");
+}
+
+#[test]
+fn valid_config_parses_extension_and_package_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_temp_config(
+        dir.path(),
+        r#"
+[extensions]
+paths = ["vendor/ext-a", "vendor/ext-b"]
+
+[packages]
+paths = ["vendor/pkg-a"]
+"#,
+    );
+    let config = load_config_file(&path).unwrap();
+    assert_eq!(
+        config.extensions.paths,
+        vec![PathBuf::from("vendor/ext-a"), PathBuf::from("vendor/ext-b")]
+    );
+    assert_eq!(config.packages.paths, vec![PathBuf::from("vendor/pkg-a")]);
+}
+
+#[test]
+fn resolve_config_appends_resource_paths_in_layer_order() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let user_config = write_temp_config(
+        dir.path(),
+        r#"
+[extensions]
+paths = ["user-ext"]
+
+[packages]
+paths = ["user-pkg"]
+"#,
+    );
+
+    let project_dir = dir.path().join("project");
+    let project_opi = project_dir.join(".opi");
+    fs::create_dir_all(&project_opi).unwrap();
+    fs::write(
+        project_opi.join("config.toml"),
+        r#"
+[extensions]
+paths = ["project-ext"]
+
+[packages]
+paths = ["project-pkg"]
+"#,
+    )
+    .unwrap();
+
+    let cli_config = dir.path().join("explicit.toml");
+    fs::write(
+        &cli_config,
+        r#"
+[extensions]
+paths = ["cli-ext"]
+
+[packages]
+paths = ["cli-pkg"]
+"#,
+    )
+    .unwrap();
+
+    let config = resolve_config(ConfigSource {
+        cli_model: None,
+        config_path: Some(cli_config),
+        env_model: None,
+        project_dir: Some(project_dir),
+        user_config_path: Some(user_config),
+    })
+    .unwrap();
+
+    assert_eq!(
+        config.extensions.paths,
+        vec![
+            PathBuf::from("user-ext"),
+            PathBuf::from("project-ext"),
+            PathBuf::from("cli-ext")
+        ]
+    );
+    assert_eq!(
+        config.packages.paths,
+        vec![
+            PathBuf::from("user-pkg"),
+            PathBuf::from("project-pkg"),
+            PathBuf::from("cli-pkg")
+        ]
+    );
 }
 
 // ---------------------------------------------------------------------------

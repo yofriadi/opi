@@ -8,8 +8,13 @@ use std::path::Path;
 
 use opi_coding_agent::package_discovery::{
     PackageDiscoveryError, PackageManifest, PackageRegistry, ResourceKind, discover_packages,
+    package_composed_resource_layers,
 };
+use opi_coding_agent::prompt_fragment::discover_fragments;
 use opi_coding_agent::resource::DiscoveryLayer;
+use opi_coding_agent::resource::discover_extension_resources;
+use opi_coding_agent::skill::discover_skills;
+use opi_coding_agent::theme_discovery::discover_themes;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -166,6 +171,68 @@ fn create_full_package(parent_dir: &Path, name: &str, description: &str) -> std:
     pkg_dir
 }
 
+fn write_valid_package_resources(pkg_dir: &Path) {
+    let ext_dir = pkg_dir.join("extensions").join("pkg-ext");
+    std::fs::create_dir_all(&ext_dir).unwrap();
+    std::fs::write(
+        ext_dir.join("extension.toml"),
+        r#"[extension]
+name = "pkg-ext"
+version = "1.0.0"
+description = "Package extension"
+"#,
+    )
+    .unwrap();
+
+    let skill_dir = pkg_dir.join("skills").join("pkg-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        r#"---
+name: pkg-skill
+description: Package skill.
+---
+Full skill body.
+"#,
+    )
+    .unwrap();
+
+    let fragment_dir = pkg_dir.join("fragments").join("pkg-fragment");
+    std::fs::create_dir_all(&fragment_dir).unwrap();
+    std::fs::write(
+        fragment_dir.join("FRAGMENT.md"),
+        r#"---
+name: pkg-fragment
+description: Package fragment.
+arguments: text
+---
+Full fragment body.
+"#,
+    )
+    .unwrap();
+
+    let theme_dir = pkg_dir.join("themes").join("pkg-theme");
+    std::fs::create_dir_all(&theme_dir).unwrap();
+    std::fs::write(
+        theme_dir.join("theme.toml"),
+        r#"
+name = "pkg-theme"
+description = "Package theme."
+"#,
+    )
+    .unwrap();
+}
+
+#[cfg(unix)]
+fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
+}
+
 // ===========================================================================
 // 1. Manifest parsing
 // ===========================================================================
@@ -299,6 +366,25 @@ description = "{long_desc}"
         let path = Path::new("x/package.toml");
         let err = PackageManifest::from_toml(toml, path).unwrap_err();
         assert!(matches!(err, PackageDiscoveryError::InvalidManifest { .. }));
+    }
+
+    #[test]
+    fn example_package_manifests_parse_with_supported_schema() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir.join("../..");
+        let examples = [
+            "examples/sub-agent/package.toml",
+            "examples/plan-mode/package.toml",
+            "examples/todo/package.toml",
+            "examples/mcp-adapter/package.toml",
+        ];
+
+        for relative in examples {
+            let path = repo_root.join(relative);
+            let toml = std::fs::read_to_string(&path).expect("example package should be readable");
+            PackageManifest::from_toml(&toml, &path)
+                .unwrap_or_else(|err| panic!("{relative} should parse: {err}"));
+        }
     }
 }
 
@@ -599,6 +685,85 @@ mod resource_composition {
         );
         assert!(!composed.iter().any(|r| r.name == "skill-2"));
     }
+
+    #[test]
+    fn composed_package_layers_make_resources_discoverable_by_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let package_root = tmp.path().join("packages");
+        std::fs::create_dir_all(&package_root).unwrap();
+        let pkg_dir = write_package(
+            &package_root,
+            "resource-suite",
+            &minimal_pkg_toml("resource-suite", "Resource suite"),
+        );
+        write_valid_package_resources(&pkg_dir);
+
+        let packages = discover_packages(&[layer(&package_root, None, 0)]).unwrap();
+        let package_layers = package_composed_resource_layers(&packages);
+
+        assert!(package_layers.diagnostics.is_empty());
+
+        let extensions = discover_extension_resources(&package_layers.extensions).unwrap();
+        let skills = discover_skills(&package_layers.skills).unwrap();
+        let fragments = discover_fragments(&package_layers.fragments).unwrap();
+        let themes = discover_themes(&package_layers.themes).unwrap();
+
+        assert_eq!(extensions[0].manifest.name, "pkg-ext");
+        assert_eq!(skills[0].manifest.name, "pkg-skill");
+        assert_eq!(fragments[0].manifest.name, "pkg-fragment");
+        assert_eq!(themes[0].manifest.name, "pkg-theme");
+    }
+
+    #[test]
+    fn composed_package_layers_do_not_outprioritize_explicit_direct_layers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let package_root = tmp.path().join("user-packages");
+        let explicit_root = tmp.path().join("explicit-extensions");
+        std::fs::create_dir_all(&package_root).unwrap();
+        std::fs::create_dir_all(&explicit_root).unwrap();
+
+        let pkg_dir = write_package(
+            &package_root,
+            "resource-suite",
+            &minimal_pkg_toml("resource-suite", "Resource suite"),
+        );
+        let package_ext = add_resource(&pkg_dir, "extensions", "shared-ext", "extension.toml");
+        std::fs::write(
+            package_ext.join("extension.toml"),
+            r#"
+[extension]
+name = "shared-ext"
+description = "From package"
+"#,
+        )
+        .unwrap();
+
+        let explicit_ext = explicit_root.join("shared-ext");
+        std::fs::create_dir_all(&explicit_ext).unwrap();
+        std::fs::write(
+            explicit_ext.join("extension.toml"),
+            r#"
+[extension]
+name = "shared-ext"
+description = "From explicit direct layer"
+"#,
+        )
+        .unwrap();
+
+        let packages = discover_packages(&[layer(&package_root, None, 0)]).unwrap();
+        let package_layers = package_composed_resource_layers(&packages);
+
+        let mut extension_layers = vec![layer(&explicit_root, None, 2)];
+        extension_layers.extend(package_layers.extensions);
+        let extensions = discover_extension_resources(&extension_layers).unwrap();
+
+        assert_eq!(extensions.len(), 1);
+        assert_eq!(
+            extensions[0].manifest.description.as_deref(),
+            Some("From explicit direct layer")
+        );
+        assert_eq!(extensions[0].layer_precedence, 2);
+    }
 }
 
 // ===========================================================================
@@ -707,6 +872,29 @@ mod duplicate_identity {
         // Only one "shared" package, higher precedence wins
         assert_eq!(resources.len(), 1);
         assert_eq!(resources[0].manifest.description, "Project version");
+    }
+
+    #[test]
+    fn duplicate_name_in_same_layer_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        write_package(
+            tmp.path(),
+            "first",
+            &minimal_pkg_toml("shared", "First version"),
+        );
+        write_package(
+            tmp.path(),
+            "second",
+            &minimal_pkg_toml("shared", "Second version"),
+        );
+
+        let err = discover_packages(&[layer(tmp.path(), None, 0)]).unwrap_err();
+
+        assert!(matches!(
+            err,
+            PackageDiscoveryError::DuplicateName { ref name, .. } if name == "shared"
+        ));
     }
 }
 
@@ -824,6 +1012,45 @@ mod security_diagnostics {
 
         // All 4 resources should pass the security check
         assert_eq!(composed.len(), 4);
+    }
+
+    #[test]
+    fn compose_rejects_symlinked_resource_escaping_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg_dir = write_package(
+            tmp.path(),
+            "escape-pkg",
+            &pkg_toml_with_filters(
+                "escape-pkg",
+                "Escaping resource",
+                &["linked-ext"],
+                &[],
+                &[],
+                &[],
+                &[],
+            ),
+        );
+
+        let external_dir = tmp.path().join("outside-extension");
+        std::fs::create_dir_all(&external_dir).unwrap();
+        std::fs::write(external_dir.join("extension.toml"), "").unwrap();
+
+        let ext_dir = pkg_dir.join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        let link_dir = ext_dir.join("linked-ext");
+        if let Err(err) = symlink_dir(&external_dir, &link_dir) {
+            eprintln!("skipping symlink test; symlink creation failed: {err}");
+            return;
+        }
+
+        let resources = discover_packages(&[layer(tmp.path(), None, 0)]).unwrap();
+        let err = resources[0].compose().unwrap_err();
+
+        assert!(matches!(
+            err,
+            PackageDiscoveryError::SecurityDiagnostic { ref package_name, .. }
+                if package_name == "escape-pkg"
+        ));
     }
 }
 

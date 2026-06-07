@@ -18,18 +18,17 @@
 //!
 //! # Backpressure
 //!
-//! Events emitted by the handler are buffered in a bounded channel
+//! Events emitted by the handler are buffered in a bounded synchronous channel
 //! (configurable via [`ProxyConfig::event_channel_capacity`], default 256).
-//! When the buffer is full, the proxy applies backpressure: new events are
-//! dropped with a tracing warning. This prevents a slow consumer from
-//! blocking the handler.
+//! When the buffer is full, new events are dropped with a tracing warning.
+//! This prevents a slow consumer from blocking the handler.
 //!
 //! # Cancellation
 //!
-//! The proxy accepts a [`tokio_util::sync::CancellationToken`]. On cancellation
-//! it emits a `proxy_cancelled` event, stops reading new commands, drains
-//! remaining buffered events, and exits cleanly. The handler receives an
-//! `abort` signal through the cancellation token passed by the proxy internals.
+//! The proxy accepts a [`tokio_util::sync::CancellationToken`]. Cancellation is
+//! observed between blocking input reads. When observed, the proxy emits a
+//! `proxy_cancelled` event, stops reading new commands, drains remaining
+//! buffered events, and exits cleanly.
 //!
 //! # Client Disconnect
 //!
@@ -144,7 +143,7 @@ impl<H: ProxyHandler> StreamingProxy<H> {
     /// or cancellation fires.
     ///
     /// Returns the writer on success, or an error if the proxy failed.
-    pub async fn run<R: BufRead, W: Write>(
+    pub fn run<R: BufRead, W: Write>(
         self,
         reader: R,
         writer: W,
@@ -156,7 +155,7 @@ impl<H: ProxyHandler> StreamingProxy<H> {
             None
         };
 
-        // Event channel for async event forwarding
+        // Event channel for event forwarding.
         let (event_tx, event_rx) =
             std::sync::mpsc::sync_channel::<ProxyEvent>(self.config.event_channel_capacity);
 
@@ -318,21 +317,26 @@ impl<R: BufRead, W: Write, H: ProxyHandler> ProxyEngine<R, W, H> {
 pub struct SecretRedactor {
     /// Regex-like patterns for value matching (applied to string values).
     value_patterns: Vec<String>,
+    /// Compiled value patterns.
+    value_regexes: Vec<regex::Regex>,
     /// Field names whose values should always be redacted.
     sensitive_fields: Vec<String>,
 }
 
 impl Default for SecretRedactor {
     fn default() -> Self {
+        let value_patterns = vec![
+            // Anthropic API keys
+            r"sk-ant-[a-zA-Z0-9]{20,}".to_owned(),
+            // OpenAI-style API keys
+            r"sk-[a-zA-Z0-9]{20,}".to_owned(),
+            // JWT/Bearer tokens (eyJ header plus two token segments)
+            r"eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+".to_owned(),
+        ];
+
         Self {
-            value_patterns: vec![
-                // Anthropic API keys
-                r"sk-ant-[a-zA-Z0-9]{20,}".to_owned(),
-                // OpenAI-style API keys
-                r"sk-[a-zA-Z0-9]{20,}".to_owned(),
-                // JWT/Bearer tokens (eyJ header)
-                r"eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+".to_owned(),
-            ],
+            value_regexes: compile_value_patterns(&value_patterns),
+            value_patterns,
             sensitive_fields: vec![
                 "password".to_owned(),
                 "secret".to_owned(),
@@ -347,12 +351,26 @@ impl Default for SecretRedactor {
     }
 }
 
+fn compile_value_patterns(patterns: &[String]) -> Vec<regex::Regex> {
+    patterns
+        .iter()
+        .filter_map(|pattern| match regex::Regex::new(pattern) {
+            Ok(regex) => Some(regex),
+            Err(err) => {
+                tracing::warn!(pattern, error = %err, "invalid secret redaction pattern ignored");
+                None
+            }
+        })
+        .collect()
+}
+
 impl SecretRedactor {
     /// Create a redactor with custom value patterns (regex strings).
     ///
     /// The default sensitive field names are still included.
     pub fn new(value_patterns: Vec<String>) -> Self {
         Self {
+            value_regexes: compile_value_patterns(&value_patterns),
             value_patterns,
             sensitive_fields: Self::default().sensitive_fields,
         }
@@ -404,35 +422,7 @@ impl SecretRedactor {
     }
 
     fn matches_value_pattern(&self, value: &str) -> bool {
-        for pattern in &self.value_patterns {
-            // Simple glob-free matching: check if the pattern is a prefix match
-            // or if the pattern appears as a substring.
-            // For proper regex we'd need the `regex` crate, but we keep it
-            // dependency-free with a simple heuristic.
-            if self.simple_pattern_match(pattern, value) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Extract the literal prefix from a regex-like pattern and check if the
-    /// value contains it. For example:
-    /// - `sk-ant-[a-zA-Z0-9]{20,}` → prefix `sk-ant-`
-    /// - `sk-[a-zA-Z0-9]{20,}` → prefix `sk-`
-    /// - `eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+` → prefix `eyJ`
-    fn simple_pattern_match(&self, pattern: &str, value: &str) -> bool {
-        // Extract literal prefix: take chars until we hit a regex metacharacter
-        let prefix: String = pattern
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect();
-
-        if prefix.len() < 2 {
-            return false;
-        }
-
-        value.contains(&prefix)
+        self.value_regexes.iter().any(|regex| regex.is_match(value))
     }
 }
 
@@ -445,15 +435,12 @@ impl SecretRedactor {
 pub enum StreamingProxyError {
     /// I/O error (read or write failure).
     Io(String),
-    /// The proxy was cancelled.
-    Cancelled,
 }
 
 impl std::fmt::Display for StreamingProxyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(msg) => write!(f, "proxy I/O error: {msg}"),
-            Self::Cancelled => write!(f, "proxy cancelled"),
         }
     }
 }

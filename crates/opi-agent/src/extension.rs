@@ -13,6 +13,9 @@
 //! 2. Base [`AgentHooks::after_tool_call`] then extension
 //!    [`Extension::on_after_tool_call`] for each extension (in registration
 //!    order).
+//! 3. Base [`AgentHooks::prepare_next_turn`] then extension
+//!    [`Extension::prepare_next_turn`] for each extension (in registration
+//!    order). Extra messages are appended in that order.
 //!
 //! If any hook in the chain returns a deny/block result, the chain stops and
 //! the denial propagates. Extensions cannot override a denial from the base
@@ -85,6 +88,9 @@ pub enum ExtensionError {
     /// An extension with the same name is already registered.
     #[error("duplicate extension name: {0}")]
     DuplicateName(String),
+    /// The registry has already been shared with hooks or an event sink.
+    #[error("cannot register extensions after registry has been shared")]
+    RegistryLocked,
     /// Extension state serialization failed.
     #[error("state serialization failed for extension '{name}': {reason}")]
     StateSerialization { name: String, reason: String },
@@ -223,6 +229,18 @@ pub trait Extension: Send + Sync {
         Box::pin(async {})
     }
 
+    /// Prepare context before the next turn begins.
+    ///
+    /// Extensions may return extra messages to inject into the agent's next
+    /// turn. Composite hooks append these messages after the base hook's
+    /// messages and preserve extension registration order.
+    fn prepare_next_turn(
+        &self,
+        _ctx: &PrepareNextTurnContext,
+    ) -> Pin<Box<dyn Future<Output = Option<AgentLoopTurnUpdate>> + Send>> {
+        Box::pin(async { None })
+    }
+
     /// Called for every agent event.
     fn on_event(&self, _event: &AgentEvent) {}
 
@@ -265,6 +283,14 @@ pub struct ExtensionRegistry {
     extensions: Arc<Vec<Box<dyn Extension>>>,
 }
 
+impl Clone for ExtensionRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            extensions: self.extensions.clone(),
+        }
+    }
+}
+
 impl ExtensionRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
@@ -276,8 +302,9 @@ impl ExtensionRegistry {
     /// Register an extension.
     ///
     /// Returns an error if an extension with the same name already exists.
-    /// Panics if called after `wrap_hooks()` or `wrap_event_sink()` has been
-    /// called (i.e., the extension list is shared).
+    /// Returns [`ExtensionError::RegistryLocked`] if called after
+    /// `wrap_hooks()` or `wrap_event_sink()` has been called (i.e., the
+    /// extension list is shared).
     pub fn register(&mut self, ext: Box<dyn Extension>) -> Result<(), ExtensionError> {
         let name = ext.name().to_string();
         if self.extensions.iter().any(|e| e.name() == name) {
@@ -288,10 +315,7 @@ impl ExtensionRegistry {
                 exts.push(ext);
             }
             None => {
-                panic!(
-                    "cannot register extensions after wrap_hooks() or \
-                     wrap_event_sink() — registry is shared"
-                );
+                return Err(ExtensionError::RegistryLocked);
             }
         }
         Ok(())
@@ -305,6 +329,11 @@ impl ExtensionRegistry {
     /// Returns the number of registered extensions.
     pub fn len(&self) -> usize {
         self.extensions.len()
+    }
+
+    /// Return extension names in registration order.
+    pub fn names(&self) -> Vec<&str> {
+        self.extensions.iter().map(|e| e.name()).collect()
     }
 
     /// Look up an extension by name.
@@ -523,6 +552,30 @@ impl AgentHooks for CompositeHooks {
         &self,
         ctx: PrepareNextTurnContext,
     ) -> Pin<Box<dyn Future<Output = Option<AgentLoopTurnUpdate>> + Send>> {
-        self.base.prepare_next_turn(ctx)
+        let base = self.base.clone();
+        let extensions = self.extensions.clone();
+        let extension_ctx = PrepareNextTurnContext {
+            messages: ctx.messages.clone(),
+            turn: ctx.turn,
+        };
+        Box::pin(async move {
+            let mut extra_messages = base
+                .prepare_next_turn(ctx)
+                .await
+                .map(|update| update.extra_messages)
+                .unwrap_or_default();
+
+            for ext in extensions.iter() {
+                if let Some(update) = ext.prepare_next_turn(&extension_ctx).await {
+                    extra_messages.extend(update.extra_messages);
+                }
+            }
+
+            if extra_messages.is_empty() {
+                None
+            } else {
+                Some(AgentLoopTurnUpdate { extra_messages })
+            }
+        })
     }
 }

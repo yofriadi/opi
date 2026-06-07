@@ -444,6 +444,22 @@ mod discovery_precedence {
         let resources = discover_themes(&layers).unwrap();
         assert_eq!(resources.len(), 2);
     }
+
+    #[test]
+    fn duplicate_name_in_same_layer_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let themes_dir = tmp.path().join("themes");
+        std::fs::create_dir_all(&themes_dir).unwrap();
+
+        write_theme(&themes_dir, "first", &full_theme_toml("shared", "First"));
+        write_theme(&themes_dir, "second", &full_theme_toml("shared", "Second"));
+
+        let err = discover_themes(&[layer(&themes_dir, None, 0)]).unwrap_err();
+        assert!(matches!(
+            err,
+            ThemeDiscoveryError::DuplicateName { ref name, .. } if name == "shared"
+        ));
+    }
 }
 
 // ===========================================================================

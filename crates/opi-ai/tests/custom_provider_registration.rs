@@ -6,8 +6,9 @@
 //! All tests use MockProvider — no live provider calls.
 
 use opi_ai::provider::{ModelInfo, Provider};
-use opi_ai::registry::{ProviderRegistry, RegistrationError, RegistryError};
+use opi_ai::registry::ProviderRegistry;
 use opi_ai::test_support::{MockProvider, text_response};
+use opi_ai::{RegistrationError, RegistryError};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -295,6 +296,39 @@ fn all_models_includes_model_overrides() {
     let ids: Vec<&str> = models.iter().map(|(_, m)| m.id.as_str()).collect();
     assert!(ids.contains(&"base"));
     assert!(ids.contains(&"extra"));
+}
+
+#[test]
+fn all_models_lists_overrides_in_deterministic_order() {
+    let mut registry = ProviderRegistry::new();
+    registry
+        .register_provider(custom_provider("prov", vec![custom_model("base", "Base")]))
+        .unwrap();
+    registry
+        .register_model("z-provider", custom_model("z-model", "Z"))
+        .unwrap();
+    registry
+        .register_model("a-provider", custom_model("b-model", "B"))
+        .unwrap();
+    registry
+        .register_model("a-provider", custom_model("a-model", "A"))
+        .unwrap();
+
+    let models = registry.all_models();
+    let override_entries = models
+        .iter()
+        .filter(|(_, model)| model.id != "base")
+        .map(|(provider, model)| (*provider, model.id.as_str()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        override_entries,
+        vec![
+            ("a-provider", "a-model"),
+            ("a-provider", "b-model"),
+            ("z-provider", "z-model")
+        ]
+    );
 }
 
 // ---------------------------------------------------------------------------

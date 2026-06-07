@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use opi_ai::message::{InputContent, Message, UserMessage};
-use opi_ai::provider::Provider;
+use opi_ai::provider::{Provider, ThinkingConfig};
 use tokio_util::sync::CancellationToken;
 
 use crate::event::{AgentEvent, AgentEventSink};
@@ -60,6 +60,31 @@ impl Tool for SharedTool {
 // -- Agent -------------------------------------------------------------------
 
 type EventSubscriber = Box<dyn Fn(&AgentEvent) + Send + Sync>;
+
+/// Clonable control surface for an agent turn owned elsewhere.
+#[derive(Clone)]
+pub struct AgentControl {
+    cancel: CancellationToken,
+    steering_queue: Arc<Mutex<VecDeque<String>>>,
+    follow_up_queue: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl AgentControl {
+    /// Cancel the currently running agent operation.
+    pub fn abort(&self) {
+        self.cancel.cancel();
+    }
+
+    /// Queue a steering message for the next provider request.
+    pub fn steer(&self, message: String) {
+        self.steering_queue.lock().unwrap().push_back(message);
+    }
+
+    /// Queue a follow-up message for when the agent would otherwise stop.
+    pub fn follow_up(&self, message: String) {
+        self.follow_up_queue.lock().unwrap().push_back(message);
+    }
+}
 
 /// Stateful wrapper around `agent_loop` with conversation state, cancellation,
 /// event subscription, and message queue management.
@@ -186,6 +211,21 @@ impl Agent {
         self.provider.as_ref()
     }
 
+    /// Return the thinking configuration used by subsequent provider requests.
+    pub fn thinking_config(&self) -> ThinkingConfig {
+        self.config.thinking.clone().unwrap_or_default()
+    }
+
+    /// Change the thinking configuration used by subsequent provider requests.
+    pub fn set_thinking_config(&mut self, thinking: Option<ThinkingConfig>) {
+        self.config.thinking = thinking;
+    }
+
+    /// Change the maximum output tokens used by subsequent provider requests.
+    pub fn set_max_tokens(&mut self, max_tokens: Option<u64>) {
+        self.config.max_tokens = max_tokens;
+    }
+
     /// Set the initial conversation messages (for session resume).
     ///
     /// Must be called before `prompt` or `continue_`. Replaces any
@@ -242,6 +282,15 @@ impl Agent {
         self.cancel.clone()
     }
 
+    /// Return a clonable handle for cancellation and message queues.
+    pub fn control_handle(&self) -> AgentControl {
+        AgentControl {
+            cancel: self.cancel.clone(),
+            steering_queue: self.steering_queue.clone(),
+            follow_up_queue: self.follow_up_queue.clone(),
+        }
+    }
+
     /// Add a steering message to be delivered before the next provider request.
     ///
     /// Steering messages are high-priority and delivered after the current
@@ -264,6 +313,11 @@ impl Agent {
         if self.cancel.is_cancelled() {
             self.cancel = CancellationToken::new();
         }
+    }
+
+    /// Reset cancellation state before handing out a control handle for a new turn.
+    pub fn reset_cancel_if_cancelled(&mut self) {
+        self.maybe_reset_cancel();
     }
 
     fn build_event_sink(&self) -> AgentEventSink {

@@ -7,12 +7,12 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Spec version | 0.3-draft |
-| Last updated | 2026-06-01 |
+| Spec version | 0.4-draft |
+| Last updated | 2026-06-05 |
 | Repository | `https://github.com/OdradekAI/opi` |
 | Upstream studied | `pi` 0.75.3 at `.repo/pi-0.75.3/` |
-| Current implementation | `opi` 0.4.0, Phase 3 complete |
-| Next milestone | Phase 4 extensibility |
+| Current implementation | `opi` 0.4.0 workspace, Phase 4 extensibility substrate implemented |
+| Next milestone | product hardening for extension workflows and standalone web surfaces |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
 
@@ -30,9 +30,9 @@ Opi mirrors pi's package structure with five Rust crates:
 - `opi-agent`: agent loop, stateful agent, hooks, tools, queues, and session primitives.
 - `opi-tui`: terminal UI components.
 - `opi-coding-agent`: the `opi` CLI binary.
-- `opi-web-ui`: unpublished future web UI placeholder.
+- `opi-web-ui`: unpublished reusable RPC/SDK event, state, component, and HTML rendering crate.
 
-The repository has completed Phase 3: the `opi` binary is usable, multi-provider streaming works, sessions persist as JSONL, compaction and JSON mode exist, image/context/provider hardening is present, and the TUI has daily-use basics. Phase 4 should narrow its scope to the extensibility substrate first: RPC, SDK, extension loading, resource discovery, skills, prompt fragments, themes, and packages. MCP, sub-agents, plan mode, todos, permission gates, provider expansion, and web UI should build on that substrate rather than become core features.
+The repository has completed the Phase 4 extensibility substrate on top of the Phase 3 terminal coding agent: RPC JSONL mode, shared SDK types, extension hooks/tools/state, resource discovery, skills, prompt fragments, themes, packages, custom provider/model registration, session branch selection, streaming proxy primitives, and reusable web-facing component/state/rendering code are present. MCP, sub-agents, plan mode, todos, permission gates, dynamic plugin loading, and a standalone browser app should build on that substrate rather than become core features.
 
 The central design rule:
 
@@ -136,11 +136,12 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 | Workspace | five crates under one Cargo workspace |
 | Versioning | lockstep `0.4.0` |
 | Edition | Rust 2024 |
-| Internal dependencies | `opi-agent -> opi-ai`, `opi-web-ui -> opi-ai`, `opi-coding-agent -> opi-ai + opi-agent + opi-tui` |
+| Internal dependencies | `opi-agent -> opi-ai`, `opi-web-ui` has no internal dependencies, `opi-coding-agent -> opi-ai + opi-agent + opi-tui` |
 | External dependencies | Rust-native async, HTTP/SSE, schema, config, TUI, search, tracing, and test stacks from workspace dependencies |
-| Binary | `opi` supports interactive TUI, non-interactive text mode, `--json`, session commands, `--version`, and `--help` |
+| Binary | `opi` supports interactive TUI, non-interactive text mode, `--json`, `--rpc`, session commands, `--version`, and `--help` |
 | CI | `fmt`, `clippy`, `test`, `doc` |
 | Release CI | six platform binary workflow |
+| Extensibility | RPC JSONL, SDK types, extension API, resource/package discovery, custom provider/model registry, branch selection, streaming proxy, and reusable web UI component/state/rendering surfaces are implemented as unstable 0.x APIs |
 | crates.io | publishable crates are quality-gated; `opi-web-ui` remains unpublished |
 
 ### 4.2 Pre-Stable API Notes
@@ -151,12 +152,11 @@ rather than introduce broad new platform scope.
 
 | Crate | Current surface | Next target |
 |---|---|---|
-| `opi-ai` | provider streaming, model registry, usage/cost, retry/backoff | enterprise providers, image input/output, shared HTTP client/proxy hardening |
-| `opi-agent` | agent loop, hooks, queues, tools, sessions, compaction | keep core runtime narrow; reserve protocol adapters for extension surfaces |
-| `opi-agent` | `transport` stub | make it a real Phase 4 RPC/proxy transport, hide it as unstable, or remove it before stable API |
-| `opi-tui` | ratatui components, markdown/code, diff, themes, keybindings | image rendering and fuzzy pickers |
-| `opi-coding-agent` | `clap` CLI, TOML config, built-in tools, sessions, JSON mode | pi-style context files, tool selection, shell completions, provider wiring |
-| `opi-web-ui` | placeholder crate with `publish = false` | deferred unpublished crate |
+| `opi-ai` | provider streaming, model registry, usage/cost, retry/backoff, custom provider/model registration | keep provider breadth extensible through registration where possible |
+| `opi-agent` | agent loop, hooks, queues, tools, sessions, compaction, SDK types, extension API, streaming proxy | keep core runtime narrow and document all 0.x public surfaces as unstable |
+| `opi-tui` | ratatui components, markdown/code, diff, themes, keybindings, image rendering, fuzzy pickers, branch picker | keep widgets reusable and deterministic under snapshot tests |
+| `opi-coding-agent` | `clap` CLI, TOML config, built-in tools, sessions, JSON/RPC modes, resource/package discovery, branch selection | wire extensibility metadata into prompts/RPC without claiming dynamic Rust plugin loading |
+| `opi-web-ui` | unpublished RPC/SDK event parser, conversation state, component models, HTML renderer | remain `publish = false` until a release decision; no standalone browser app yet |
 
 ### 4.3 Phase 0 Completion
 
@@ -196,7 +196,7 @@ The earlier draft's root `config/` directory is not present. Built-in themes or 
 opi-ai           (no internal deps)
 opi-tui          (no internal deps)
 opi-agent        -> opi-ai
-opi-web-ui       -> opi-ai
+opi-web-ui       (no internal deps)
 opi-coding-agent -> opi-ai, opi-agent, opi-tui
 ```
 
@@ -210,7 +210,7 @@ Internal dependencies MUST be declared in root `[workspace.dependencies]` and re
 | `opi-agent` | library | crates.io after publish gates pass | loop, agent, hooks, tools, queues, sessions |
 | `opi-tui` | library | crates.io after publish gates pass | terminal rendering library |
 | `opi-coding-agent` | binary | crates.io after publish gates pass | `opi` CLI application |
-| `opi-web-ui` | library | not published | future browser UI placeholder |
+| `opi-web-ui` | library | not published | reusable RPC/SDK event parser, conversation state, component models, and HTML renderer |
 
 ### 5.4 Why There Is No `opi-types`
 
@@ -642,7 +642,7 @@ pub async fn agent_loop(
 
 `Agent` wraps the loop with state, prompt/continue methods, abort, steering and follow-up queues, subscriber management, and idle settlement. Continuing requires the last context message to be user or tool result.
 
-The current `transport` stub is reserved for Phase 4 RPC/proxy transport. Before any stable public API claim it must either be hidden as unstable or removed.
+`opi_agent::Transport` was removed in Phase 4. RPC/proxy surfaces now live in `opi-coding-agent::rpc`, `opi-agent::sdk`, and `opi-agent::streaming_proxy`.
 
 ### 8.3 `opi-tui`
 
@@ -722,7 +722,7 @@ Prompt layers:
 
 ### 8.5 `opi-web-ui`
 
-`opi-web-ui` is unpublished and deferred. When implemented, it should consume the same event schemas as JSON/RPC modes rather than depending on TUI internals.
+`opi-web-ui` is unpublished and remains `publish = false`, but it is no longer a placeholder. It provides typed parsing for RPC/SDK events, conversation state, component models, and HTML rendering helpers. It is not a standalone browser app and should continue to consume the same event schemas as JSON/RPC modes rather than depending on TUI internals.
 
 ## 9. Configuration and Storage
 
@@ -976,7 +976,7 @@ All crates share one workspace version.
 | 0.2.0 | Phase 1 MVP | GitHub Release; crates.io only if publish gates pass except `opi-web-ui` |
 | 0.3.0 | Phase 2 persistence/providers | GitHub + crates.io |
 | 0.4.0 | Phase 3 production hardening | GitHub + crates.io |
-| post-0.4.0 | Phase 4 extensibility | GitHub + crates.io |
+| 0.4.0 workspace | Phase 4 extensibility substrate | GitHub + crates.io for publishable crates; `opi-web-ui` remains unpublished |
 
 The first crates.io publish is gated by quality, not by the version number alone.
 It MAY happen at 0.2.0 if all published crates expose real, documented behavior
@@ -985,9 +985,9 @@ cover the shipped provider/tool/runtime boundaries, and the release skill's
 checks pass. If those gates are not met, crates.io publishing SHOULD move to a
 later 0.2.x or 0.3.0 release while GitHub binary releases continue. Because the
 binary crate depends on internal library crates, those libraries should publish
-together in dependency order; `opi-web-ui` remains unpublished until it has a
-concrete implementation. All 0.x public APIs are unstable unless explicitly
-documented otherwise.
+together in dependency order; `opi-web-ui` remains unpublished until a separate
+release decision. All 0.x public APIs are unstable unless explicitly documented
+otherwise.
 
 The release process SHOULD follow `.claude/skills/opi-release/skill.md`: pre-flight, version bump, changelog, checks, tag/draft release, crates.io publish, finalize. crates.io publishing is irreversible except yanking; rollback should use new commits and tag management, not force-pushed public history.
 
@@ -1107,7 +1107,7 @@ Exit criteria: enterprise providers work, image and terminal-image flows work, p
 
 ### Phase 4 - Extensibility Substrate
 
-Target: 0.4.0+.
+Status: substrate implemented in the current `0.4.0` workspace.
 
 Phase 4 is ordered so the reusable substrate lands before workflow-heavy
 features. Later tasks may depend on earlier tasks, but examples must not become
@@ -1127,7 +1127,7 @@ core policy.
 | 4.10 | streaming proxy | `opi-agent` or new crate |
 | 4.11 | web UI implementation that consumes RPC/SDK events | `opi-web-ui` |
 
-Exit criteria: third parties can compose and extend opi through RPC, SDK, extensions, skills, prompt fragments, themes, packages, and custom provider/model registration without patching core crates. MCP, sub-agents, plan mode, todos, and permission gates should be demonstrable as extensions or packages, not core features. The `Transport` public surface must be real, explicitly unstable, or absent before any stable API claim.
+Exit criteria: third parties can compose and extend opi through RPC, SDK, extension APIs, discovered resources, skills, prompt fragments, themes, packages, and custom provider/model registration without patching core crates. MCP, sub-agents, plan mode, todos, and permission gates should be demonstrable as extensions or packages, not core features. The `Transport` public surface is absent; it must not be reintroduced as a stable public claim without a real implementation.
 
 ## 16. Decision Log
 
@@ -1149,7 +1149,7 @@ Exit criteria: third parties can compose and extend opi through RPC, SDK, extens
 | ADR-014 | TUI | ratatui/crossterm | cross-platform Rust terminal stack |
 | ADR-015 | Extension strategy | RPC/SDK and extension API before protocol adapters | matches pi's composition model; MCP is an extension/package candidate, not a core Phase 3 feature |
 | ADR-016 | Web UI | unpublished until core stable | avoids premature WASM commitment |
-| ADR-017 | Transport stub | reserve for Phase 4 or remove | avoids undocumented public surface |
+| ADR-017 | Transport stub | removed from public API | avoids undocumented public surface |
 | ADR-018 | crates.io timing | quality-gated first publish | publish only after placeholder APIs are hidden or replaced and release gates pass |
 | ADR-019 | Tool safety | allowlists, visibility, and hooks over core permission profiles | pi explicitly avoids built-in permission popups; environment-specific gates belong in extensions/packages or external sandboxes |
 | ADR-020 | Context files | `AGENTS.md` / `CLAUDE.md` before `OPI.md` | preserves pi behavior and ecosystem convention |

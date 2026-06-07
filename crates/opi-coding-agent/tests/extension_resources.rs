@@ -6,6 +6,7 @@
 //! All tests use temp directories — no real user runtime paths are read.
 
 use std::fs;
+use std::path::Path;
 
 use opi_coding_agent::resource::{
     DiscoveryLayer, ResourceDiscoveryError, discover_extension_resources,
@@ -55,6 +56,16 @@ version = "1.0.0"
 "#,
     )
     .unwrap();
+}
+
+#[cfg(unix)]
+fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +164,53 @@ fn discover_multiple_extensions_in_single_layer() {
     assert!(names.contains(&"ext-a"));
     assert!(names.contains(&"ext-b"));
     assert!(names.contains(&"ext-c"));
+}
+
+#[test]
+fn duplicate_name_in_same_layer_returns_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ext_dir = tmp.path().join(".opi").join("extensions");
+    write_manifest(&ext_dir.join("first"), "shared", "1.0.0", "First");
+    write_manifest(&ext_dir.join("second"), "shared", "1.0.0", "Second");
+
+    let err = discover_extension_resources(&[DiscoveryLayer {
+        root: tmp.path().to_path_buf(),
+        subdirectory: Some(".opi/extensions".into()),
+        precedence: 0,
+    }])
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ResourceDiscoveryError::DuplicateName { ref name, .. } if name == "shared"
+    ));
+}
+
+#[test]
+fn symlinked_extension_directory_is_canonicalized() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scan_dir = tmp.path().join(".opi").join("extensions");
+    fs::create_dir_all(&scan_dir).unwrap();
+
+    let target_dir = tmp.path().join("external-target");
+    write_manifest(&target_dir, "linked-ext", "1.0.0", "Linked");
+
+    let link_dir = scan_dir.join("linked-ext");
+    if let Err(err) = symlink_dir(&target_dir, &link_dir) {
+        eprintln!("skipping symlink test; symlink creation failed: {err}");
+        return;
+    }
+
+    let resources = discover_extension_resources(&[DiscoveryLayer {
+        root: tmp.path().to_path_buf(),
+        subdirectory: Some(".opi/extensions".into()),
+        precedence: 0,
+    }])
+    .unwrap();
+
+    assert_eq!(resources.len(), 1);
+    assert_eq!(resources[0].manifest.name, "linked-ext");
+    assert_eq!(resources[0].path, target_dir.canonicalize().unwrap());
 }
 
 // ---------------------------------------------------------------------------

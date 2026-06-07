@@ -27,6 +27,7 @@ pub mod vertex;
 pub use config::{Config, Error};
 pub use model::Model;
 pub use provider::Provider;
+pub use registry::{ProviderRegistry, RegistrationError, RegistryError};
 pub use stream::AssistantStreamEvent;
 pub use stream::{CostBreakdown, CumulativeUsage, Pricing, calculate_cost};
 

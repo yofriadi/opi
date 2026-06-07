@@ -1,7 +1,5 @@
-[package]
 name = "todo"
 description = "Example package demonstrating a todo extension that tracks task state through extension state and custom commands"
 version = "0.1.0"
 
-[package.extensions]
-include = ["todo"]
+extensions = ["todo"]

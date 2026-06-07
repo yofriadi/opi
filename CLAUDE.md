@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi) — an AI agent toolkit. v0.4.0 ships a multi-provider coding assistant (Anthropic, OpenAI, OpenAI Responses, OpenRouter, Mistral, Gemini, Bedrock, Azure OpenAI, Vertex AI), eight built-in tools, image attachments, fuzzy model/session pickers, shell completion generation, a ratatui TUI with configurable keybindings/themes, session JSONL persistence with resume, context compaction, retry/backoff, and cost tracking. New work extends this foundation rather than redesigning the layout.
+`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi), organized as an AI agent toolkit and terminal-first coding agent. v0.4.0 ships a multi-provider coding assistant (Anthropic, OpenAI, OpenAI Responses, OpenRouter, Mistral, Gemini, Bedrock, Azure OpenAI, Vertex AI), eight built-in tools, image attachments, fuzzy model/session/branch pickers, shell completion generation, a ratatui TUI with configurable keybindings/themes, session JSONL persistence with resume, context compaction, retry/backoff, cost tracking, RPC JSONL mode, shared SDK command/event types, extension hooks/tools/state, resource/package discovery, custom provider/model registration, and an unpublished `opi-web-ui` component/state/rendering crate. New work extends this foundation rather than redesigning the layout.
 
 Repository: https://github.com/OdradekAI/opi
 
@@ -37,7 +37,7 @@ Cargo workspace with **lockstep versioning** (all crates share `version.workspac
 opi-ai      (no internal deps)        — unified multi-provider LLM API
 opi-tui     (no internal deps)        — terminal UI with differential rendering
 opi-agent   → opi-ai                  — agent runtime, tool calling, session management
-opi-web-ui  → opi-ai                  — web chat components
+opi-web-ui  (no internal deps)        — unpublished web-facing component/state/rendering crate
 opi-coding-agent → opi-ai, opi-agent, opi-tui  — produces the `opi` binary
 ```
 
@@ -50,6 +50,7 @@ When publishing internal crates, the `path` dependencies MUST also carry a `vers
 The `opi` binary (`opi-coding-agent`) chooses a mode at startup:
 
 - **Session commands** (`--list-sessions`, `--resume`, `--delete-session`): handled before any provider is constructed.
+- **RPC** (`--rpc`): builds a provider and `CodingHarness`, then runs the unstable JSONL command/event protocol over stdin/stdout.
 - **Non-interactive** (non-empty positional `[PROMPT]...`, `--non-interactive`, or `--json`): builds a provider, runs `NonInteractiveRunner::run()`, prints output (or NDJSON events with `--json`), exits.
 - **Interactive** (default, no prompt args): builds a `CodingHarness` with `InteractiveCodingHooks`, launches the ratatui-based TUI via `interactive::run_interactive_tui()`.
 
@@ -221,7 +222,7 @@ Two GitHub Actions workflows in `.github/workflows/`:
 - Conventional Commits drive changelog categorization (`feat:` → Added, `fix:` → Fixed, `feat!:`/`BREAKING CHANGE` → Breaking Changes).
 - Each crate's `description`, `license`, and `repository` come from the workspace — don't duplicate them per crate.
 - The CLI binary is named `opi` (defined by `[[bin]]` in `crates/opi-coding-agent/Cargo.toml`), not `opi-coding-agent`.
-- `opi-web-ui` has `publish = false`; do not describe it as implemented until real web components exist.
+- `opi-web-ui` has `publish = false`; describe it as reusable components/state/rendering, not as a standalone browser app.
 
 ## User override
 

@@ -11,9 +11,9 @@
 
 Current workspace version: `0.4.0`.
 
-`opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, eight built-in tools, image attachments, model and session pickers, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, token usage accumulation, and best-effort cost summaries.
+`opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, RPC JSONL mode, eight built-in tools, image attachments, model/session/branch pickers, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, token usage accumulation, and best-effort cost summaries.
 
-`opi-web-ui` remains a placeholder crate with `publish = false`; it does not contain a real web UI yet.
+Phase 4 extensibility surfaces are present and unstable: shared SDK/RPC command types, extension hooks/tools/state for embedders, config-driven resource discovery for extensions and packages, progressive skills/prompt fragments/themes/packages, custom provider/model registration, and a streaming proxy. `opi-web-ui` remains `publish = false`; it is not a standalone browser app, but it now provides reusable RPC/SDK event parsing, conversation state, component models, and HTML rendering.
 
 ## Relationship to pi
 
@@ -24,10 +24,10 @@ Current workspace version: `0.4.0`.
 | Product surface | Minimal terminal coding harness | Terminal-first Rust coding agent and reusable Rust crates |
 | Core coding tools | Default `read`, `write`, `edit`, `bash` | Same interactive default tool set |
 | Read-only navigation | `read`, `grep`, `find`, `ls` | Same core read-only set; `glob` is an extra convenience and core workflows should not depend on it |
-| Extensibility | Extensions, skills, prompt templates, themes, packages | Phase 4 focuses on RPC, SDK, extensions, skills, prompt fragments, themes, and packages |
+| Extensibility | Extensions, skills, prompt templates, themes, packages | RPC/SDK, extension APIs, resource discovery, skills, prompt fragments, themes, packages, and custom provider/model registration are implemented as unstable 0.x surfaces |
 | Workflow-heavy features | MCP, sub-agents, plan mode, todos, and permission gates stay outside core | Keep them as extension/package examples instead of built-in core policy |
 | Config and sessions | `.pi` JSON settings and pi session files | TOML config and opi JSONL sessions |
-| Web UI | Available in pi's package set | Deferred until RPC/SDK surfaces are useful |
+| Web UI | Available in pi's package set | Unpublished reusable component/state/rendering crate; no standalone browser app yet |
 
 ## Workspace
 
@@ -36,16 +36,16 @@ Cargo workspace with lockstep versioning. Every crate inherits `version`, `editi
 | Crate | Published | Description |
 |-------|-----------|-------------|
 | [`opi-ai`](crates/opi-ai) | yes | Provider-neutral LLM API, streaming events, image content, registry, retry, HTTP pooling/proxy, usage and cost helpers |
-| [`opi-agent`](crates/opi-agent) | yes | Agent loop, tool execution, hooks, events, queues, sessions, compaction, transport abstraction |
+| [`opi-agent`](crates/opi-agent) | yes | Agent loop, tool execution, hooks, events, queues, sessions, compaction, SDK types, extension API, and streaming proxy primitives |
 | [`opi-tui`](crates/opi-tui) | yes | Ratatui widgets, transcript rendering, diff view, select list, terminal images, themes, keybindings |
 | [`opi-coding-agent`](crates/opi-coding-agent) | yes | The `opi` binary and embeddable coding harness |
-| [`opi-web-ui`](crates/opi-web-ui) | no (`publish = false`) | Reserved web chat component crate |
+| [`opi-web-ui`](crates/opi-web-ui) | no (`publish = false`) | RPC/SDK event parser, conversation state, component models, and HTML rendering helpers |
 
 Internal dependency shape:
 
 ```text
 opi-agent -> opi-ai
-opi-web-ui -> opi-ai
+opi-web-ui (no internal deps)
 opi-coding-agent -> opi-ai + opi-agent + opi-tui -> opi binary
 ```
 
@@ -239,6 +239,12 @@ models = ["gemini-2.5-flash", "gemini-2.5-pro"]
 [providers.openai.proxy]
 url = "http://proxy.example.com:8080"
 no_proxy = "localhost,127.0.0.1"
+
+[extensions]
+paths = ["vendor/my-extension"]
+
+[packages]
+paths = ["vendor/my-package"]
 ```
 
 When a provider proxy is not configured, `opi` falls back to standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables.
@@ -251,6 +257,7 @@ With no prompt args, `opi` starts the ratatui TUI. Useful commands inside the in
 |---------|--------|
 | `/model` | Open the model picker for the active provider |
 | `/session` | Open the session picker and resume a stored session |
+| `/branch` | Open the branch picker for the active session |
 | `/image <path>` | Queue an image for the next prompt |
 | `exit` or `quit` | Exit the TUI |
 
@@ -278,6 +285,14 @@ Session files store a header plus message, compaction, and leaf entries. Resume 
 ## Context Files
 
 The coding harness discovers `AGENTS.md` and `CLAUDE.md` from the workspace directory upward to the git root, then from the user config directory. Files over 128 KiB and empty files are ignored. `OPI.md` is intentionally not loaded.
+
+## RPC, SDK, and Extensions
+
+`opi --rpc` starts a persistent JSONL command/event session over stdin/stdout. It emits an initial `rpc_ready` header with `schema_version = 2`; commands include `prompt`, `continue`, `abort`, `steer`, `follow_up`, `set_model`, `set_thinking_level`, `compact`, `session_info`, and `quit`. Responses are correlated by optional `id`, while accepted prompt output streams as async agent events.
+
+The shared SDK types live in `opi_agent::sdk`. The extension API in `opi-agent` supports lifecycle hooks, custom tools, custom commands, custom agent messages/state, and custom provider/model registration for embedders. The CLI discovers configured resource metadata from user, project, package, and explicit paths and exposes it in prompts/RPC metadata. It does not dynamically load arbitrary Rust code from disk.
+
+Packages can compose extensions, skills, prompt fragments, and themes from flat `package.toml` manifests. Duplicate resource names within the same discovery layer are errors; higher-precedence layers override lower-precedence layers.
 
 ## Build From Source
 
@@ -334,11 +349,11 @@ Key abstractions:
 
 ## Still Not Implemented
 
-- Sub-agents, permission gates, plan/todo workflows, and skills as extension/package product features.
-- Prompt template registry.
-- MCP tool server integration through an extension/package path.
+- Production sub-agent, permission-gate, plan/todo, and MCP workflows. The repository includes package/example scaffolds, but these are not built-in core product workflows.
+- Runtime expansion of prompt fragments as interactive slash commands.
+- Dynamic Rust plugin loading from arbitrary extension paths.
 - OAuth or subscription login flows.
-- Real web UI widgets in `opi-web-ui`.
+- A standalone browser-hosted web app.
 
 ## Releasing
 

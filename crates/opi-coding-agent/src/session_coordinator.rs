@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use opi_agent::compaction::{CompactionConfig, CompactionEngine, DefaultCompactionHooks, Entry};
 use opi_agent::message::{AgentMessage, CompactionSummaryMessage};
 use opi_agent::session::{
-    CompactionEntry, MessageEntry, SessionEntry, SessionHeader, SessionWriter,
+    CompactionEntry, LeafEntry, MessageEntry, SessionEntry, SessionHeader, SessionWriter,
 };
 use opi_agent::session_event::{CompactionReason, CompactionResult};
 use opi_ai::message::Message;
@@ -396,6 +396,17 @@ impl SessionCoordinator {
     /// Exposed for tests that need to assert resume correctness.
     pub fn compaction_entries(&self) -> &[Entry] {
         &self.entries
+    }
+
+    /// Append a Leaf pointer marking the selected active branch tip.
+    pub fn append_leaf(&mut self, entry_id: &str) -> Result<(), std::io::Error> {
+        let entry = SessionEntry::Leaf(LeafEntry {
+            id: format!("leaf-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed)),
+            parent_id: None,
+            timestamp: now_iso(),
+            entry_id: entry_id.to_owned(),
+        });
+        self.writer.append(&entry)
     }
 
     /// Compute the cost summary from the accumulated usage and the model

@@ -53,6 +53,9 @@ pub enum ThemeDiscoveryError {
     /// A required field is missing or empty in the manifest.
     #[error("missing required field '{field}' in theme at {path}")]
     MissingField { field: String, path: PathBuf },
+    /// Two themes in the same precedence layer use the same name.
+    #[error("duplicate theme name '{name}' in discovery layer at {path}")]
+    DuplicateName { name: String, path: PathBuf },
     /// The theme name is invalid (bad characters or too long).
     #[error("invalid theme name in {path}: {reason}")]
     InvalidName { path: PathBuf, reason: String },
@@ -264,7 +267,8 @@ impl ThemeResource {
 ///
 /// Each layer's scan directory is enumerated for subdirectories containing
 /// `theme.toml` files. When multiple layers produce themes with the same
-/// name, the one with the highest `precedence` value is kept.
+/// name, the one with the highest `precedence` value is kept. Duplicate names
+/// within the same precedence layer are reported as an error.
 ///
 /// Returns the deduplicated list of discovered theme resources, sorted by
 /// name. Missing scan directories are silently skipped.
@@ -276,6 +280,11 @@ pub fn discover_themes(
     for layer in layers {
         let scan_dir = layer.scan_dir();
         if !scan_dir.is_dir() {
+            continue;
+        }
+
+        if scan_dir.join("theme.toml").exists() {
+            discover_theme_dir(&scan_dir, layer, &mut seen)?;
             continue;
         }
 
@@ -297,33 +306,48 @@ pub fn discover_themes(
                 continue;
             }
 
-            let content = std::fs::read_to_string(&theme_toml)?;
-            let manifest = ThemeManifest::from_toml(&content, &theme_toml)?;
-
-            let canonical = path.canonicalize().unwrap_or(path);
-
-            let should_insert = match seen.get(&manifest.name) {
-                Some(existing) => layer.precedence > existing.layer_precedence,
-                None => true,
-            };
-
-            if should_insert {
-                seen.insert(
-                    manifest.name.clone(),
-                    ThemeResource {
-                        manifest,
-                        path: canonical,
-                        theme_toml_path: theme_toml,
-                        layer_precedence: layer.precedence,
-                    },
-                );
-            }
+            discover_theme_dir(&path, layer, &mut seen)?;
         }
     }
 
     let mut resources: Vec<ThemeResource> = seen.into_values().collect();
     resources.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
     Ok(resources)
+}
+
+fn discover_theme_dir(
+    path: &Path,
+    layer: &crate::resource::DiscoveryLayer,
+    seen: &mut HashMap<String, ThemeResource>,
+) -> Result<(), ThemeDiscoveryError> {
+    let theme_toml = path.join("theme.toml");
+    let content = std::fs::read_to_string(&theme_toml)?;
+    let manifest = ThemeManifest::from_toml(&content, &theme_toml)?;
+
+    let canonical = path.canonicalize()?;
+
+    match seen.get(&manifest.name) {
+        Some(existing) if layer.precedence == existing.layer_precedence => {
+            return Err(ThemeDiscoveryError::DuplicateName {
+                name: manifest.name,
+                path: canonical,
+            });
+        }
+        Some(existing) if layer.precedence < existing.layer_precedence => return Ok(()),
+        Some(_) | None => {
+            seen.insert(
+                manifest.name.clone(),
+                ThemeResource {
+                    manifest,
+                    path: canonical,
+                    theme_toml_path: theme_toml,
+                    layer_precedence: layer.precedence,
+                },
+            );
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

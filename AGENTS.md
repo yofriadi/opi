@@ -21,8 +21,13 @@ The current implementation includes:
 - Session JSONL persistence with list/resume/delete CLI commands.
 - AGENTS.md / CLAUDE.md context file loading from workspace ancestors and the user config directory.
 - Context compaction, retry/backoff, usage accumulation, configurable keybindings/themes, shell completion generation, edit diff rendering, and best-effort cost tracking.
+- RPC JSONL mode and shared SDK command/response/event types.
+- Extension hooks/tools/state for embedders, plus config-driven resource discovery for extensions, packages, skills, prompt fragments, and themes.
+- Custom provider/model registration through the provider registry.
+- Interactive branch selection through `/branch`.
+- An unpublished `opi-web-ui` component/state/rendering crate that consumes RPC/SDK events.
 
-`opi-web-ui` remains a placeholder crate with `publish = false`; it is not a real web UI implementation yet.
+`opi-web-ui` remains `publish = false`; it is not a standalone browser app.
 
 Repository: https://github.com/OdradekAI/opi
 
@@ -54,7 +59,7 @@ Cargo workspace with lockstep versioning. All crates share `version.workspace = 
 opi-ai      (no internal deps)        - multi-provider LLM API
 opi-tui     (no internal deps)        - terminal UI widgets, pickers, diff and image rendering
 opi-agent   -> opi-ai                 - agent runtime, tool calling, sessions, compaction
-opi-web-ui  -> opi-ai                 - placeholder web chat component crate
+opi-web-ui  (no internal deps)        - unpublished web-facing component/state/rendering crate
 opi-coding-agent -> opi-ai, opi-agent, opi-tui - produces the `opi` binary
 ```
 
@@ -277,7 +282,7 @@ Two GitHub Actions workflows live in `.github/workflows/`:
 - Conventional Commits drive changelog categorization (`feat:` -> Added, `fix:` -> Fixed, `feat!:` / `BREAKING CHANGE` -> Breaking Changes).
 - Each crate's `description`, `license`, and `repository` come from the workspace; do not duplicate them per crate.
 - The CLI binary is named `opi` (defined by `[[bin]]` in `crates/opi-coding-agent/Cargo.toml`), not `opi-coding-agent`.
-- `opi-web-ui` has `publish = false`; do not describe it as implemented until real web components exist.
+- `opi-web-ui` has `publish = false`; describe it as reusable components/state/rendering, not as a standalone browser app.
 
 ## User override
 

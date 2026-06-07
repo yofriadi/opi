@@ -1007,6 +1007,66 @@ fn reconstruct_context_uses_last_leaf_when_multiple_present() {
 }
 
 #[test]
+fn session_coordinator_append_leaf_switches_active_branch() {
+    use opi_agent::message::AgentMessage;
+    use opi_agent::session::LeafEntry;
+
+    let dir = tempfile::tempdir().unwrap();
+    let header = make_header("append-leaf-sess", "/repo");
+    let path = dir.path().join("append-leaf-sess.jsonl");
+    let mut writer = SessionWriter::create(&path, header).unwrap();
+
+    let user = |id: &str, parent: Option<&str>, text: &str| {
+        SessionEntry::Message(MessageEntry {
+            id: id.into(),
+            parent_id: parent.map(|s| s.into()),
+            timestamp: "2026-05-23T12:00:00Z".into(),
+            message: Message::User(UserMessage {
+                content: vec![InputContent::Text { text: text.into() }],
+                timestamp_ms: 0,
+            }),
+        })
+    };
+
+    writer.append(&user("e1", None, "root")).unwrap();
+    writer.append(&user("e2a", Some("e1"), "branch-a")).unwrap();
+    writer.append(&user("e2b", Some("e1"), "branch-b")).unwrap();
+    writer
+        .append(&SessionEntry::Leaf(LeafEntry {
+            id: "l-old".into(),
+            parent_id: None,
+            timestamp: "2026-05-23T12:00:01Z".into(),
+            entry_id: "e2a".into(),
+        }))
+        .unwrap();
+    drop(writer);
+
+    let (_header, entries) = SessionReader::read_all(&path).unwrap();
+    let mut coord = SessionCoordinator::open_existing(
+        path.clone(),
+        "append-leaf-sess".into(),
+        &entries,
+        2,
+        opi_agent::compaction::CompactionConfig::default(),
+        "anthropic:claude-sonnet-4",
+    )
+    .unwrap();
+
+    coord.append_leaf("e2b").unwrap();
+    let (_header, entries) = SessionReader::read_all(&path).unwrap();
+    let messages = opi_coding_agent::session_cli::reconstruct_context(&entries);
+
+    assert_eq!(messages.len(), 2);
+    if let AgentMessage::Llm(Message::User(u)) = &messages[1]
+        && let InputContent::Text { text } = &u.content[0]
+    {
+        assert_eq!(text, "branch-b");
+    } else {
+        panic!("expected branch-b after appended leaf");
+    }
+}
+
+#[test]
 fn reconstruct_context_without_leaf_falls_back_to_file_order() {
     // Sessions written by the current runtime do not yet emit Leaf entries.
     // Those linear sessions must continue to replay in file order so resume

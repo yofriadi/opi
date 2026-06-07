@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `opi-coding-agent`: RPC JSONL mode with correlated responses, async agent events, session/model/thinking/compaction commands, and tool-selection support.
+- `opi-agent`: shared unstable SDK command/response/event types for embedders.
+- `opi-agent`: extension API with lifecycle hooks, custom tools, custom commands, custom messages, and extension state.
+- `opi-ai`: custom provider/model registry APIs used by CLI model listing and runtime validation.
+- `opi-coding-agent`: config-driven discovery for extensions, packages, skills, prompt fragments, and themes, including package-composed resource layers.
+- `opi-coding-agent`: interactive `/branch` session branch selection.
+- `opi-agent`: streaming proxy primitives with framing, cancellation, backpressure, and secret redaction.
+- `opi-web-ui`: unpublished RPC/SDK event parser, conversation state, component models, and HTML rendering helpers.
+
+### Changed
+
+- `opi-coding-agent`: `--list-models`, interactive model picking, and runtime model validation now use provider registry metadata.
+- `opi-coding-agent`: example package manifests use the supported flat `package.toml` schema.
+- `opi-agent`: `StreamingProxy::run` is synchronous transport-agnostic I/O instead of an async wrapper around blocking reads.
+
+### Fixed
+
+- `opi-coding-agent`: Windows subprocess tests resolve `opi.exe` correctly.
+- `opi-web-ui`: RPC response `data` is preserved and updates session/model state.
+- `opi-coding-agent`: same-layer duplicate resource/package names now produce explicit errors.
+- `opi-coding-agent`: package resource containment checks no longer fall back to unresolved paths when canonicalization fails.
+- `opi-agent`: default secret redaction no longer redacts short benign `sk-` or `eyJ`-like strings.
+- `opi-agent`: `SdkResponse` now round-trips through JSON and serialization fallback events use `SdkSerializationError`.
+- `opi-web-ui`: `ThinkingBlock` is re-exported from the crate root with the other component models.
+
+### Removed
+
+- `opi-agent`: stale public `Transport` stub.
+
 ## [0.4.0] - 2026-06-02
 
 Phase 3: cloud provider expansion (Vertex AI, Azure OpenAI, Bedrock), image

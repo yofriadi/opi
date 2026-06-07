@@ -21,10 +21,10 @@ use opi_agent::extension::{
 };
 use opi_agent::hooks::{
     AfterToolCallContext, AfterToolCallResult, AgentHooks, BeforeToolCallContext,
-    BeforeToolCallResult,
+    BeforeToolCallResult, PrepareNextTurnContext,
 };
-use opi_agent::loop_types::AgentError;
-use opi_agent::message::AgentMessage;
+use opi_agent::loop_types::{AgentError, AgentLoopTurnUpdate};
+use opi_agent::message::{AgentMessage, CustomAgentMessage};
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_ai::message::{OutputContent, ToolDef};
 use tokio_util::sync::CancellationToken;
@@ -284,6 +284,30 @@ impl Extension for CommandExtension {
     }
 }
 
+/// An extension that injects a custom message before the next turn.
+struct CustomMessageExtension;
+
+impl Extension for CustomMessageExtension {
+    fn name(&self) -> &str {
+        "custom-message"
+    }
+
+    fn prepare_next_turn(
+        &self,
+        _ctx: &PrepareNextTurnContext,
+    ) -> Pin<Box<dyn Future<Output = Option<AgentLoopTurnUpdate>> + Send>> {
+        Box::pin(async {
+            Some(AgentLoopTurnUpdate {
+                extra_messages: vec![AgentMessage::Custom(CustomAgentMessage {
+                    kind: "test/custom".into(),
+                    data: serde_json::json!({"from": "extension"}),
+                    include_in_llm_context: false,
+                })],
+            })
+        })
+    }
+}
+
 /// Minimal hooks for testing.
 struct TestHooks;
 
@@ -333,6 +357,45 @@ fn register_rejects_duplicate_names() {
         .unwrap();
     let result = registry.register(Box::new(RecordingExtension::new("dup")));
     assert!(matches!(result, Err(ExtensionError::DuplicateName(n)) if n == "dup"));
+}
+
+#[test]
+fn register_after_wrap_hooks_returns_error_instead_of_panicking() {
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(RecordingExtension::new("first")))
+        .unwrap();
+
+    let _composite = registry.wrap_hooks(Box::new(TestHooks));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry.register(Box::new(RecordingExtension::new("late")))
+    }));
+
+    assert!(result.is_ok(), "late registration should not panic");
+    assert!(matches!(
+        result.unwrap(),
+        Err(ExtensionError::RegistryLocked)
+    ));
+}
+
+#[test]
+fn register_after_wrap_event_sink_returns_error_instead_of_panicking() {
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(RecordingExtension::new("first")))
+        .unwrap();
+
+    let base_sink: opi_agent::event::AgentEventSink = Box::new(|_event: AgentEvent| {});
+    let _sink = registry.wrap_event_sink(base_sink);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry.register(Box::new(RecordingExtension::new("late")))
+    }));
+
+    assert!(result.is_ok(), "late registration should not panic");
+    assert!(matches!(
+        result.unwrap(),
+        Err(ExtensionError::RegistryLocked)
+    ));
 }
 
 #[test]
@@ -491,6 +554,30 @@ async fn composite_hooks_after_tool_observes_result() {
     };
     let result = composite.after_tool_call(ctx).await;
     assert!(matches!(result, AfterToolCallResult::Keep));
+}
+
+#[tokio::test]
+async fn composite_hooks_prepare_next_turn_includes_extension_custom_messages() {
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Box::new(CustomMessageExtension)).unwrap();
+
+    let composite = registry.wrap_hooks(Box::new(TestHooks));
+    let update = composite
+        .prepare_next_turn(PrepareNextTurnContext {
+            messages: vec![],
+            turn: 1,
+        })
+        .await
+        .expect("extension should inject next-turn messages");
+
+    assert_eq!(update.extra_messages.len(), 1);
+    match &update.extra_messages[0] {
+        AgentMessage::Custom(message) => {
+            assert_eq!(message.kind, "test/custom");
+            assert_eq!(message.data["from"], "extension");
+        }
+        other => panic!("expected custom message, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

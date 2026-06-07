@@ -258,7 +258,7 @@ async fn run_rpc(
     cli: &Cli,
     config: &opi_coding_agent::config::OpiConfig,
     resumed_messages: Option<Vec<opi_agent::message::AgentMessage>>,
-    _tool_selection: ToolSelection,
+    tool_selection: ToolSelection,
 ) -> i32 {
     use opi_coding_agent::rpc::RpcRunner;
     use opi_coding_agent::runner::ExitCode;
@@ -303,6 +303,7 @@ async fn run_rpc(
         config.clone(),
         workspace_root,
         allow_mutating,
+        tool_selection,
         user_system_prompt,
         resumed_messages.unwrap_or_default(),
     ) {
@@ -446,8 +447,6 @@ fn build_http_client(
 fn build_provider(
     config: &opi_coding_agent::config::OpiConfig,
 ) -> Result<Box<dyn opi_ai::provider::Provider>, ProviderBuildError> {
-    use opi_ai::provider::Provider;
-
     let spec = &config.defaults.model;
     let (provider_id, _) = spec.split_once(':').ok_or_else(|| {
         ProviderBuildError::Config(format!(
@@ -455,6 +454,16 @@ fn build_provider(
         ))
     })?;
 
+    build_runtime_provider(config, provider_id)
+}
+
+fn build_runtime_provider(
+    config: &opi_coding_agent::config::OpiConfig,
+    provider_id: &str,
+) -> Result<Box<dyn opi_ai::provider::Provider>, ProviderBuildError> {
+    use opi_ai::provider::Provider;
+
+    let spec = &config.defaults.model;
     match provider_id {
         "anthropic" => {
             let env_name = &config.providers.anthropic.api_key_env;
@@ -754,48 +763,21 @@ fn parse_keybindings(config: &opi_coding_agent::config::KeybindingsConfig) -> op
     }
 }
 
-/// Entry for --list-models output.
-struct ModelEntry {
-    provider_id: String,
-    model_id: String,
-    display_name: String,
-}
-
 /// List available models from all configured providers.
 /// Returns exit code: 0 on success, 1 if no models found, 2 on config error.
 fn list_models(config: &opi_coding_agent::config::OpiConfig, json_output: bool) -> i32 {
-    let mut entries: Vec<ModelEntry> = Vec::new();
-
-    macro_rules! try_provider {
-        ($build:expr, $provider_id:literal) => {
-            match $build {
-                Ok(provider) => {
-                    for m in provider.models() {
-                        entries.push(ModelEntry {
-                            provider_id: $provider_id.into(),
-                            model_id: m.id.clone(),
-                            display_name: m.display_name.clone(),
-                        });
-                    }
-                }
-                Err(ListModelsError::MissingCredentials) => {}
-                Err(ListModelsError::Config(msg)) => {
-                    eprintln!("opi: config error: {msg}");
-                    return 2;
-                }
-            }
-        };
-    }
-
-    try_provider!(build_anthropic(config), "anthropic");
-    try_provider!(build_openai(config), "openai");
-    try_provider!(build_openrouter(config), "openrouter");
-    try_provider!(build_mistral(config), "mistral");
-    try_provider!(build_openai_responses(config), "openai-responses");
-    try_provider!(build_gemini(config), "gemini");
-    try_provider!(build_bedrock(config), "bedrock");
-    try_provider!(build_azure(config), "azure");
-    try_provider!(build_vertex(config), "vertex");
+    let registry = match build_list_models_registry(config) {
+        Ok(registry) => registry,
+        Err(ListModelsError::MissingCredentials) => {
+            eprintln!("opi: no models available (configure API keys to list models)");
+            return 1;
+        }
+        Err(ListModelsError::Config(msg)) => {
+            eprintln!("opi: config error: {msg}");
+            return 2;
+        }
+    };
+    let entries = opi_coding_agent::model_listing::model_entries_from_registry(&registry);
 
     if entries.is_empty() {
         eprintln!("opi: no models available (configure API keys to list models)");
@@ -857,6 +839,54 @@ fn list_models(config: &opi_coding_agent::config::OpiConfig, json_output: bool) 
 
 // Lightweight provider builders for --list-models.
 // These try to construct providers but silently fail on missing auth.
+
+const BUILT_IN_PROVIDER_IDS: &[&str] = &[
+    "anthropic",
+    "openai",
+    "openrouter",
+    "mistral",
+    "openai-responses",
+    "gemini",
+    "bedrock",
+    "azure",
+    "vertex",
+];
+
+fn build_list_models_registry(
+    config: &opi_coding_agent::config::OpiConfig,
+) -> Result<opi_ai::ProviderRegistry, ListModelsError> {
+    let mut registry = opi_ai::ProviderRegistry::new();
+    for provider_id in BUILT_IN_PROVIDER_IDS {
+        match build_list_models_provider(config, provider_id) {
+            Ok(provider) => registry
+                .register_provider(provider)
+                .map_err(|e| ListModelsError::Config(e.to_string()))?,
+            Err(ListModelsError::MissingCredentials) => {}
+            Err(e @ ListModelsError::Config(_)) => return Err(e),
+        }
+    }
+    Ok(registry)
+}
+
+fn build_list_models_provider(
+    config: &opi_coding_agent::config::OpiConfig,
+    provider_id: &str,
+) -> Result<Box<dyn Provider>, ListModelsError> {
+    match provider_id {
+        "anthropic" => Ok(Box::new(build_anthropic(config)?) as Box<dyn Provider>),
+        "openai" => Ok(Box::new(build_openai(config)?) as Box<dyn Provider>),
+        "openrouter" => Ok(Box::new(build_openrouter(config)?) as Box<dyn Provider>),
+        "mistral" => Ok(Box::new(build_mistral(config)?) as Box<dyn Provider>),
+        "openai-responses" => Ok(Box::new(build_openai_responses(config)?) as Box<dyn Provider>),
+        "gemini" => Ok(Box::new(build_gemini(config)?) as Box<dyn Provider>),
+        "bedrock" => Ok(Box::new(build_bedrock(config)?) as Box<dyn Provider>),
+        "azure" => Ok(Box::new(build_azure(config)?) as Box<dyn Provider>),
+        "vertex" => Ok(Box::new(build_vertex(config)?) as Box<dyn Provider>),
+        other => Err(ListModelsError::Config(format!(
+            "unknown provider in built-in list: {other}"
+        ))),
+    }
+}
 
 fn build_anthropic(
     config: &opi_coding_agent::config::OpiConfig,

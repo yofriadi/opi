@@ -6,6 +6,9 @@
 
 use std::path::Path;
 
+use opi_agent::session::{LeafEntry, MessageEntry, SessionEntry};
+use opi_agent::session_branch::SessionTree;
+use opi_ai::message::{InputContent, Message, UserMessage};
 use opi_ai::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
 use opi_ai::stream::AssistantStreamEvent;
 use opi_coding_agent::picker;
@@ -129,6 +132,69 @@ fn model_picker_multiple_providers() {
     state.set_filter("gpt");
     assert_eq!(state.visible_count(), 1);
     assert_eq!(state.confirm().unwrap().id, "openai:gpt-4o");
+}
+
+#[test]
+fn model_picker_items_include_registry_model_overrides() {
+    let mut registry = sample_registry();
+    registry
+        .register_model(
+            "anthropic",
+            ModelInfo {
+                id: "custom-sonnet".into(),
+                display_name: "Custom Sonnet".into(),
+                context_window: 200000,
+                max_output_tokens: 8192,
+                supports_images: true,
+                supports_streaming: true,
+                supports_thinking: true,
+            },
+        )
+        .unwrap();
+
+    let items = picker::model_picker_items(&registry);
+
+    assert!(
+        items
+            .iter()
+            .any(|item| item.id == "anthropic:custom-sonnet" && item.display == "Custom Sonnet")
+    );
+}
+
+#[test]
+fn branch_picker_items_from_session_tree() {
+    let tree = SessionTree::from_entries(&[
+        test_user_entry("e1", None, "Root summary"),
+        test_user_entry("e2a", Some("e1"), "Branch A"),
+        test_user_entry("e2b", Some("e1"), "Branch B"),
+        SessionEntry::Leaf(LeafEntry {
+            id: "leaf-1".into(),
+            parent_id: None,
+            timestamp: "2026-06-01T12:03:00Z".into(),
+            entry_id: "e2a".into(),
+        }),
+    ]);
+
+    let items = picker::branch_picker_items(&tree);
+
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].id, "e1");
+    assert!(items[0].display.contains("Root summary"));
+    assert_eq!(items[1].id, "e2a");
+    assert!(items[1].display.contains("Branch A"));
+    assert!(items[1].metadata.contains("active"));
+}
+
+fn test_user_entry(id: &str, parent_id: Option<&str>, text: &str) -> SessionEntry {
+    SessionEntry::Message(MessageEntry {
+        id: id.into(),
+        parent_id: parent_id.map(str::to_owned),
+        timestamp: "2026-06-01T12:00:00Z".into(),
+        message: Message::User(UserMessage {
+            content: vec![InputContent::Text { text: text.into() }],
+            timestamp_ms: 0,
+        }),
+    })
 }
 
 // ---------------------------------------------------------------------------

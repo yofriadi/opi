@@ -15,10 +15,15 @@ use opi_web_ui::state::ConversationState;
 // ---------------------------------------------------------------------------
 
 fn opi_binary_path() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop(); // remove test binary name
-    path.pop(); // remove "deps"
-    path.push("opi");
+    if let Some(path) = option_env!("CARGO_BIN_EXE_opi") {
+        return std::path::PathBuf::from(path);
+    }
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let mut path = std::path::PathBuf::from(manifest_dir);
+    path.push("../../target/debug/opi");
+    if cfg!(windows) {
+        path.set_extension("exe");
+    }
     path
 }
 

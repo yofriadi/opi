@@ -94,6 +94,9 @@ impl SessionTree {
                 _ => {}
             }
         }
+        for child_ids in children.values_mut() {
+            child_ids.sort();
+        }
 
         // Find roots: entries whose parent is None or whose parent doesn't
         // exist in the graph. These are the starting points for branch walks.
@@ -108,11 +111,12 @@ impl SessionTree {
             .map(|(id, _)| id.as_str())
             .collect();
 
-        let roots: Vec<&str> = all_ids
+        let mut roots: Vec<&str> = all_ids
             .iter()
             .filter(|id| !has_valid_parent.contains(*id))
             .copied()
             .collect();
+        roots.sort_unstable();
 
         // Walk from each root to discover branches.
         let mut branches: Vec<BranchInfo> = Vec::new();
@@ -132,7 +136,10 @@ impl SessionTree {
 
         // Fallback: if no roots found but we have orphaned entries.
         if roots.is_empty() && !meta_by_id.is_empty() {
-            for (id, meta) in &meta_by_id {
+            let mut ids = meta_by_id.keys().collect::<Vec<_>>();
+            ids.sort();
+            for id in ids {
+                let meta = meta_by_id.get(id).expect("sorted id exists");
                 if visited.insert(id.clone()) {
                     branches.push(BranchInfo {
                         tip_id: id.clone(),

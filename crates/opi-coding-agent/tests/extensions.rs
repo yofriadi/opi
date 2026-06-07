@@ -11,13 +11,18 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use opi_agent::Agent;
+use opi_agent::event::AgentEvent;
 use opi_agent::extension::{Extension, ExtensionError, ExtensionHookResult, ExtensionRegistry};
 use opi_agent::hooks::AgentHooks;
 use opi_agent::loop_types::{AgentError, AgentLoopConfig};
 use opi_agent::message::AgentMessage;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_ai::message::{OutputContent, ToolDef};
+use opi_ai::provider::ModelInfo;
 use opi_ai::test_support::{MockProvider, text_response, tool_call_response};
+use opi_coding_agent::config::OpiConfig;
+use opi_coding_agent::harness::CodingHarness;
+use opi_coding_agent::policy::{RunMode, ToolRuntimeConfig, ToolSelection};
 use tokio_util::sync::CancellationToken;
 
 // ---------------------------------------------------------------------------
@@ -443,4 +448,334 @@ async fn extension_state_round_trip_through_agent() {
     registry2.restore_states(states).unwrap();
 
     assert_eq!(*count2.lock().unwrap(), 5);
+}
+
+#[tokio::test]
+async fn harness_builder_wraps_extension_registry_hooks_and_tools() {
+    struct BuilderTool;
+
+    impl Tool for BuilderTool {
+        fn definition(&self) -> ToolDef {
+            serde_json::from_value(serde_json::json!({
+                "name": "builder_echo",
+                "description": "builder extension echo",
+                "input_schema": { "type": "object", "properties": {} }
+            }))
+            .unwrap()
+        }
+
+        fn execute(
+            &self,
+            _call_id: &str,
+            _arguments: serde_json::Value,
+            _signal: CancellationToken,
+            _on_update: Option<opi_agent::tool::UpdateCallback>,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>> {
+            Box::pin(async {
+                Ok(ToolResult {
+                    content: vec![OutputContent::Text {
+                        text: "builder tool executed".into(),
+                    }],
+                    details: None,
+                    is_error: false,
+                    terminate: false,
+                })
+            })
+        }
+    }
+
+    struct BuilderExtension {
+        before_calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Extension for BuilderExtension {
+        fn name(&self) -> &str {
+            "builder-extension"
+        }
+
+        fn tools(&self) -> Vec<Box<dyn Tool>> {
+            vec![Box::new(BuilderTool)]
+        }
+
+        fn on_before_tool_call(
+            &self,
+            tool_name: &str,
+            _args: &serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = ExtensionHookResult> + Send>> {
+            let tool_name = tool_name.to_string();
+            let before_calls = self.before_calls.clone();
+            Box::pin(async move {
+                before_calls.lock().unwrap().push(tool_name);
+                ExtensionHookResult::Continue
+            })
+        }
+    }
+
+    let before_calls = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(BuilderExtension {
+            before_calls: before_calls.clone(),
+        }))
+        .unwrap();
+
+    let provider = MockProvider::new(
+        "mock",
+        vec![
+            tool_call_response("tc_builder", "builder_echo", "{}"),
+            text_response("Done"),
+        ],
+    );
+    let workspace = tempfile::tempdir().unwrap();
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .extension_registry(registry)
+    .tool_config(ToolRuntimeConfig {
+        run_mode: RunMode::Interactive,
+        active_tool_names: Vec::new(),
+    })
+    .build();
+
+    assert!(harness.system_prompt().contains("builder_echo"));
+    assert!(
+        harness
+            .resource_metadata()
+            .extensions
+            .iter()
+            .any(|entry| entry.name == "builder-extension")
+    );
+
+    let messages = harness.prompt("use builder tool").await.unwrap();
+    assert!(messages.len() >= 3);
+    assert_eq!(
+        before_calls.lock().unwrap().as_slice(),
+        ["builder_echo".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn harness_builder_extension_observes_agent_events() {
+    struct EventRecorderExtension {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl Extension for EventRecorderExtension {
+        fn name(&self) -> &str {
+            "event-recorder"
+        }
+
+        fn on_event(&self, event: &AgentEvent) {
+            let label = match event {
+                AgentEvent::AgentStart => "AgentStart",
+                AgentEvent::TurnStart => "TurnStart",
+                AgentEvent::MessageStart { .. } => "MessageStart",
+                AgentEvent::AgentEnd { .. } => "AgentEnd",
+                _ => return,
+            };
+            self.events.lock().unwrap().push(label);
+        }
+    }
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(EventRecorderExtension {
+            events: events.clone(),
+        }))
+        .unwrap();
+
+    let provider = MockProvider::new("mock", vec![text_response("Done")]);
+    let workspace = tempfile::tempdir().unwrap();
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .extension_registry(registry)
+    .tool_selection(ToolSelection::Disabled)
+    .build();
+
+    harness.prompt("hello").await.unwrap();
+
+    let recorded = events.lock().unwrap().clone();
+    assert!(
+        recorded.contains(&"AgentStart"),
+        "recorded events: {recorded:?}"
+    );
+    assert!(
+        recorded.contains(&"TurnStart"),
+        "recorded events: {recorded:?}"
+    );
+    assert!(
+        recorded.contains(&"MessageStart"),
+        "recorded events: {recorded:?}"
+    );
+    assert!(
+        recorded.contains(&"AgentEnd"),
+        "recorded events: {recorded:?}"
+    );
+}
+
+#[tokio::test]
+async fn harness_builder_tool_selection_disabled_filters_extension_tools() {
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(IntegrationExtension::new()))
+        .unwrap();
+    let provider = MockProvider::new("mock", vec![text_response("Done")]);
+    let workspace = tempfile::tempdir().unwrap();
+
+    let harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .extension_registry(registry)
+    .tool_selection(ToolSelection::Disabled)
+    .build();
+
+    assert!(!harness.system_prompt().contains("ext_echo"));
+}
+
+#[tokio::test]
+async fn harness_builder_tool_selection_allowlist_filters_extension_tools_by_name() {
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(IntegrationExtension::new()))
+        .unwrap();
+    let provider = MockProvider::new("mock", vec![text_response("Done")]);
+    let workspace = tempfile::tempdir().unwrap();
+
+    let harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .extension_registry(registry)
+    .tool_selection(ToolSelection::Allowlist(vec!["ext_echo".to_owned()]))
+    .build();
+
+    assert!(harness.system_prompt().contains("ext_echo"));
+    assert!(!harness.system_prompt().contains("read_file"));
+}
+
+#[tokio::test]
+async fn harness_builder_tool_selection_allowlist_excludes_unlisted_extension_tools() {
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(IntegrationExtension::new()))
+        .unwrap();
+    let provider = MockProvider::new("mock", vec![text_response("Done")]);
+    let workspace = tempfile::tempdir().unwrap();
+
+    let harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .extension_registry(registry)
+    .tool_selection(ToolSelection::Allowlist(vec!["read".to_owned()]))
+    .build();
+
+    assert!(!harness.system_prompt().contains("ext_echo"));
+}
+
+#[test]
+fn harness_builder_model_picker_includes_current_provider_extension_overrides() {
+    struct ModelOverrideExtension;
+
+    impl Extension for ModelOverrideExtension {
+        fn name(&self) -> &str {
+            "model-override-extension"
+        }
+
+        fn model_overrides(&self) -> Vec<(String, ModelInfo)> {
+            vec![(
+                "mock".into(),
+                ModelInfo {
+                    id: "custom-model".into(),
+                    display_name: "Custom Model".into(),
+                    context_window: 100_000,
+                    max_output_tokens: 4_096,
+                    supports_images: true,
+                    supports_streaming: true,
+                    supports_thinking: false,
+                },
+            )]
+        }
+    }
+
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Box::new(ModelOverrideExtension)).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+
+    let harness = CodingHarness::builder(
+        Box::new(MockProvider::new("mock", vec![text_response("Done")])),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .extension_registry(registry)
+    .build();
+
+    let items = harness.model_picker_items();
+
+    assert!(
+        items
+            .iter()
+            .any(|item| item.id == "mock:custom-model" && item.display == "Custom Model")
+    );
+}
+
+#[test]
+fn harness_builder_set_model_validated_accepts_current_provider_extension_overrides() {
+    struct ModelOverrideExtension;
+
+    impl Extension for ModelOverrideExtension {
+        fn name(&self) -> &str {
+            "model-override-extension"
+        }
+
+        fn model_overrides(&self) -> Vec<(String, ModelInfo)> {
+            vec![(
+                "mock".into(),
+                ModelInfo {
+                    id: "custom-model".into(),
+                    display_name: "Custom Model".into(),
+                    context_window: 100_000,
+                    max_output_tokens: 4_096,
+                    supports_images: true,
+                    supports_streaming: true,
+                    supports_thinking: false,
+                },
+            )]
+        }
+    }
+
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Box::new(ModelOverrideExtension)).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+
+    let mut harness = CodingHarness::builder(
+        Box::new(MockProvider::new("mock", vec![text_response("Done")])),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .extension_registry(registry)
+    .build();
+
+    let selected = harness
+        .set_model_validated("mock:custom-model".into())
+        .unwrap();
+
+    assert_eq!(selected, "mock:custom-model");
 }

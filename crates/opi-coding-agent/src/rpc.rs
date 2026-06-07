@@ -1,4 +1,4 @@
-//! RPC JSONL mode — bidirectional command/event protocol over stdin/stdout.
+//! RPC JSONL mode: bidirectional command/event protocol over stdin/stdout.
 //!
 //! RPC mode enables headless operation of the coding agent via a strict JSONL
 //! protocol. Commands arrive on stdin (one JSON object per line), responses
@@ -7,53 +7,46 @@
 //!
 //! # Protocol version
 //!
-//! This is an **unstable 0.x** protocol. The schema may change between minor
+//! This is an unstable 0.x protocol. The schema may change between minor
 //! versions without notice. Clients MUST check `schema_version` in the
 //! `rpc_ready` header.
 //!
 //! # Framing
 //!
 //! LF (`\n`) is the only record delimiter. Clients MUST split on `\n` only
-//! and SHOULD strip a trailing `\r` if present. Generic line readers that
-//! split on Unicode separators (U+2028, U+2029) are not protocol-compliant.
+//! and SHOULD strip a trailing `\r` if present.
 //!
 //! # Commands
 //!
 //! | Command           | Description                                      |
 //! |-------------------|--------------------------------------------------|
 //! | `prompt`          | Send user prompt, stream agent events            |
-//! | `continue`        | Continue conversation with additional text        |
-//! | `steer`           | Queue steering message during agent operation     |
-//! | `follow_up`       | Queue follow-up message for after agent stops     |
-//! | `abort`           | Cancel current agent operation                    |
-//! | `set_model`       | Switch provider:model                             |
-//! | `set_thinking_level` | Set reasoning/thinking level                   |
-//! | `compact`         | Trigger manual compaction                         |
-//! | `session_info`    | Query session metadata                            |
-//! | `quit`            | Shut down the RPC session                         |
+//! | `continue`        | Continue conversation with additional text       |
+//! | `steer`           | Queue steering message during agent operation    |
+//! | `follow_up`       | Queue follow-up message for after agent stops    |
+//! | `abort`           | Cancel current agent operation                   |
+//! | `set_model`       | Switch provider:model                            |
+//! | `set_thinking_level` | Set reasoning/thinking level                  |
+//! | `compact`         | Trigger manual compaction                        |
+//! | `session_info`    | Query session metadata                           |
+//! | `quit`            | Shut down the RPC session                        |
 //!
-//! # Responses
+//! # Responses and Errors
 //!
 //! Every command produces at most one `response` object. For `prompt` and
-//! `continue`, `success: true` means the command was accepted; agent events
-//! (including errors after acceptance) arrive as async `event` lines.
+//! `continue`, `success: true` means the turn was accepted; subsequent agent
+//! output arrives as asynchronous event lines. Errors after acceptance are
+//! surfaced as events, not as a second response.
 //!
-//! # Error semantics
-//!
-//! - **Parse errors**: `{"type":"response","command":"parse","success":false,"error":"..."}`
-//! - **Command rejected**: `{"type":"response","command":"<cmd>","success":false,"error":"..."}`
-//! - **Agent errors after acceptance**: emitted as regular agent events, not as a second response.
-//!
-//! # Cancellation
-//!
-//! `abort` cancels the current agent operation via the cancellation token.
-//! The agent returns a `Cancelled` error which surfaces as an `agent_end`
-//! event. A second `abort` while idle is a no-op (returns success).
+//! `abort` cancels the active operation and succeeds immediately when a turn is
+//! running. A second `abort` while idle is a successful no-op.
 
-use std::io::{self, Write as IoWrite};
+use std::io::{self, BufRead, Write as IoWrite};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
+use opi_agent::agent::AgentControl;
 use opi_agent::event::AgentEvent;
 use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
@@ -66,24 +59,30 @@ use crate::harness::CodingHarness;
 use crate::policy::{RunMode, ToolSelection};
 use crate::runner::ExitCode;
 
+const ACTIVE_RUN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Re-export the SDK command type as the RPC command type.
-///
-/// The canonical definition lives in [`opi_agent::sdk::SdkCommand`]; this
-/// alias preserves the `RpcCommand` name for backward-compat within the
-/// crate while ensuring no protocol logic is duplicated.
 pub type RpcCommand = SdkCommand;
 
 /// Re-export the SDK schema version for crate-level access (e.g. tests).
 pub const RPC_SCHEMA_VERSION: u32 = SDK_SCHEMA_VERSION;
 
-// ---------------------------------------------------------------------------
-// Runner
-// ---------------------------------------------------------------------------
+enum RpcInput {
+    Command(SdkCommand),
+    ParseError(String),
+}
 
-/// RPC runner that owns the harness and processes commands from stdin.
+enum ActiveRun {
+    Prompt(String),
+    Continue(String),
+}
+
+type RunResult = (CodingHarness, Result<Vec<AgentMessage>, AgentError>);
+
+/// RPC runner that owns the harness and processes commands.
 pub struct RpcRunner {
-    harness: CodingHarness,
-    /// Whether the agent is currently processing a prompt/continue.
+    harness: Option<CodingHarness>,
+    control: AgentControl,
     running: bool,
 }
 
@@ -96,13 +95,14 @@ impl RpcRunner {
         config: OpiConfig,
         workspace_root: PathBuf,
         allow_mutating: bool,
+        tool_selection: ToolSelection,
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
     ) -> Result<Self, crate::policy::ToolPolicyError> {
         let tool_config = crate::policy::ToolRuntimeConfig::resolve(
             RunMode::NonInteractive,
             allow_mutating,
-            ToolSelection::Default,
+            tool_selection,
         )?;
         let hooks = Box::new(crate::runner::NonInteractiveHooks::new(allow_mutating));
         let harness = CodingHarness::new_with_hooks_and_resume_tool_config(
@@ -116,294 +116,504 @@ impl RpcRunner {
             None,
             tool_config,
         );
+        let control = harness.control_handle();
         Ok(Self {
-            harness,
+            harness: Some(harness),
+            control,
             running: false,
         })
     }
 
-    /// Run the RPC main loop. Returns an exit code.
+    /// Return the assembled system prompt while the runner is idle.
+    pub fn system_prompt(&self) -> Option<&str> {
+        self.harness.as_ref().map(CodingHarness::system_prompt)
+    }
+
+    /// Run the RPC main loop over stdin/stdout. Returns an exit code.
     pub async fn run(&mut self) -> i32 {
+        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::task::spawn_blocking(move || {
+            let stdin = io::stdin();
+            let reader = io::BufReader::new(stdin.lock());
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(line) => line,
+                    Err(_) => break,
+                };
+                let trimmed = line.trim_end_matches('\r').trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let input = match serde_json::from_str::<SdkCommand>(trimmed) {
+                    Ok(command) => RpcInput::Command(command),
+                    Err(e) => RpcInput::ParseError(format!("failed to parse command: {e}")),
+                };
+                if input_tx.send(input).is_err() {
+                    break;
+                }
+            }
+        });
+
         let stdout = io::stdout();
         let mut writer = io::BufWriter::new(stdout.lock());
-        let stdin = io::stdin();
+        self.run_loop(input_rx, |value| {
+            write_jsonl(&mut writer, value)
+                .and_then(|_| writer.flush())
+                .is_ok()
+        })
+        .await
+    }
 
-        // Write the rpc_ready header.
+    /// Run the RPC main loop with in-process command and output channels.
+    ///
+    /// This is intended for tests and SDK-style embedders that already have
+    /// structured commands. Stdin parsing is covered by `run`.
+    pub async fn run_with_channels(
+        &mut self,
+        mut command_rx: tokio::sync::mpsc::UnboundedReceiver<SdkCommand>,
+        output_tx: tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
+    ) -> i32 {
+        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(command) = command_rx.recv().await {
+                if input_tx.send(RpcInput::Command(command)).is_err() {
+                    break;
+                }
+            }
+        });
+
+        self.run_loop(input_rx, |value| output_tx.send(value.clone()).is_ok())
+            .await
+    }
+
+    async fn run_loop(
+        &mut self,
+        mut input_rx: tokio::sync::mpsc::UnboundedReceiver<RpcInput>,
+        mut emit: impl FnMut(&serde_json::Value) -> bool,
+    ) -> i32 {
         let header = serde_json::json!({
             "type": "rpc_ready",
             "schema_version": SDK_SCHEMA_VERSION,
             "mode": "rpc",
             "version": env!("CARGO_PKG_VERSION"),
         });
-        if write_jsonl(&mut writer, &header).is_err() {
+        if !emit(&header) {
             return ExitCode::RuntimeFailure as i32;
         }
 
-        // Set up event forwarding: subscriber callback → channel → stdout.
-        let (event_tx, mut event_rx): (
-            tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
-            tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
-        ) = tokio::sync::mpsc::unbounded_channel();
-
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
         let event_tx = Arc::new(event_tx);
-        let etx = event_tx.clone();
-        self.harness.subscribe(Box::new(move |event: &AgentEvent| {
-            let rpc_event = agent_event_to_value(event);
-            let _ = etx.send(rpc_event);
-        }));
+        if let Some(harness) = self.harness.as_mut() {
+            let etx = event_tx.clone();
+            harness.subscribe(Box::new(move |event: &AgentEvent| {
+                let _ = etx.send(agent_event_to_value(event));
+            }));
+        }
 
-        // Clone the cancel token for abort during prompt operations.
-        let cancel_token = self.harness.cancel_token();
+        let mut run_task: Option<tokio::task::JoinHandle<RunResult>> = None;
 
-        // Buffered stdin reader.
-        let reader = io::BufReader::new(stdin.lock());
-        let mut lines = reader.lines();
-
-        // Main loop.
         loop {
-            // Flush any pending event output before reading the next command.
-            let _ = writer.flush();
-
-            // Try to drain events first (non-blocking).
-            while let Ok(event) = event_rx.try_recv() {
-                if write_jsonl(&mut writer, &event).is_err() {
-                    return ExitCode::RuntimeFailure as i32;
-                }
-            }
-            let _ = writer.flush();
-
-            // Read next command line (blocking).
-            let line = match lines.next() {
-                Some(Ok(l)) => l,
-                Some(Err(_)) | None => {
-                    // EOF or read error — flush events and exit.
-                    drain_events(&mut event_rx, &mut writer);
-                    return ExitCode::Success as i32;
-                }
-            };
-
-            let trimmed = line.trim_end_matches('\r').trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-
-            // Parse command.
-            let cmd = match serde_json::from_str::<SdkCommand>(trimmed) {
-                Ok(c) => c,
-                Err(e) => {
-                    let resp = serde_json::to_value(SdkResponse::error(
-                        None,
-                        "parse",
-                        &format!("failed to parse command: {e}"),
-                    ))
-                    .unwrap();
-                    let _ = write_jsonl(&mut writer, &resp);
-                    let _ = writer.flush();
-                    continue;
-                }
-            };
-
-            let cmd_id = cmd.id().map(String::from);
-            let cmd_name = cmd.command_name();
-
-            if cmd.is_quit() {
-                let resp = serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
-                    .unwrap();
-                let _ = write_jsonl(&mut writer, &resp);
-                let _ = writer.flush();
-                drain_events(&mut event_rx, &mut writer);
-                return ExitCode::Success as i32;
-            }
-
-            match cmd {
-                SdkCommand::prompt { message, .. } => {
-                    self.running = true;
-                    // Respond immediately — success means accepted.
-                    let resp =
-                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
-                            .unwrap();
-                    let _ = write_jsonl(&mut writer, &resp);
-                    let _ = writer.flush();
-
-                    let result = self.harness.prompt(&message).await;
-                    self.running = false;
-                    self.handle_agent_result(&mut writer, result);
-                    drain_events(&mut event_rx, &mut writer);
-                }
-                SdkCommand::continue_ { message, .. } => {
-                    if !self.running {
-                        self.running = true;
-                        let resp =
-                            serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
-                                .unwrap();
-                        let _ = write_jsonl(&mut writer, &resp);
-                        let _ = writer.flush();
-
-                        let result = self.harness.continue_(&message).await;
-                        self.running = false;
-                        self.handle_agent_result(&mut writer, result);
-                        drain_events(&mut event_rx, &mut writer);
-                    } else {
-                        let resp = serde_json::to_value(SdkResponse::error(
-                            cmd_id.as_deref(),
-                            cmd_name,
-                            "agent is already running; use steer or follow_up to queue messages",
-                        ))
-                        .unwrap();
-                        let _ = write_jsonl(&mut writer, &resp);
-                        let _ = writer.flush();
+            tokio::select! {
+                Some(event) = event_rx.recv() => {
+                    if !emit(&event) {
+                        return self
+                            .runtime_failure_after_emit_failure(
+                                &mut run_task,
+                                &mut event_rx,
+                                &mut emit,
+                            )
+                            .await;
                     }
                 }
-                SdkCommand::abort { .. } => {
-                    cancel_token.cancel();
-                    let resp =
-                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
-                            .unwrap();
-                    let _ = write_jsonl(&mut writer, &resp);
-                    let _ = writer.flush();
-                }
-                SdkCommand::set_model { model, .. } => {
-                    if self.running {
-                        let resp = serde_json::to_value(SdkResponse::error(
-                            cmd_id.as_deref(),
-                            cmd_name,
-                            "cannot change model while agent is running",
-                        ))
-                        .unwrap();
-                        let _ = write_jsonl(&mut writer, &resp);
-                        let _ = writer.flush();
-                    } else {
-                        self.harness.set_model(model);
-                        let resp =
-                            serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
-                                .unwrap();
-                        let _ = write_jsonl(&mut writer, &resp);
-                        let _ = writer.flush();
-                    }
-                }
-                SdkCommand::set_thinking_level { level, .. } => {
-                    // Thinking level is controlled through AgentLoopConfig.
-                    // For now, acknowledge the command. Full implementation
-                    // requires updating the agent config at runtime.
-                    let _ = level; // accepted but no-op until agent supports runtime config changes
-                    let resp =
-                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
-                            .unwrap();
-                    let _ = write_jsonl(&mut writer, &resp);
-                    let _ = writer.flush();
-                }
-                SdkCommand::compact { .. } => {
-                    if self.running {
-                        let resp = serde_json::to_value(SdkResponse::error(
-                            cmd_id.as_deref(),
-                            cmd_name,
-                            "cannot compact while agent is running",
-                        ))
-                        .unwrap();
-                        let _ = write_jsonl(&mut writer, &resp);
-                        let _ = writer.flush();
-                    } else {
-                        match self.harness.compact(CompactionReason::Manual) {
-                            Ok(Some(result)) => {
-                                let data = serde_json::json!({
-                                    "summary": result.summary,
-                                    "first_kept_entry_id": result.first_kept_entry_id,
-                                    "tokens_before": result.tokens_before,
-                                    "tokens_after": result.tokens_after,
-                                });
-                                let resp = serde_json::to_value(SdkResponse::success_with_data(
-                                    cmd_id.as_deref(),
-                                    cmd_name,
-                                    data,
-                                ))
-                                .unwrap();
-                                let _ = write_jsonl(&mut writer, &resp);
-                                let _ = writer.flush();
+                input = input_rx.recv() => {
+                    match input {
+                        None => {
+                            if !self
+                                .shutdown_active_run(&mut run_task, &mut event_rx, &mut emit)
+                                .await
+                            {
+                                return ExitCode::RuntimeFailure as i32;
                             }
-                            Ok(None) => {
-                                let resp = serde_json::to_value(SdkResponse::error(
-                                    cmd_id.as_deref(),
-                                    cmd_name,
-                                    "compaction produced no output",
-                                ))
-                                .unwrap();
-                                let _ = write_jsonl(&mut writer, &resp);
-                                let _ = writer.flush();
-                            }
-                            Err(e) => {
-                                let resp = serde_json::to_value(SdkResponse::error(
-                                    cmd_id.as_deref(),
-                                    cmd_name,
-                                    &e,
-                                ))
-                                .unwrap();
-                                let _ = write_jsonl(&mut writer, &resp);
-                                let _ = writer.flush();
+                            drain_events(&mut event_rx, &mut emit);
+                            return ExitCode::Success as i32;
+                        }
+                        Some(input) => match input {
+                        RpcInput::ParseError(message) => {
+                            let resp = response_error(None, "parse", &message);
+                            if !emit(&resp) {
+                                return self
+                                    .runtime_failure_after_emit_failure(
+                                        &mut run_task,
+                                        &mut event_rx,
+                                        &mut emit,
+                                    )
+                                    .await;
                             }
                         }
+                        RpcInput::Command(command) => {
+                            if command.is_quit() {
+                                let cmd_id = command.id().map(String::from);
+                                let cmd_name = command.command_name();
+                                let resp = response_success(cmd_id.as_deref(), cmd_name);
+                                if !emit(&resp) {
+                                    return self
+                                        .runtime_failure_after_emit_failure(
+                                            &mut run_task,
+                                            &mut event_rx,
+                                            &mut emit,
+                                        )
+                                        .await;
+                                }
+                                if !self
+                                    .shutdown_active_run(&mut run_task, &mut event_rx, &mut emit)
+                                    .await
+                                {
+                                    return ExitCode::RuntimeFailure as i32;
+                                }
+                                drain_events(&mut event_rx, &mut emit);
+                                return ExitCode::Success as i32;
+                            }
+
+                            if !self.handle_command(command, &mut run_task, &mut emit) {
+                                let _ = self
+                                    .shutdown_active_run(&mut run_task, &mut event_rx, &mut emit)
+                                    .await;
+                                return ExitCode::RuntimeFailure as i32;
+                            }
+                        }
+                        },
                     }
                 }
-                SdkCommand::session_info { .. } => {
-                    let mut data = serde_json::json!({
-                        "model": self.harness.model(),
-                    });
-                    if let Some(session) = self.harness.session() {
-                        data["session_id"] =
-                            serde_json::Value::String(session.session_id().to_owned());
+                joined = async {
+                    match run_task.as_mut() {
+                        Some(task) => task.await,
+                        None => std::future::pending().await,
                     }
-                    let resp = serde_json::to_value(SdkResponse::success_with_data(
-                        cmd_id.as_deref(),
-                        cmd_name,
-                        data,
-                    ))
-                    .unwrap();
-                    let _ = write_jsonl(&mut writer, &resp);
-                    let _ = writer.flush();
+                }, if run_task.is_some() => {
+                    let _ = run_task.take();
+                    if !self.complete_run_task(joined, &mut emit) {
+                        return ExitCode::RuntimeFailure as i32;
+                    }
+                    drain_events(&mut event_rx, &mut emit);
                 }
-                SdkCommand::steer { message, .. } => {
-                    self.harness.steer(message);
-                    let resp =
-                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
-                            .unwrap();
-                    let _ = write_jsonl(&mut writer, &resp);
-                    let _ = writer.flush();
+                else => {
+                    if !self
+                        .shutdown_active_run(&mut run_task, &mut event_rx, &mut emit)
+                        .await
+                    {
+                        return ExitCode::RuntimeFailure as i32;
+                    }
+                    drain_events(&mut event_rx, &mut emit);
+                    return ExitCode::Success as i32;
                 }
-                SdkCommand::follow_up { message, .. } => {
-                    self.harness.follow_up(message);
-                    let resp =
-                        serde_json::to_value(SdkResponse::success(cmd_id.as_deref(), cmd_name))
-                            .unwrap();
-                    let _ = write_jsonl(&mut writer, &resp);
-                    let _ = writer.flush();
-                }
-                _ => unreachable!(), // quit handled above
             }
         }
     }
 
-    fn handle_agent_result(
-        &self,
-        writer: &mut io::BufWriter<io::StdoutLock<'_>>,
-        result: Result<Vec<AgentMessage>, AgentError>,
-    ) {
-        // Agent errors after acceptance are already surfaced through events.
-        // We emit a summary line here for the RPC client to detect completion.
-        match result {
-            Ok(_) => {}
-            Err(AgentError::Cancelled) => {
-                // Already surfaced via events; no extra response needed.
+    async fn runtime_failure_after_emit_failure(
+        &mut self,
+        run_task: &mut Option<tokio::task::JoinHandle<RunResult>>,
+        event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+        emit: &mut impl FnMut(&serde_json::Value) -> bool,
+    ) -> i32 {
+        let _ = self.shutdown_active_run(run_task, event_rx, emit).await;
+        ExitCode::RuntimeFailure as i32
+    }
+
+    async fn shutdown_active_run(
+        &mut self,
+        run_task: &mut Option<tokio::task::JoinHandle<RunResult>>,
+        event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+        emit: &mut impl FnMut(&serde_json::Value) -> bool,
+    ) -> bool {
+        if self.running {
+            self.control.abort();
+        }
+
+        let Some(mut task) = run_task.take() else {
+            self.running = false;
+            return true;
+        };
+
+        match tokio::time::timeout(ACTIVE_RUN_SHUTDOWN_TIMEOUT, &mut task).await {
+            Ok(joined) => {
+                let ok = self.complete_run_task(joined, emit);
+                drain_events(event_rx, emit);
+                ok
             }
             Err(_) => {
-                // Other errors also surfaced via events.
+                task.abort();
+                let joined = task.await;
+                let ok = self.complete_run_task(joined, emit);
+                let timeout_event = serde_json::json!({
+                    "type": "SessionPersistError",
+                    "message": "rpc active run did not stop before shutdown timeout; task aborted",
+                });
+                drain_events(event_rx, emit);
+                ok && emit(&timeout_event)
             }
         }
-        let _ = writer.flush();
+    }
+
+    fn complete_run_task(
+        &mut self,
+        joined: Result<RunResult, tokio::task::JoinError>,
+        emit: &mut impl FnMut(&serde_json::Value) -> bool,
+    ) -> bool {
+        self.running = false;
+        match joined {
+            Ok((harness, result)) => {
+                self.harness = Some(harness);
+                self.handle_agent_result(result);
+                true
+            }
+            Err(e) => {
+                let event = serde_json::json!({
+                    "type": "SessionPersistError",
+                    "message": format!("rpc run task failed: {e}"),
+                });
+                let _ = emit(&event);
+                false
+            }
+        }
+    }
+
+    fn handle_command(
+        &mut self,
+        command: SdkCommand,
+        run_task: &mut Option<tokio::task::JoinHandle<RunResult>>,
+        emit: &mut impl FnMut(&serde_json::Value) -> bool,
+    ) -> bool {
+        let cmd_id = command.id().map(String::from);
+        let cmd_name = command.command_name();
+
+        match command {
+            SdkCommand::prompt { message, .. } => self.start_run(
+                ActiveRun::Prompt(message),
+                cmd_id.as_deref(),
+                cmd_name,
+                run_task,
+                emit,
+            ),
+            SdkCommand::continue_ { message, .. } => self.start_run(
+                ActiveRun::Continue(message),
+                cmd_id.as_deref(),
+                cmd_name,
+                run_task,
+                emit,
+            ),
+            SdkCommand::abort { .. } => {
+                if self.running {
+                    self.control.abort();
+                }
+                emit(&response_success(cmd_id.as_deref(), cmd_name))
+            }
+            SdkCommand::steer { message, .. } => {
+                if self.running {
+                    self.control.steer(message);
+                } else if let Some(harness) = self.harness.as_ref() {
+                    harness.steer(message);
+                }
+                emit(&response_success(cmd_id.as_deref(), cmd_name))
+            }
+            SdkCommand::follow_up { message, .. } => {
+                if self.running {
+                    self.control.follow_up(message);
+                } else if let Some(harness) = self.harness.as_ref() {
+                    harness.follow_up(message);
+                }
+                emit(&response_success(cmd_id.as_deref(), cmd_name))
+            }
+            SdkCommand::set_model { model, .. } => {
+                if self.running {
+                    return emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "cannot change model while agent is running",
+                    ));
+                }
+                if let Some(harness) = self.harness.as_mut() {
+                    match harness.set_model_validated(model) {
+                        Ok(model) => {
+                            let data = serde_json::json!({ "model": model });
+                            emit(&response_success_with_data(
+                                cmd_id.as_deref(),
+                                cmd_name,
+                                data,
+                            ))
+                        }
+                        Err(e) => emit(&response_error(cmd_id.as_deref(), cmd_name, &e)),
+                    }
+                } else {
+                    emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "agent harness is unavailable",
+                    ))
+                }
+            }
+            SdkCommand::set_thinking_level { level, .. } => {
+                if self.running {
+                    return emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "cannot change thinking level while agent is running",
+                    ));
+                }
+                let Some(harness) = self.harness.as_mut() else {
+                    return emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "agent harness is unavailable",
+                    ));
+                };
+                match harness.set_thinking_level(&level) {
+                    Ok(state) => {
+                        let data = serde_json::json!({
+                            "level": state.level,
+                            "enabled": state.enabled,
+                            "budget_tokens": state.budget_tokens,
+                        });
+                        emit(&response_success_with_data(
+                            cmd_id.as_deref(),
+                            cmd_name,
+                            data,
+                        ))
+                    }
+                    Err(e) => emit(&response_error(cmd_id.as_deref(), cmd_name, &e)),
+                }
+            }
+            SdkCommand::compact { .. } => {
+                if self.running {
+                    return emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "cannot compact while agent is running",
+                    ));
+                }
+                let Some(harness) = self.harness.as_mut() else {
+                    return emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "agent harness is unavailable",
+                    ));
+                };
+                match harness.compact(CompactionReason::Manual) {
+                    Ok(Some(result)) => {
+                        let data = serde_json::json!({
+                            "summary": result.summary,
+                            "first_kept_entry_id": result.first_kept_entry_id,
+                            "tokens_before": result.tokens_before,
+                            "tokens_after": result.tokens_after,
+                        });
+                        emit(&response_success_with_data(
+                            cmd_id.as_deref(),
+                            cmd_name,
+                            data,
+                        ))
+                    }
+                    Ok(None) => emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "compaction produced no output",
+                    )),
+                    Err(e) => emit(&response_error(cmd_id.as_deref(), cmd_name, &e)),
+                }
+            }
+            SdkCommand::session_info { .. } => {
+                if self.running {
+                    return emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "cannot query session info while agent is running",
+                    ));
+                }
+                let Some(harness) = self.harness.as_ref() else {
+                    return emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "agent harness is unavailable",
+                    ));
+                };
+                let mut data = serde_json::json!({
+                    "model": harness.model(),
+                    "resources": harness.resource_metadata_json(),
+                });
+                if let Some(session) = harness.session() {
+                    data["session_id"] = serde_json::Value::String(session.session_id().to_owned());
+                }
+                emit(&response_success_with_data(
+                    cmd_id.as_deref(),
+                    cmd_name,
+                    data,
+                ))
+            }
+            SdkCommand::quit { .. } => true,
+        }
+    }
+
+    fn start_run(
+        &mut self,
+        run: ActiveRun,
+        id: Option<&str>,
+        command: &str,
+        run_task: &mut Option<tokio::task::JoinHandle<RunResult>>,
+        emit: &mut impl FnMut(&serde_json::Value) -> bool,
+    ) -> bool {
+        if self.running {
+            return emit(&response_error(
+                id,
+                command,
+                "agent is already running; use steer or follow_up to queue messages",
+            ));
+        }
+
+        if self.harness.is_none() {
+            return emit(&response_error(id, command, "agent harness is unavailable"));
+        }
+
+        if !emit(&response_success(id, command)) {
+            return false;
+        }
+
+        let mut harness = self.harness.take().expect("harness checked above");
+        harness.reset_cancel_if_cancelled();
+        self.control = harness.control_handle();
+        self.running = true;
+
+        *run_task = Some(tokio::spawn(async move {
+            let result = match run {
+                ActiveRun::Prompt(message) => harness.prompt(&message).await,
+                ActiveRun::Continue(message) => harness.continue_(&message).await,
+            };
+            (harness, result)
+        }));
+        true
+    }
+
+    fn handle_agent_result(&self, result: Result<Vec<AgentMessage>, AgentError>) {
+        match result {
+            Ok(_) | Err(AgentError::Cancelled) => {}
+            Err(_) => {}
+        }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+fn response_success(id: Option<&str>, command: &str) -> serde_json::Value {
+    serde_json::to_value(SdkResponse::success(id, command)).unwrap()
+}
+
+fn response_success_with_data(
+    id: Option<&str>,
+    command: &str,
+    data: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::to_value(SdkResponse::success_with_data(id, command, data)).unwrap()
+}
+
+fn response_error(id: Option<&str>, command: &str, message: &str) -> serde_json::Value {
+    serde_json::to_value(SdkResponse::error(id, command, message)).unwrap()
+}
 
 /// Write a JSON value as a single line to the writer.
 fn write_jsonl(writer: &mut dyn IoWrite, value: &serde_json::Value) -> io::Result<()> {
@@ -411,21 +621,13 @@ fn write_jsonl(writer: &mut dyn IoWrite, value: &serde_json::Value) -> io::Resul
     writer.write_all(b"\n")
 }
 
-/// Drain all pending events from the channel and write them.
 fn drain_events(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
-    writer: &mut io::BufWriter<io::StdoutLock<'_>>,
+    emit: &mut impl FnMut(&serde_json::Value) -> bool,
 ) {
     while let Ok(event) = rx.try_recv() {
-        let _ = write_jsonl(writer, &event);
+        if !emit(&event) {
+            break;
+        }
     }
-    let _ = writer.flush();
 }
-
-/// Helper for lines() iterator — not using std::io::BufRead::lines directly
-/// because we need a type alias.
-use std::io::BufRead;
-
-// ---------------------------------------------------------------------------
-// Hooks — re-uses NonInteractiveHooks from runner.rs (tool safety policy).
-// No additional hooks needed for RPC mode.

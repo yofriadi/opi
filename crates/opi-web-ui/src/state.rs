@@ -22,6 +22,8 @@ pub struct TrackedResponse {
     pub id: Option<String>,
     /// Error message, if any.
     pub error: Option<String>,
+    /// Response payload, if any.
+    pub data: Option<serde_json::Value>,
 }
 
 /// Conversation state machine that processes RPC/SDK events.
@@ -36,6 +38,7 @@ pub struct ConversationState {
     model: Option<String>,
     session_id: Option<String>,
     turn_count: u64,
+    message_count: u64,
     agent_running: bool,
     compacting: bool,
     last_response: Option<TrackedResponse>,
@@ -58,6 +61,7 @@ impl ConversationState {
             model: None,
             session_id: None,
             turn_count: 0,
+            message_count: 0,
             agent_running: false,
             compacting: false,
             last_response: None,
@@ -79,19 +83,25 @@ impl ConversationState {
                 success,
                 id,
                 error,
+                data,
             } => {
+                if success {
+                    self.apply_successful_rpc_data(&command, data.as_ref());
+                }
                 self.last_response = Some(TrackedResponse {
                     command,
                     success,
                     id,
                     error,
+                    data,
                 });
             }
             WebUiEvent::AgentStart => {
                 self.agent_running = true;
             }
-            WebUiEvent::AgentEnd { message_count: _ } => {
+            WebUiEvent::AgentEnd { message_count } => {
                 self.agent_running = false;
+                self.message_count = message_count as u64;
                 self.flush_message();
             }
             WebUiEvent::TurnStart => {
@@ -160,10 +170,11 @@ impl ConversationState {
             WebUiEvent::SessionInfo {
                 session_id,
                 turn_count,
-                ..
+                message_count,
             } => {
                 self.session_id = Some(session_id);
                 self.turn_count = turn_count;
+                self.message_count = message_count;
             }
             WebUiEvent::ModelChanged { model } => {
                 self.model = Some(model);
@@ -201,6 +212,11 @@ impl ConversationState {
     /// Current turn count.
     pub fn turn_count(&self) -> u64 {
         self.turn_count
+    }
+
+    /// Current message count.
+    pub fn message_count(&self) -> u64 {
+        self.message_count
     }
 
     /// Whether the agent loop is currently running.
@@ -271,6 +287,37 @@ impl ConversationState {
             }
 
             self.messages.push(msg);
+        }
+    }
+
+    fn apply_successful_rpc_data(&mut self, command: &str, data: Option<&serde_json::Value>) {
+        let Some(data) = data.and_then(|value| value.as_object()) else {
+            return;
+        };
+
+        match command {
+            "session_info" => {
+                if let Some(model) = data.get("model").and_then(|value| value.as_str()) {
+                    self.model = Some(model.to_owned());
+                }
+                if let Some(session_id) = data.get("session_id").and_then(|value| value.as_str()) {
+                    self.session_id = Some(session_id.to_owned());
+                }
+                if let Some(turn_count) = data.get("turn_count").and_then(|value| value.as_u64()) {
+                    self.turn_count = turn_count;
+                }
+                if let Some(message_count) =
+                    data.get("message_count").and_then(|value| value.as_u64())
+                {
+                    self.message_count = message_count;
+                }
+            }
+            "set_model" => {
+                if let Some(model) = data.get("model").and_then(|value| value.as_str()) {
+                    self.model = Some(model.to_owned());
+                }
+            }
+            _ => {}
         }
     }
 }
