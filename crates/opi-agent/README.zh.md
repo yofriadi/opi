@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-agent.svg)](https://crates.io/crates/opi-agent)
 [![Docs.rs](https://docs.rs/opi-agent/badge.svg)](https://docs.rs/opi-agent)
 
-> [opi](https://github.com/OdradekAI/opi) 的通用 Agent 运行时：流式 turn、工具调用、hooks、事件、消息队列、会话与上下文压缩。
+> [opi](https://github.com/OdradekAI/opi) 的通用 Agent 运行时：流式 turn、工具调用、hooks、事件、消息队列、会话、分支重建、上下文压缩、SDK 命令、扩展和 JSONL streaming proxy 原语。
 
 [English](README.md) | [opi workspace](../../README.zh.md)
 
@@ -11,7 +11,7 @@
 
 当前 crate 版本：`0.4.0`。
 
-`opi-agent` 提供 `opi` 二进制使用的 Provider 无关运行时。它负责 turn 主循环、工具参数 JSON Schema 校验、并行/串行工具执行、支持 retry 的 Provider streaming、图片能力校验、事件订阅、steering/follow-up 队列、JSONL 会话存储，以及阈值/手动/溢出触发的上下文压缩基础能力。
+`opi-agent` 提供 `opi` 二进制使用的 Provider 无关运行时。它负责 turn 主循环、工具参数 JSON Schema 校验、并行/串行工具执行、支持 retry 的 Provider streaming、图片能力校验、事件订阅、steering/follow-up 队列、JSONL 会话存储、基于 leaf 的会话分支重建、阈值/手动/溢出触发的上下文压缩基础能力、SDK/RPC 命令与响应类型、extension hooks/tools/state，以及传输无关的 streaming proxy。
 
 ## 核心抽象
 
@@ -68,6 +68,7 @@ agent_loop
 - 第一行：`SessionHeader`。
 - 条目：`MessageEntry`、`CompactionEntry`、`LeafEntry`。
 - Reader 支持崩溃恢复，会跳过损坏条目和末尾截断行。
+- `session_branch::SessionTree` 会根据 `parent_id` 关系和最新 `LeafEntry` 重建分支元数据与活跃分支。
 
 上下文压缩能力包括：
 
@@ -84,6 +85,12 @@ agent_loop
 `AgentEvent` 覆盖 Agent 生命周期、turn 生命周期、消息流式更新、工具执行、队列、自动 retry、压缩、会话持久化错误和 Agent 结束。
 
 `AgentSessionEvent` 是 JSON 输出使用的会话级 wire protocol。它包装 agent events，并增加 compaction、retry、thinking level、session info、session summary 等事件。
+
+## SDK、扩展与 Proxy
+
+- `sdk` 定义 RPC JSONL 模式和嵌入方共享的不稳定、带 schema version 的命令与响应类型：`prompt`、`continue`、`steer`、`follow_up`、`abort`、`set_model`、`set_thinking_level`、`compact`、`session_info` 和 `quit`。
+- `extension` 提供 `Extension` 与 `ExtensionRegistry`，支持生命周期 hooks、自定义工具、自定义命令、每个 extension 的状态序列化、自定义 Provider 和模型覆盖。
+- `streaming_proxy` 可以在任意 `BufRead`/`Write` 传输上转发 JSONL 命令/事件，输出 `proxy_ready` 头，提供有界事件缓冲，支持取消，并默认脱敏常见密钥模式。
 
 ## 简短示例
 
@@ -141,7 +148,11 @@ impl Tool for EchoTool {
 | `event` | 运行时事件协议 |
 | `session_event` | JSON 模式使用的会话级事件协议 |
 | `session` | JSONL 会话 header、条目、writer、reader、恢复 |
+| `session_branch` | 根据 session entry 的 parent links 和 leaf pointers 重建分支 |
 | `compaction` | 上下文压缩引擎与 hooks |
+| `sdk` | 共享 SDK/RPC schema version、命令、响应和事件转换 |
+| `extension` | Extension trait、registry、hook 包装、自定义工具/Provider/模型 |
+| `streaming_proxy` | 带密钥脱敏的传输无关 JSONL 命令/事件 proxy |
 | `state` | 对话状态容器 |
 | `message` | Agent 层消息变体 |
 | `loop_types` | 主循环上下文、配置和错误 |

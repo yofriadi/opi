@@ -13,7 +13,7 @@ Current workspace version: `0.4.0`.
 
 `opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, RPC JSONL mode, eight built-in tools, image attachments, model/session/branch pickers, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, token usage accumulation, and best-effort cost summaries.
 
-Phase 4 extensibility surfaces are present and unstable: shared SDK/RPC command types, extension hooks/tools/state for embedders, config-driven resource discovery for extensions and packages, progressive skills/prompt fragments/themes/packages, custom provider/model registration, and a streaming proxy. `opi-web-ui` remains `publish = false`; it is not a standalone browser app, but it now provides reusable RPC/SDK event parsing, conversation state, component models, and HTML rendering.
+Extensibility surfaces are present and still unstable 0.x APIs: shared SDK/RPC command types, extension hooks/tools/state for embedders, layered resource discovery for extensions, packages, skills, prompt fragments, and themes, custom provider/model registration, and a streaming proxy. `opi-web-ui` remains `publish = false`; it is not a standalone browser app, but it provides reusable RPC/SDK event parsing, conversation state, component models, and HTML rendering.
 
 ## Relationship to pi
 
@@ -37,15 +37,17 @@ Cargo workspace with lockstep versioning. Every crate inherits `version`, `editi
 |-------|-----------|-------------|
 | [`opi-ai`](crates/opi-ai) | yes | Provider-neutral LLM API, streaming events, image content, registry, retry, HTTP pooling/proxy, usage and cost helpers |
 | [`opi-agent`](crates/opi-agent) | yes | Agent loop, tool execution, hooks, events, queues, sessions, compaction, SDK types, extension API, and streaming proxy primitives |
-| [`opi-tui`](crates/opi-tui) | yes | Ratatui widgets, transcript rendering, diff view, select list, terminal images, themes, keybindings |
+| [`opi-tui`](crates/opi-tui) | yes | Ratatui widgets, transcript rendering, diff view, select/branch pickers, terminal images, themes, keybindings |
 | [`opi-coding-agent`](crates/opi-coding-agent) | yes | The `opi` binary and embeddable coding harness |
 | [`opi-web-ui`](crates/opi-web-ui) | no (`publish = false`) | RPC/SDK event parser, conversation state, component models, and HTML rendering helpers |
 
 Internal dependency shape:
 
 ```text
+opi-ai (no internal deps)
+opi-tui (no internal deps)
 opi-agent -> opi-ai
-opi-web-ui (no internal deps)
+opi-web-ui (no internal deps, publish = false)
 opi-coding-agent -> opi-ai + opi-agent + opi-tui -> opi binary
 ```
 
@@ -142,7 +144,7 @@ Tools are implemented by `opi-coding-agent` and exposed through the `opi-agent::
 | `edit` | `path`, `old_string`, `new_string` | sequential | yes |
 | `bash` | `command`, optional `timeout_secs` | sequential | yes |
 
-All file paths are constrained to the harness workspace root. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true`, so unattended and edge-device runs stay read-only unless the caller explicitly opts into writes or shell execution.
+Path policy is mode-aware. Writes, edits, and non-interactive file tools are workspace-root scoped by default. Interactive `read` can resolve absolute paths and paths outside the workspace for inspection, and file tool details report the workspace root, resolved path, and whether the path is inside the workspace. Mutating tools require `--allow-mutating` or `defaults.allow_mutating_tools = true` in non-interactive/RPC runs, so unattended and edge-device runs stay read-only unless the caller explicitly opts into writes or shell execution.
 
 Tool selection flags:
 
@@ -292,7 +294,7 @@ The coding harness discovers `AGENTS.md` and `CLAUDE.md` from the workspace dire
 
 The shared SDK types live in `opi_agent::sdk`. The extension API in `opi-agent` supports lifecycle hooks, custom tools, custom commands, custom agent messages/state, and custom provider/model registration for embedders. The CLI discovers configured resource metadata from user, project, package, and explicit paths and exposes it in prompts/RPC metadata. It does not dynamically load arbitrary Rust code from disk.
 
-Packages can compose extensions, skills, prompt fragments, and themes from flat `package.toml` manifests. Duplicate resource names within the same discovery layer are errors; higher-precedence layers override lower-precedence layers.
+Packages can compose extensions, skills, prompt fragments, and themes from flat `package.toml` manifests. Skills and prompt fragments use progressive disclosure: metadata is discovered up front, while bodies are loaded only when needed. Themes can be discovered from `theme.toml` resources and are resolved before falling back to built-in `default` and `monokai`. Duplicate resource names within the same discovery layer are errors; higher-precedence layers override lower-precedence layers.
 
 ## Build From Source
 
@@ -347,7 +349,7 @@ Key abstractions:
 - `opi_agent::CompactionEngine`: threshold/manual/overflow compaction support.
 - `opi_agent::sdk`: shared SDK/RPC command and event types for programmatic embedding.
 
-## Still Not Implemented
+## Not Built In
 
 - Production sub-agent, permission-gate, plan/todo, and MCP workflows. The repository includes package/example scaffolds, but these are not built-in core product workflows.
 - Runtime expansion of prompt fragments as interactive slash commands.

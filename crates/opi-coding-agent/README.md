@@ -11,7 +11,7 @@
 
 Current crate version: `0.4.0`.
 
-This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, RPC JSONL mode, nine provider prefixes, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session pickers, shell completion generation, context file loading, session persistence, resume/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, retry, token usage totals, and best-effort cost summaries.
+This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, RPC JSONL mode, nine provider prefixes, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session/branch pickers, shell completion generation, context file loading, session persistence, resume/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, progressive resource discovery for packages/extensions/skills/fragments/themes, retry, token usage totals, and best-effort cost summaries.
 
 ## Install
 
@@ -176,6 +176,12 @@ models = ["gemini-2.5-flash", "gemini-2.5-pro"]
 [providers.openai.proxy]
 url = "http://proxy.example.com:8080"
 no_proxy = "localhost,127.0.0.1"
+
+[extensions]
+paths = ["vendor/my-extension"]
+
+[packages]
+paths = ["vendor/my-package"]
 ```
 
 If a provider-specific proxy is not configured, the HTTP client falls back to `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
@@ -195,7 +201,7 @@ Tools live in `src/tool/`.
 | `edit` | `path`, `old_string`, `new_string` | Replaces first exact match and records before/after details; sequential; mutating |
 | `bash` | `command`, optional `timeout_secs` | Runs in workspace root via `cmd /C` on Windows or `sh -c` on Unix; sequential; mutating |
 
-Available built-in tools are `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, and additional `glob`.
+Available built-in tools are `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, and `glob`.
 
 Default active tools depend on run mode:
 
@@ -238,7 +244,7 @@ Resume reconstructs the active branch from session JSONL entries. If a session c
 
 ### Interactive
 
-With no prompt args, `opi` starts the ratatui TUI. It uses `opi-tui` widgets for transcript rendering, input editing, status, markdown, tool calls, edit diffs, themes, keybindings, model/session pickers, and terminal image output.
+With no prompt args, `opi` starts the ratatui TUI. It uses `opi-tui` widgets for transcript rendering, input editing, status, markdown, tool calls, edit diffs, themes, keybindings, model/session/branch pickers, and terminal image output.
 
 Slash commands:
 
@@ -246,6 +252,7 @@ Slash commands:
 |---------|--------|
 | `/model` | Open the model picker for the active provider |
 | `/session` | Open the session picker |
+| `/branch` | Open the branch picker for the active session |
 | `/image <path>` | Queue an image for the next prompt |
 | `exit` or `quit` | Exit |
 
@@ -352,6 +359,18 @@ resp = read_line()    # response: quit success
 
 `CodingHarness` discovers `AGENTS.md` and `CLAUDE.md` from the workspace directory upward to the git root, then from the user config directory. Empty files and files larger than 128 KiB are skipped.
 
+## Resources and Packages
+
+The harness discovers resource metadata from user, project, explicit, and package layers and exposes it in the system prompt and RPC/session metadata. Discovery covers:
+
+- Extensions: directories containing `extension.toml`.
+- Packages: directories containing `package.toml`; packages may compose extensions, skills, prompt fragments, and themes from conventional subdirectories.
+- Skills: directories containing `SKILL.md` with YAML frontmatter.
+- Prompt fragments: directories containing `FRAGMENT.md` with YAML frontmatter.
+- Themes: directories containing `theme.toml`, resolved before falling back to built-in themes.
+
+User-level resources live under the user config directory (`~/.config/opi/` on Unix, `%APPDATA%\opi\` on Windows). Project-level resources live under `.opi/` in the workspace root. Explicit extension and package paths come from config. Higher-precedence layers override lower-precedence layers; duplicates within the same layer are reported as diagnostics.
+
 ## Skills
 
 Skills are progressively discovered from project, user, explicit, and package resources. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter.
@@ -386,7 +405,8 @@ Skills are discovered from multiple layers with precedence-based deduplication (
 
 1. **User-level** (`~/.config/opi/skills/` on Unix, `%APPDATA%\opi\skills\` on Windows) — precedence 0
 2. **Project-level** (`.opi/skills/` in workspace root) — precedence 1
-3. **Explicit** (extension paths or config `extensions.paths`) — precedence 2
+3. **Explicit** resource layers supplied by an embedder — precedence 2
+4. **Package-composed** resources from discovered packages, using the package layer precedence
 
 Each skill is a subdirectory of a scan location containing a `SKILL.md` file.
 
@@ -436,7 +456,23 @@ Fragments use the same precedence-based discovery as skills and extensions (high
 
 1. **User-level** (`~/.config/opi/fragments/` on Unix, `%APPDATA%\opi\fragments\` on Windows) — precedence 0
 2. **Project-level** (`.opi/fragments/` in workspace root) — precedence 1
-3. **Explicit** (extension paths or config `extensions.paths`) — precedence 2
+3. **Explicit** resource layers supplied by an embedder — precedence 2
+4. **Package-composed** resources from discovered packages, using the package layer precedence
+
+## Themes
+
+Themes are discovered from `theme.toml` files in user, project, explicit, and package layers. A theme file contains metadata plus optional color token overrides:
+
+```toml
+name = "operator"
+description = "Operator theme"
+
+[colors]
+role_user = "Green"
+status_bg = "#1a1a2e"
+```
+
+Unknown tokens and invalid colors produce diagnostics. Missing color tokens inherit from the default theme. The runtime resolves discovered themes before built-in `default` and `monokai`.
 
 ## Library Use
 
@@ -456,7 +492,7 @@ let _messages = harness.prompt("Hello").await?;
 # Ok(()) }
 ```
 
-Use `new_with_hooks`, `new_with_hooks_and_resume`, `new_with_selection`, `subscribe`, `cancel`, `queue_images`, `prompt_with_content`, `model_picker_items`, `set_model`, and `session` when embedding the runtime in a custom application.
+Use `builder`, `new_with_hooks`, `new_with_hooks_and_resume`, `new_with_selection`, `subscribe`, `cancel`, `queue_images`, `prompt_with_content`, `model_picker_items`, `branch_picker_items`, `set_model`, `resource_metadata`, `resolve_theme`, and `session` when embedding the runtime in a custom application.
 
 ## License
 

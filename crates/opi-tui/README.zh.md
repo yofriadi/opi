@@ -11,7 +11,7 @@
 
 当前 crate 版本：`0.4.0`。
 
-`opi-tui` 是同步 widget library。事件循环和异步 runtime 由调用方持有。本 crate 提供 `opi-coding-agent` 使用的对话记录、编辑器、状态栏、Markdown、工具调用、diff、选择列表、终端图片、主题和按键绑定基础组件。
+`opi-tui` 是同步 widget library。事件循环和异步 runtime 由调用方持有。本 crate 提供 `opi-coding-agent` 使用的对话记录、编辑器、状态栏、Markdown、工具调用、diff、选择列表、分支选择器、终端图片、主题和按键绑定基础组件。
 
 ## 组件与 UI 基础类型
 
@@ -25,6 +25,7 @@
 | `MarkdownView` / `CodeBlock` | Markdown 渲染和 fenced code block 展示 |
 | `DiffView` | 为文件编辑 before/after 渲染 unified diff |
 | `SelectList` / `SelectListState` | 模型与会话选择器使用的 fuzzy-select 列表 |
+| `BranchPicker` / `BranchPickerState` | 会话分支选择器，支持活跃分支标记和按 Unicode 宽度处理行 |
 | `terminal_image` | Kitty/iTerm2/Sixel escape 生成与文本 fallback |
 | `Theme` / `resolve_theme` | 语义调色板；内置 `default` 与 `monokai` |
 | `Keybindings` / `KeyCombo` | 可配置语义动作：submit、abort、new line |
@@ -55,6 +56,13 @@ pub struct ImagePayload {
 pub enum AppState { Idle, Thinking, Streaming, ToolExecuting }
 pub enum ToolCallStatus { Running, Success, Error(String) }
 pub enum TuiError { Terminal(String), Render(String) }
+
+pub struct BranchItem {
+    pub tip_id: String,
+    pub label: String,
+    pub metadata: String,
+    pub is_active: bool,
+}
 ```
 
 `Message::new(role, content)` 构造普通对话消息。`Message::diff(path, before, after)` 构造通过 `DiffView` 渲染的 tool-role 消息。`Message::image(role, payload)` 构造图片消息，并通过终端图形 escape sequence 或文本 fallback 渲染。
@@ -98,7 +106,7 @@ pub enum TuiError { Terminal(String), Render(String) }
 1. 调用方维护应用状态。
 2. 从 `opi_agent::AgentEvent` 回调更新状态。
 3. 解析 `Theme` 和 `Keybindings`。
-4. 在需要时构建模型/会话选择器的 `SelectList` overlay。
+4. 在需要时构建模型/会话/分支选择器的 `SelectList` overlay。
 5. 每帧构建一个 `Shell`，并通过 ratatui 渲染。
 
 ## 许可证

@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-ai.svg)](https://crates.io/crates/opi-ai)
 [![Docs.rs](https://docs.rs/opi-ai/badge.svg)](https://docs.rs/opi-ai)
 
-> Provider-neutral LLM API for [opi](https://github.com/OdradekAI/opi), with streaming events, text/image content, tool-call message types, retry helpers, shared HTTP client support, usage accumulation, and cost calculation.
+> Provider-neutral LLM API for [opi](https://github.com/OdradekAI/opi), with streaming events, text/image content, tool-call message types, provider/model registration, retry helpers, shared HTTP client support, usage accumulation, and cost calculation.
 
 [Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
@@ -11,7 +11,7 @@
 
 Current crate version: `0.4.0`.
 
-`opi-ai` exposes the common `Provider` trait plus provider-neutral request, message, model, and stream event types. The crate contains real streaming implementations for Anthropic, OpenAI Chat Completions, OpenAI Responses, Gemini, AWS Bedrock Converse, Azure OpenAI, and Google Vertex AI, plus OpenAI-compatible profiles for OpenRouter and Mistral.
+`opi-ai` exposes the common `Provider` trait plus provider-neutral request, message, model, and stream event types. The crate contains real streaming implementations for Anthropic, OpenAI Chat Completions, OpenAI Responses, Gemini, AWS Bedrock Converse, Azure OpenAI, and Google Vertex AI, plus OpenAI-compatible profiles for OpenRouter and Mistral. `ProviderRegistry` resolves `provider:model` specs, accepts custom providers, and supports model overrides for deployments or fine-tuned models.
 
 ## Providers
 
@@ -37,7 +37,7 @@ Each provider maps native wire events into `AssistantStreamEvent`, including tex
 - `InputContent` / `OutputContent`: text and image content with URL, base64, or raw-byte image sources.
 - `AssistantStreamEvent`: provider-neutral stream variants for start/text/thinking/tool/done/error.
 - `ModelInfo`: model descriptor with context window, max output tokens, image support, streaming support, and thinking support.
-- `registry::ProviderRegistry`: resolves `provider:model` specs and exposes model capabilities.
+- `registry::ProviderRegistry`: resolves `provider:model` specs, registers custom providers, layers model overrides, lists all models, and exposes model capabilities.
 - `http::HttpClient`: shared `reqwest` client wrapper with connection pooling and explicit or environment-derived proxy support.
 - `retry`: retry config, exponential backoff, and `Retry-After` parsing.
 - `Usage`, `CumulativeUsage`, `Pricing`, `CostBreakdown`, `calculate_cost`: token and cost helpers.

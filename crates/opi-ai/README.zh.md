@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-ai.svg)](https://crates.io/crates/opi-ai)
 [![Docs.rs](https://docs.rs/opi-ai/badge.svg)](https://docs.rs/opi-ai)
 
-> [opi](https://github.com/OdradekAI/opi) 的 Provider 无关 LLM API，包含流式事件、文本/图片内容、工具调用消息类型、retry 辅助、共享 HTTP client、用量累计与费用计算。
+> [opi](https://github.com/OdradekAI/opi) 的 Provider 无关 LLM API，包含流式事件、文本/图片内容、工具调用消息类型、Provider/模型注册、retry 辅助、共享 HTTP client、用量累计与费用计算。
 
 [English](README.md) | [opi workspace](../../README.zh.md)
 
@@ -11,7 +11,7 @@
 
 当前 crate 版本：`0.4.0`。
 
-`opi-ai` 暴露统一的 `Provider` trait，以及 Provider 无关的请求、消息、模型和流式事件类型。当前包含 Anthropic、OpenAI Chat Completions、OpenAI Responses、Gemini、AWS Bedrock Converse、Azure OpenAI、Google Vertex AI 的真实流式实现，并通过 OpenAI-compatible adapter 支持 OpenRouter 与 Mistral profile。
+`opi-ai` 暴露统一的 `Provider` trait，以及 Provider 无关的请求、消息、模型和流式事件类型。当前包含 Anthropic、OpenAI Chat Completions、OpenAI Responses、Gemini、AWS Bedrock Converse、Azure OpenAI、Google Vertex AI 的真实流式实现，并通过 OpenAI-compatible adapter 支持 OpenRouter 与 Mistral profile。`ProviderRegistry` 会解析 `provider:model` spec，支持注册自定义 Provider，并支持为 deployment 或 fine-tuned 模型叠加模型覆盖。
 
 ## Provider
 
@@ -37,7 +37,7 @@
 - `InputContent` / `OutputContent`：文本和图片内容，图片来源支持 URL、base64 或原始 bytes。
 - `AssistantStreamEvent`：Provider 无关流式事件，覆盖 start/text/thinking/tool/done/error。
 - `ModelInfo`：模型描述，包含上下文窗口、最大输出 token、图片支持、流式支持与 thinking 支持。
-- `registry::ProviderRegistry`：解析 `provider:model` spec，并暴露模型能力查询。
+- `registry::ProviderRegistry`：解析 `provider:model` spec，注册自定义 Provider，叠加模型覆盖，列出所有模型，并暴露模型能力查询。
 - `http::HttpClient`：共享 `reqwest` client 封装，支持连接池与显式或环境变量代理。
 - `retry`：retry 配置、指数退避与 `Retry-After` 解析。
 - `Usage`、`CumulativeUsage`、`Pricing`、`CostBreakdown`、`calculate_cost`：token 与费用辅助工具。

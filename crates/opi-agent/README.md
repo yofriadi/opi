@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-agent.svg)](https://crates.io/crates/opi-agent)
 [![Docs.rs](https://docs.rs/opi-agent/badge.svg)](https://docs.rs/opi-agent)
 
-> General-purpose agent runtime for [opi](https://github.com/OdradekAI/opi): streaming turns, tool calling, hooks, event emission, message queues, sessions, and context compaction.
+> General-purpose agent runtime for [opi](https://github.com/OdradekAI/opi): streaming turns, tool calling, hooks, event emission, message queues, sessions, branch reconstruction, context compaction, SDK commands, extensions, and JSONL streaming proxy primitives.
 
 [Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
@@ -11,7 +11,7 @@
 
 Current crate version: `0.4.0`.
 
-`opi-agent` provides the provider-independent runtime used by the `opi` binary. It handles the turn loop, JSON Schema validation for tools, parallel/sequential tool execution, retry-aware provider streaming, image-capability checks, event subscriptions, steering/follow-up queues, JSONL session storage, and threshold/manual/overflow compaction primitives.
+`opi-agent` provides the provider-independent runtime used by the `opi` binary. It handles the turn loop, JSON Schema validation for tools, parallel/sequential tool execution, retry-aware provider streaming, image-capability checks, event subscriptions, steering/follow-up queues, JSONL session storage, branch reconstruction from session leaves, threshold/manual/overflow compaction primitives, SDK/RPC command and response types, extension hooks/tools/state, and transport-agnostic streaming proxy support.
 
 ## Core Abstractions
 
@@ -68,6 +68,7 @@ Session storage uses append-only JSONL:
 - First line: `SessionHeader`.
 - Entries: `MessageEntry`, `CompactionEntry`, and `LeafEntry`.
 - Reader supports crash recovery by skipping corrupt entries and truncated trailing lines.
+- `session_branch::SessionTree` reconstructs branch metadata and the active branch from `parent_id` links plus the latest `LeafEntry`.
 
 Compaction support includes:
 
@@ -84,6 +85,12 @@ Compaction support includes:
 `AgentEvent` reports agent lifecycle, turn lifecycle, message streaming, tool execution, queues, automatic retries, compaction, session persistence errors, and agent end.
 
 `AgentSessionEvent` is the session-level wire protocol used by JSON output. It wraps agent events and adds compaction, retry, thinking-level, session-info, and session-summary events.
+
+## SDK, Extensions, and Proxy
+
+- `sdk` defines the unstable schema-versioned command and response types shared by RPC JSONL mode and embedders: `prompt`, `continue`, `steer`, `follow_up`, `abort`, `set_model`, `set_thinking_level`, `compact`, `session_info`, and `quit`.
+- `extension` provides `Extension` and `ExtensionRegistry` for lifecycle hooks, custom tools, custom commands, per-extension state serialization, custom providers, and model overrides.
+- `streaming_proxy` forwards JSONL commands/events over arbitrary `BufRead`/`Write` transports, emits a `proxy_ready` header, applies bounded event buffering, supports cancellation, and redacts common secret patterns by default.
 
 ## Quick Example
 
@@ -141,7 +148,11 @@ Create an `Agent` with a boxed `opi_ai::Provider`, tool list, model, optional sy
 | `event` | Runtime event protocol |
 | `session_event` | Session-level event protocol for JSON mode |
 | `session` | JSONL session header, entries, writer, reader, recovery |
+| `session_branch` | Branch reconstruction from session entry parent links and leaf pointers |
 | `compaction` | Context compaction engine and hooks |
+| `sdk` | Shared SDK/RPC schema version, commands, responses, and event conversion |
+| `extension` | Extension trait, extension registry, hook wrapping, custom tools/providers/models |
+| `streaming_proxy` | Transport-agnostic JSONL command/event proxy with secret redaction |
 | `state` | Conversation state holder |
 | `message` | Agent-level message variants |
 | `loop_types` | Loop context, config, and errors |

@@ -11,7 +11,7 @@
 
 当前 crate 版本：`0.4.0`。
 
-本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、RPC JSONL 模式、9 个 Provider 前缀、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话选择器、shell 补全生成、上下文文件加载、会话持久化、会话 resume/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、retry、token 用量统计，以及尽力而为的费用摘要。
+本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、RPC JSONL 模式、9 个 Provider 前缀、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话/分支选择器、shell 补全生成、上下文文件加载、会话持久化、会话 resume/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、packages/extensions/skills/fragments/themes 的渐进式资源发现、retry、token 用量统计，以及尽力而为的费用摘要。
 
 ## 安装
 
@@ -176,6 +176,12 @@ models = ["gemini-2.5-flash", "gemini-2.5-pro"]
 [providers.openai.proxy]
 url = "http://proxy.example.com:8080"
 no_proxy = "localhost,127.0.0.1"
+
+[extensions]
+paths = ["vendor/my-extension"]
+
+[packages]
+paths = ["vendor/my-package"]
 ```
 
 如果没有为 Provider 单独配置代理，HTTP client 会回退到 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`。
@@ -195,7 +201,7 @@ no_proxy = "localhost,127.0.0.1"
 | `edit` | `path`、`old_string`、`new_string` | 替换第一个精确匹配，并记录 before/after details；串行；修改性 |
 | `bash` | `command`，可选 `timeout_secs` | 在 workspace 根目录运行；Windows 使用 `cmd /C`，Unix 使用 `sh -c`；串行；修改性 |
 
-可用内置工具包括 `read`、`write`、`edit`、`bash`、`grep`、`find`、`ls`，以及额外的 `glob`。
+可用内置工具包括 `read`、`write`、`edit`、`bash`、`grep`、`find`、`ls` 和 `glob`。
 
 默认启用工具取决于运行模式：
 
@@ -238,7 +244,7 @@ Resume 会从 session JSONL 条目重建活跃分支。如果会话中包含 com
 
 ### 交互式
 
-没有提示词参数时，`opi` 启动 ratatui TUI。它使用 `opi-tui` 组件渲染对话记录、输入编辑器、状态、Markdown、工具调用、编辑 diff、主题、按键绑定、模型/会话选择器和终端图片输出。
+没有提示词参数时，`opi` 启动 ratatui TUI。它使用 `opi-tui` 组件渲染对话记录、输入编辑器、状态、Markdown、工具调用、编辑 diff、主题、按键绑定、模型/会话/分支选择器和终端图片输出。
 
 Slash 命令：
 
@@ -246,6 +252,7 @@ Slash 命令：
 |------|------|
 | `/model` | 打开当前 Provider 的模型选择器 |
 | `/session` | 打开会话选择器 |
+| `/branch` | 打开当前会话的分支选择器 |
 | `/image <path>` | 为下一条提示词排队一张图片 |
 | `exit` 或 `quit` | 退出 |
 
@@ -310,6 +317,18 @@ opi --rpc
 
 `CodingHarness` 会从 workspace 目录向上查找 `AGENTS.md` 和 `CLAUDE.md`，直到 git root，然后再查找用户配置目录。空文件和超过 128 KiB 的文件会被跳过。
 
+## 资源与 Package
+
+Harness 会从用户、项目、显式和 package 层发现资源元数据，并把它暴露到系统提示词和 RPC/session metadata 中。发现范围包括：
+
+- Extensions：包含 `extension.toml` 的目录。
+- Packages：包含 `package.toml` 的目录；package 可以从约定子目录组合 extensions、skills、prompt fragments 和 themes。
+- Skills：包含带 YAML frontmatter 的 `SKILL.md` 的目录。
+- Prompt fragments：包含带 YAML frontmatter 的 `FRAGMENT.md` 的目录。
+- Themes：包含 `theme.toml` 的目录，会在回退到内置主题前解析。
+
+用户级资源位于用户配置目录下（Unix：`~/.config/opi/`；Windows：`%APPDATA%\opi\`）。项目级资源位于 workspace 根目录的 `.opi/` 下。显式 extension 和 package 路径来自配置。高优先级层会覆盖低优先级层；同一层内的重复项会作为 diagnostics 暴露。
+
 ## 技能（Skills）
 
 技能通过渐进式发现从项目、用户、显式和包资源中加载。每个技能是一个包含 `SKILL.md` 文件的目录，`SKILL.md` 使用 YAML frontmatter。
@@ -344,7 +363,8 @@ disable-model-invocation: false
 
 1. **用户级**（Unix: `~/.config/opi/skills/`，Windows: `%APPDATA%\opi\skills\`）— 优先级 0
 2. **项目级**（workspace 根目录的 `.opi/skills/`）— 优先级 1
-3. **显式**（扩展路径或配置 `extensions.paths`）— 优先级 2
+3. **显式资源层**，由嵌入方传入 — 优先级 2
+4. **Package 组合资源**，来自已发现的 package，并使用 package 所在层的优先级
 
 每个技能是扫描位置下的一个子目录，包含 `SKILL.md` 文件。
 
@@ -394,7 +414,23 @@ arguments: text, from=en, to=fr
 
 1. **用户级**（Unix: `~/.config/opi/fragments/`，Windows: `%APPDATA%\opi\fragments\`）— 优先级 0
 2. **项目级**（workspace 根目录的 `.opi/fragments/`）— 优先级 1
-3. **显式**（扩展路径或配置 `extensions.paths`）— 优先级 2
+3. **显式资源层**，由嵌入方传入 — 优先级 2
+4. **Package 组合资源**，来自已发现的 package，并使用 package 所在层的优先级
+
+## 主题（Themes）
+
+Themes 从用户、项目、显式和 package 层的 `theme.toml` 文件中发现。主题文件包含元数据和可选颜色 token 覆盖：
+
+```toml
+name = "operator"
+description = "Operator theme"
+
+[colors]
+role_user = "Green"
+status_bg = "#1a1a2e"
+```
+
+未知 token 和非法颜色会产生 diagnostics。未指定的颜色 token 会继承默认主题。运行时会先解析发现的主题，再回退到内置 `default` 和 `monokai`。
 
 ## 作为库使用
 
@@ -414,7 +450,7 @@ let _messages = harness.prompt("你好").await?;
 # Ok(()) }
 ```
 
-嵌入自定义应用时，可以使用 `new_with_hooks`、`new_with_hooks_and_resume`、`new_with_selection`、`subscribe`、`cancel`、`queue_images`、`prompt_with_content`、`model_picker_items`、`set_model` 和 `session`。
+嵌入自定义应用时，可以使用 `builder`、`new_with_hooks`、`new_with_hooks_and_resume`、`new_with_selection`、`subscribe`、`cancel`、`queue_images`、`prompt_with_content`、`model_picker_items`、`branch_picker_items`、`set_model`、`resource_metadata`、`resolve_theme` 和 `session`。
 
 ## 许可证
 

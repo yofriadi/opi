@@ -8,12 +8,12 @@
 
 Current crate version: `0.4.0`.
 
-`opi-web-ui` is `publish = false` and provides a concrete component layer that consumes RPC/SDK events from the opi agent toolkit and renders them as typed Rust state and HTML components. A separate release decision may change the publish status in the future.
+`opi-web-ui` is `publish = false` and provides a concrete component layer that consumes RPC/SDK JSON event values from the opi agent toolkit and renders them as typed Rust state and HTML components. It is not a standalone browser app. A separate release decision may change the publish status in the future.
 
 ## Architecture
 
-- **`event`** — Parses raw JSON values from the RPC JSONL protocol into typed `WebUiEvent` variants.
-- **`state`** — `ConversationState` processes events and maintains message history, tool call state, thinking blocks, session metadata, and compaction status.
+- **`event`** — Parses raw JSON values from the RPC JSONL protocol into typed `WebUiEvent` variants, preserving unknown event types for forward-compatible handling.
+- **`state`** — `ConversationState` processes events and maintains message history, RPC responses, tool call state, thinking blocks, session metadata, and compaction status.
 - **`components`** — Typed UI component models: `ChatMessage`, `ToolCallView`, `ThinkingBlock`, `StatusBar`, `ConversationView`.
 - **`render`** — `Render` trait for HTML output with XSS-safe escaping.
 
@@ -50,14 +50,14 @@ let html = view.render_html();
 
 ## Dependencies
 
-- `opi-ai` — provider-neutral stream event and message types
-- `opi-agent` — SDK command/response types and agent events
 - `serde`, `serde_json` — JSON serialization
 - `thiserror` — error types
 
+`opi-agent` is used only as a dev-dependency for tests. The runtime crate boundary is intentionally JSON-shaped so web-facing code does not need to depend on provider or agent internals.
+
 ## Boundary
 
-Future work belongs here only when it implements reusable web-facing UI components. The terminal coding agent lives in `opi-coding-agent`; provider and message types live in `opi-ai`; agent runtime primitives live in `opi-agent`.
+Future work belongs here only when it implements reusable web-facing state or UI components. The terminal coding agent lives in `opi-coding-agent`; provider and message types live in `opi-ai`; agent runtime primitives live in `opi-agent`.
 
 ## License
 
