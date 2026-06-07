@@ -245,22 +245,18 @@ impl McpAdapterExtension {
             && let Some(obj) = args_obj
         {
             for (key, schema) in props {
+                let expected_type = schema["type"].as_str().unwrap_or("string");
                 if let Some(val) = obj.get(key) {
-                    let expected_type = schema["type"].as_str().unwrap_or("string");
                     match expected_type {
-                        "number" => {
-                            if !val.is_number() {
-                                return Err(ExtensionError::CommandError(format!(
-                                    "argument '{key}' must be a number"
-                                )));
-                            }
+                        "number" if !val.is_number() => {
+                            return Err(ExtensionError::CommandError(format!(
+                                "argument '{key}' must be a number"
+                            )));
                         }
-                        "string" => {
-                            if !val.is_string() {
-                                return Err(ExtensionError::CommandError(format!(
-                                    "argument '{key}' must be a string"
-                                )));
-                            }
+                        "string" if !val.is_string() => {
+                            return Err(ExtensionError::CommandError(format!(
+                                "argument '{key}' must be a string"
+                            )));
                         }
                         _ => {}
                     }
