@@ -139,11 +139,24 @@ struct TomlPackageFile {
     name: Option<String>,
     description: Option<String>,
     version: Option<String>,
+    opi_version: Option<String>,
     extensions: Option<Vec<String>>,
     skills: Option<Vec<String>>,
     fragments: Option<Vec<String>>,
     themes: Option<Vec<String>>,
     disabled: Option<Vec<String>>,
+    adapter: Option<TomlAdapterTable>,
+}
+
+/// TOML structure for the `[adapter]` table.
+#[derive(Debug, Clone, Deserialize)]
+struct TomlAdapterTable {
+    kind: String,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    protocol: String,
+    timeout_ms: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +174,11 @@ pub struct PackageManifest {
     pub description: String,
     /// Semantic version string. Optional.
     pub version: Option<String>,
+    /// Opi version compatibility constraint. Advisory in 0.x; produces a
+    /// diagnostic when incompatible. Optional.
+    pub opi_version: Option<String>,
+    /// Adapter configuration for process-based extensions. Optional.
+    pub adapter: Option<AdapterManifest>,
     /// Explicit list of extension names to include. When `None`, all
     /// discovered extensions in the `extensions/` subdirectory are included.
     pub extensions: Option<Vec<String>>,
@@ -175,6 +193,223 @@ pub struct PackageManifest {
     pub themes: Option<Vec<String>>,
     /// Resource names to exclude from composition, regardless of type.
     pub disabled: Vec<String>,
+}
+
+/// Adapter manifest parsed from the `[adapter]` table in `package.toml`.
+///
+/// Describes a process-based extension adapter that opi communicates with
+/// via the JSONL protocol.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdapterManifest {
+    /// Adapter kind. Currently only `"process-jsonl"` is supported.
+    pub kind: String,
+    /// Command to start the adapter process. May be a bare name (PATH lookup),
+    /// a relative path (resolved against package root), or an absolute path.
+    pub command: String,
+    /// Arguments to pass to the adapter command.
+    pub args: Vec<String>,
+    /// Protocol identifier. Currently only `"opi-extension-jsonl-v1"` is
+    /// supported.
+    pub protocol: String,
+    /// Request timeout in milliseconds. When `None`, a default timeout is
+    /// used by the adapter host.
+    pub timeout_ms: Option<u64>,
+}
+
+/// Diagnostic produced when checking `opi_version` compatibility.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpiVersionDiagnostic {
+    /// Human-readable diagnostic message.
+    pub message: String,
+}
+
+impl OpiVersionDiagnostic {
+    /// Check whether the current opi version satisfies the given constraint.
+    ///
+    /// Returns `None` if compatible, or a diagnostic describing the
+    /// incompatibility. The constraint string uses semver range syntax
+    /// (e.g. `">=0.5,<0.7"`). If the constraint cannot be parsed, a
+    /// diagnostic is returned describing the parse failure.
+    ///
+    /// In the 0.x series, this is advisory: the package loads regardless,
+    /// but the diagnostic is reported through the `package doctor` command
+    /// and resource metadata.
+    pub fn check(constraint: &str, current_version: &str) -> Option<Self> {
+        // Simple version matching for 0.x advisory diagnostics.
+        // Parse the constraint as a comma-separated list of operators.
+        let parts: Vec<&str> = constraint.split(',').collect();
+        let current = match parse_simple_version(current_version) {
+            Some(v) => v,
+            None => {
+                return Some(Self {
+                    message: format!(
+                        "cannot parse current version '{current_version}' for compatibility check"
+                    ),
+                });
+            }
+        };
+
+        for part in parts {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+
+            if let Some(version_str) = part.strip_prefix(">=") {
+                let version_str = version_str.trim();
+                match parse_simple_version(version_str) {
+                    Some(v) if current < v => {
+                        return Some(Self {
+                            message: format!(
+                                "incompatible opi version: {current_version} does not satisfy {constraint}"
+                            ),
+                        });
+                    }
+                    None => {
+                        return Some(Self {
+                            message: format!(
+                                "cannot parse version constraint '{part}' in '{constraint}'"
+                            ),
+                        });
+                    }
+                    _ => {}
+                }
+            } else if let Some(version_str) = part.strip_prefix("<=") {
+                let version_str = version_str.trim();
+                match parse_simple_version(version_str) {
+                    Some(v) if current > v => {
+                        return Some(Self {
+                            message: format!(
+                                "incompatible opi version: {current_version} does not satisfy {constraint}"
+                            ),
+                        });
+                    }
+                    None => {
+                        return Some(Self {
+                            message: format!(
+                                "cannot parse version constraint '{part}' in '{constraint}'"
+                            ),
+                        });
+                    }
+                    _ => {}
+                }
+            } else if let Some(version_str) = part.strip_prefix('>') {
+                let version_str = version_str.trim();
+                match parse_simple_version(version_str) {
+                    Some(v) if current <= v => {
+                        return Some(Self {
+                            message: format!(
+                                "incompatible opi version: {current_version} does not satisfy {constraint}"
+                            ),
+                        });
+                    }
+                    None => {
+                        return Some(Self {
+                            message: format!(
+                                "cannot parse version constraint '{part}' in '{constraint}'"
+                            ),
+                        });
+                    }
+                    _ => {}
+                }
+            } else if let Some(version_str) = part.strip_prefix('<') {
+                let version_str = version_str.trim();
+                match parse_simple_version(version_str) {
+                    Some(v) if current >= v => {
+                        return Some(Self {
+                            message: format!(
+                                "incompatible opi version: {current_version} does not satisfy {constraint}"
+                            ),
+                        });
+                    }
+                    None => {
+                        return Some(Self {
+                            message: format!(
+                                "cannot parse version constraint '{part}' in '{constraint}'"
+                            ),
+                        });
+                    }
+                    _ => {}
+                }
+            } else if let Some(version_str) = part.strip_prefix('=') {
+                let version_str = version_str.trim();
+                match parse_simple_version(version_str) {
+                    Some(v) if current != v => {
+                        return Some(Self {
+                            message: format!(
+                                "incompatible opi version: {current_version} does not satisfy {constraint}"
+                            ),
+                        });
+                    }
+                    None => {
+                        return Some(Self {
+                            message: format!(
+                                "cannot parse version constraint '{part}' in '{constraint}'"
+                            ),
+                        });
+                    }
+                    _ => {}
+                }
+            } else {
+                // Bare version or unknown prefix — try as exact match
+                match parse_simple_version(part) {
+                    Some(v) if current != v => {
+                        return Some(Self {
+                            message: format!(
+                                "incompatible opi version: {current_version} does not satisfy {constraint}"
+                            ),
+                        });
+                    }
+                    None => {
+                        return Some(Self {
+                            message: format!(
+                                "cannot parse version constraint '{part}' in '{constraint}'"
+                            ),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Parse a version string "X.Y" or "X.Y.Z" into a comparable tuple.
+/// Two-part versions get an implicit `.0` patch.
+fn parse_simple_version(s: &str) -> Option<(u64, u64, u64)> {
+    let s = s.trim();
+    let parts: Vec<&str> = s.split('.').collect();
+    match parts.len() {
+        2 => Some((parts[0].parse().ok()?, parts[1].parse().ok()?, 0)),
+        3 => Some((
+            parts[0].parse().ok()?,
+            parts[1].parse().ok()?,
+            parts[2].parse().ok()?,
+        )),
+        _ => None,
+    }
+}
+
+/// Resolve the adapter command path based on its form.
+///
+/// - Absolute path: used as-is.
+/// - Relative path (contains separators): resolved against `package_root`.
+/// - Bare name (no separators): returned as-is for PATH lookup.
+pub fn resolve_adapter_command(adapter: &AdapterManifest, package_root: &Path) -> PathBuf {
+    let cmd = &adapter.command;
+    let path = Path::new(cmd);
+
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else if cmd.contains('/') || cmd.contains('\\') {
+        // Relative path with separators: resolve against package root
+        package_root.join(cmd)
+    } else {
+        // Bare name: PATH lookup
+        PathBuf::from(cmd)
+    }
 }
 
 impl PackageManifest {
@@ -205,10 +440,17 @@ impl PackageManifest {
 
         validate_description(&description, path)?;
 
+        let adapter = file
+            .adapter
+            .map(|a| validate_and_build_adapter(a, path))
+            .transpose()?;
+
         Ok(Self {
             name,
             description,
             version: file.version,
+            opi_version: file.opi_version,
+            adapter,
             extensions: file.extensions,
             skills: file.skills,
             fragments: file.fragments,
@@ -216,6 +458,41 @@ impl PackageManifest {
             disabled: file.disabled.unwrap_or_default(),
         })
     }
+}
+
+/// Validate adapter fields and build an [`AdapterManifest`].
+fn validate_and_build_adapter(
+    table: TomlAdapterTable,
+    path: &Path,
+) -> Result<AdapterManifest, PackageDiscoveryError> {
+    if table.kind != "process-jsonl" {
+        return Err(PackageDiscoveryError::InvalidManifest {
+            path: path.to_path_buf(),
+            reason: format!("unsupported adapter kind '{}'", table.kind),
+        });
+    }
+
+    if table.command.trim().is_empty() {
+        return Err(PackageDiscoveryError::MissingField {
+            field: "adapter.command".into(),
+            path: path.to_path_buf(),
+        });
+    }
+
+    if table.protocol != "opi-extension-jsonl-v1" {
+        return Err(PackageDiscoveryError::InvalidManifest {
+            path: path.to_path_buf(),
+            reason: format!("unsupported adapter protocol '{}'", table.protocol),
+        });
+    }
+
+    Ok(AdapterManifest {
+        kind: table.kind,
+        command: table.command,
+        args: table.args,
+        protocol: table.protocol,
+        timeout_ms: table.timeout_ms,
+    })
 }
 
 // ---------------------------------------------------------------------------
