@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// Supported shells for completion generation.
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -103,7 +103,54 @@ pub struct Cli {
     #[arg(long)]
     pub list_models: bool,
 
+    /// Package subcommand group.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Initial prompt (positional).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub prompt: Vec<String>,
+}
+
+/// Top-level subcommands for opi.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Manage extension packages.
+    Package {
+        #[command(subcommand)]
+        command: PackageCommand,
+    },
+}
+
+/// Package management subcommands.
+#[derive(Debug, Subcommand)]
+pub enum PackageCommand {
+    /// Add a package to the store.
+    Add {
+        /// Package source (local path or git URL).
+        source: String,
+        /// Use project-local scope (`.opi/packages.toml`).
+        #[arg(short = 'l', long = "local")]
+        local: bool,
+    },
+    /// Remove a package from the store.
+    Remove {
+        /// Package name or source to remove.
+        name_or_source: String,
+        /// Use project-local scope.
+        #[arg(short = 'l', long = "local")]
+        local: bool,
+    },
+    /// List installed packages.
+    List {
+        /// Output as JSON (one JSON object per line).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate installed packages and report diagnostics.
+    Doctor {
+        /// Output diagnostics as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }

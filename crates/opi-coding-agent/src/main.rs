@@ -28,6 +28,18 @@ fn main() {
         eprintln!("opi {} - debug mode", env!("CARGO_PKG_VERSION"));
     }
 
+    // Handle package subcommands before provider construction.
+    if let Some(opi_coding_agent::cli::Command::Package { command }) = &cli.command {
+        let workspace_root = std::env::current_dir().unwrap_or_default();
+        let user_config_dir = opi_coding_agent::config::user_config_dir();
+        let exit_code = opi_coding_agent::package_cli::handle_package_command(
+            command,
+            workspace_root,
+            user_config_dir,
+        );
+        std::process::exit(exit_code);
+    }
+
     // Handle --list-models early -- needs config but not a full provider session.
     if cli.list_models {
         let config = match resolve_config(ConfigSource {
