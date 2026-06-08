@@ -7,11 +7,11 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Spec version | 0.4-draft |
-| Last updated | 2026-06-05 |
+| Spec version | 0.5-draft |
+| Last updated | 2026-06-08 |
 | Repository | `https://github.com/OdradekAI/opi` |
 | Upstream studied | `pi` 0.75.3 at `.repo/pi-0.75.3/` |
-| Current implementation | `opi` 0.4.0 workspace, Phase 4 extensibility substrate implemented |
+| Current implementation | `opi` 0.5.0 workspace, Phase 4 extensibility substrate implemented |
 | Next milestone | product hardening for extension workflows and standalone web surfaces |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
@@ -127,14 +127,17 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 | MCP adapter | Phase 4+ | extension/package example after extension APIs are stable |
 | web UI | Phase 4+ | deferred consumer of RPC/SDK events |
 
+The maintained package/phase drift ledger lives in
+[`docs/pi-alignment-matrix.md`](pi-alignment-matrix.md).
+
 ## 4. Current Baseline
 
-### 4.1 Version 0.4.0
+### 4.1 Version 0.5.0
 
 | Area | Current state |
 |---|---|
 | Workspace | five crates under one Cargo workspace |
-| Versioning | lockstep `0.4.0` |
+| Versioning | lockstep `0.5.0` |
 | Edition | Rust 2024 |
 | Internal dependencies | `opi-agent -> opi-ai`, `opi-web-ui` has no internal dependencies, `opi-coding-agent -> opi-ai + opi-agent + opi-tui` |
 | External dependencies | Rust-native async, HTTP/SSE, schema, config, TUI, search, tracing, and test stacks from workspace dependencies |
@@ -537,6 +540,15 @@ Provider priority:
 | Azure OpenAI | OpenAI-compatible | 3 | deployment-name differences |
 | Google Vertex | OAuth/service account | 3 | enterprise auth complexity |
 
+Provider expansion policy:
+
+- Add a first-class provider only when the wire format, event model, or authentication model is materially different.
+- Use configured OpenAI-compatible profiles when a provider can be expressed with base URL, API key env var, model metadata, and compatibility flags.
+- Use `ProviderRegistry` model overrides for deployment-specific or fine-tuned model metadata.
+- Use extension/SDK provider registration for embedders and external adapters.
+
+OAuth remains a separate product decision. Anthropic OAuth, OpenAI Codex OAuth, and GitHub Copilot OAuth require login commands, credential storage, refresh behavior, and user-facing revocation semantics; they MUST NOT be silently added as a side effect of provider profile expansion.
+
 Credential precedence:
 
 1. explicit CLI/config override;
@@ -700,6 +712,7 @@ Options:
   -c, --config <PATH>      Config file path
   -s, --system <PATH>      System prompt file
       --list-models        List available models
+      --fork <SESSION_ID>  Fork a stored session into a new parented session
       --non-interactive    Single prompt mode
   -v, --verbose            Enable debug tracing
   -V, --version            Print version
@@ -708,6 +721,9 @@ Options:
 
 Phase 2 adds `--resume`, `--list-sessions`, and `--json` after session storage
 and JSON event schemas have contract tests.
+The current workspace also exposes `--fork <SESSION_ID>` for creating a new
+session from the source session's active branch without rewriting the source
+JSONL file.
 
 Prompt layers:
 
@@ -741,6 +757,20 @@ budget_tokens = 10000
 
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
+
+[providers.openai_compatible.localai]
+api_key_env = "LOCALAI_API_KEY"
+base_url = "https://localai.example.com"
+max_tokens_field = "max_completion_tokens"
+
+[[providers.openai_compatible.localai.models]]
+id = "local-model"
+display_name = "Local Model"
+context_window = 128000
+max_output_tokens = 4096
+supports_images = true
+supports_streaming = true
+supports_thinking = false
 
 [keybindings]
 submit = "enter"
@@ -815,6 +845,17 @@ Entry types:
 
 Crash recovery MAY ignore an incomplete final line. Corrupt middle entries SHOULD be reported; automatic skipping of middle entries should require explicit recovery mode.
 
+Session fork commands create a new session file. The new header's
+`parent_session` field points at the source session ID, and the copied entries
+come from the same active-branch reconstruction path used by resume. Forking
+MUST NOT rewrite the source session file.
+
+Same-file branch creation uses the append-only tree model: runtime message
+entries use the current active tip as `parent_id`, compaction entries are linked
+under the previous active tip, and completed turns/compactions append a `leaf`
+pointer to mark the active branch. Selecting a prior branch tip and continuing
+therefore creates a new sibling path without rewriting previous entries.
+
 ### 9.4 Why Not pi Session v3
 
 Opi keeps pi's branch and compaction ideas but not its file format because pi stores TypeScript-specific extension data, opi has independent config/plugin plans, and accidental partial compatibility would be misleading. A future migration command MAY translate pi v3 sessions into opi v1 sessions.
@@ -852,6 +893,8 @@ Suggested exit codes:
 JSON mode is Phase 2 scope. It emits one `AgentSessionEvent` JSON object per line to stdout after the event schema has contract tests. Human-readable logs go to stderr. Phase 2 JSON mode SHOULD stay close to pi's event model but MUST include an opi schema version.
 
 RPC mode is an early Phase 4 extensibility surface. It should use strict JSONL framing: one command per line on stdin, correlated responses by optional `id`, and async events on stdout. RPC and SDK composition should precede dynamic plugin runtimes because they match pi's process-integration model without expanding core policy. Provider breadth beyond the Phase 3 set should primarily arrive through the Phase 4 SDK, extension, and model registry path instead of adding every provider to core.
+
+The default extension execution strategy is explicit registration, not dynamic Rust library loading. Embedders can register in-process Rust extensions through `ExtensionRegistry`; external packages should expose executable behavior through process/RPC adapters that translate package commands into SDK commands such as `extension_command`. Package/resource discovery remains metadata and resource composition unless an adapter explicitly registers executable code. The core binary MUST NOT `dlopen` arbitrary Rust crates by default, and it MUST NOT require Node/`jiti` to preserve pi's TypeScript extension mechanism.
 
 ## 11. Cross-Cutting Runtime Concerns
 
@@ -976,7 +1019,7 @@ All crates share one workspace version.
 | 0.2.0 | Phase 1 MVP | GitHub Release; crates.io only if publish gates pass except `opi-web-ui` |
 | 0.3.0 | Phase 2 persistence/providers | GitHub + crates.io |
 | 0.4.0 | Phase 3 production hardening | GitHub + crates.io |
-| 0.4.0 workspace | Phase 4 extensibility substrate | GitHub + crates.io for publishable crates; `opi-web-ui` remains unpublished |
+| 0.5.0 workspace | Phase 4 extensibility substrate | GitHub + crates.io for publishable crates; `opi-web-ui` remains unpublished |
 
 The first crates.io publish is gated by quality, not by the version number alone.
 It MAY happen at 0.2.0 if all published crates expose real, documented behavior
@@ -1107,7 +1150,7 @@ Exit criteria: enterprise providers work, image and terminal-image flows work, p
 
 ### Phase 4 - Extensibility Substrate
 
-Status: substrate implemented in the current `0.4.0` workspace.
+Status: substrate implemented in the current `0.5.0` workspace.
 
 Phase 4 is ordered so the reusable substrate lands before workflow-heavy
 features. Later tasks may depend on earlier tasks, but examples must not become
@@ -1115,7 +1158,7 @@ core policy.
 
 | # | Task | Crate |
 |---|---|---|
-| 4.1 | RPC JSONL mode with strict framing, correlated responses, async events, and session/model/thinking/compaction commands | `opi-coding-agent` |
+| 4.1 | RPC JSONL mode with strict framing, correlated responses, async events, extension commands, and session/model/thinking/compaction commands | `opi-coding-agent` |
 | 4.2 | SDK embedding surface over the same event and command model | `opi-coding-agent` / `opi-agent` |
 | 4.3 | settle `opi-agent::Transport`: real RPC/proxy transport, hidden unstable API, or removal before stable public API claims | `opi-agent` |
 | 4.4 | extension trait, lifecycle hooks, custom tools, custom commands, custom messages, and extension state | `opi-agent` / `opi-coding-agent` |

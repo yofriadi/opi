@@ -1,0 +1,14 @@
+---
+source: crates/opi-tui/tests/select_list_snapshots.rs
+expression: "render(widget, 40, 10)"
+---
+┌ Sessions ────────────────────────────┐
+│Type to filter...                     │
+│> 主 分 支  会 话                 12 条 消 息 │
+│修 复 路 径                       8 条 消 息 │
+│検 証 ブ ラ ン チ                       3 件 │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+└──────────────────────────────────────┘

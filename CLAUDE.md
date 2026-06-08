@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi), organized as an AI agent toolkit and terminal-first coding agent. v0.4.0 ships a multi-provider coding assistant (Anthropic, OpenAI, OpenAI Responses, OpenRouter, Mistral, Gemini, Bedrock, Azure OpenAI, Vertex AI), eight built-in tools, image attachments, fuzzy model/session/branch pickers, shell completion generation, a ratatui TUI with configurable keybindings/themes, session JSONL persistence with resume, context compaction, retry/backoff, cost tracking, RPC JSONL mode, shared SDK command/event types, extension hooks/tools/state, resource/package discovery, custom provider/model registration, and an unpublished `opi-web-ui` component/state/rendering crate. New work extends this foundation rather than redesigning the layout.
+`opi` is a Rust reimplementation of [earendil-works/pi](https://github.com/earendil-works/pi), organized as an AI agent toolkit and terminal-first coding agent. v0.5.0 ships a multi-provider coding assistant (Anthropic, OpenAI, OpenAI Responses, OpenRouter, Mistral, Gemini, Bedrock, Azure OpenAI, Vertex AI), config-driven OpenAI-compatible provider profiles, eight built-in tools, image attachments, fuzzy model/session/branch pickers, shell completion generation, a ratatui TUI with configurable keybindings/themes, session JSONL persistence with resume/fork and active branch `parent_id`/`leaf` links, context compaction, retry/backoff, cost tracking, RPC JSONL mode, shared SDK command/event types, extension hooks/tools/state, resource/package discovery, custom provider/model registration, and an unpublished `opi-web-ui` component/state/rendering crate. New work extends this foundation rather than redesigning the layout.
 
 Repository: https://github.com/OdradekAI/opi
 
@@ -49,7 +49,7 @@ When publishing internal crates, the `path` dependencies MUST also carry a `vers
 
 The `opi` binary (`opi-coding-agent`) chooses a mode at startup:
 
-- **Session commands** (`--list-sessions`, `--resume`, `--delete-session`): handled before any provider is constructed.
+- **Session commands** (`--list-sessions`, `--resume`, `--fork`, `--delete-session`): handled before any provider is constructed. `--fork <ID>` copies the source session's active branch into a new parented JSONL session and continues from it.
 - **RPC** (`--rpc`): builds a provider and `CodingHarness`, then runs the unstable JSONL command/event protocol over stdin/stdout.
 - **Non-interactive** (non-empty positional `[PROMPT]...`, `--non-interactive`, or `--json`): builds a provider, runs `NonInteractiveRunner::run()`, prints output (or NDJSON events with `--json`), exits.
 - **Interactive** (default, no prompt args): builds a `CodingHarness` with `InteractiveCodingHooks`, launches the ratatui-based TUI via `interactive::run_interactive_tui()`.
@@ -121,7 +121,7 @@ If you create or modify a test file, you MUST run that test and iterate until it
 
 ## Sessions
 
-Sessions are append-only JSONL files written by the coding harness. Default location is `%LOCALAPPDATA%\opi\sessions\` on Windows, `~/.local/share/opi/sessions/` on Unix; override with `OPI_SESSIONS_DIR`. Storage and resume logic lives in `opi-agent::SessionWriter`/`SessionReader`; compaction is in `opi-agent::CompactionEngine`. Session files hold a header plus message, compaction, and leaf entries; resume reconstructs the active branch and honors compaction summaries.
+Sessions are append-only JSONL files written by the coding harness. Default location is `%LOCALAPPDATA%\opi\sessions\` on Windows, `~/.local/share/opi/sessions/` on Unix; override with `OPI_SESSIONS_DIR`. Storage and resume logic lives in `opi-agent::SessionWriter`/`SessionReader`; compaction is in `opi-agent::CompactionEngine`. Session files hold a header plus message, compaction, and leaf entries; resume reconstructs the active branch and honors compaction summaries. Fork commands create a new session whose `parent_session` points at the source; they do not rewrite the source file.
 
 Tests that touch the session dir or `OPI_SESSIONS_DIR` must serialize — parallel env-var mutation has caused flakes before (see CHANGELOG 0.3.0 Fixed).
 

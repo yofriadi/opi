@@ -61,6 +61,36 @@ enum PickerKind {
     Branch,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BranchPickerCommand {
+    Branch,
+    Tree,
+}
+
+impl BranchPickerCommand {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Branch => "Select branch",
+            Self::Tree => "Session tree",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionForkCommand {
+    Fork,
+    Clone,
+}
+
+impl SessionForkCommand {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Fork => "forked",
+            Self::Clone => "cloned",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum PickerAction {
     SelectModel(String),
@@ -495,7 +525,7 @@ async fn tui_event_loop(
                     continue;
                 }
 
-                if input == "/branch" {
+                if let Some(command) = branch_picker_command(&input) {
                     let items_result = {
                         let h = harness.lock().await;
                         h.branch_picker_items()
@@ -511,7 +541,7 @@ async fn tui_event_loop(
                         Ok(items) => {
                             s.picker = Some(PickerOverlay {
                                 kind: PickerKind::Branch,
-                                title: "Select branch".into(),
+                                title: command.title().into(),
                                 state: SelectListState::new(items),
                             });
                         }
@@ -521,6 +551,28 @@ async fn tui_event_loop(
                                 format!("[branch picker failed: {e}]"),
                             ));
                         }
+                    }
+                    continue;
+                }
+
+                if let Some(command) = session_fork_command(&input) {
+                    let result = {
+                        let mut h = harness.lock().await;
+                        h.fork_current_session()
+                    };
+                    let mut s = state.lock().unwrap();
+                    match result {
+                        Ok((session_id, count)) => s.messages.push(TuiMessage::new(
+                            TuiRole::System,
+                            format!(
+                                "[session {}: {session_id}, {count} messages]",
+                                command.verb()
+                            ),
+                        )),
+                        Err(e) => s.messages.push(TuiMessage::new(
+                            TuiRole::System,
+                            format!("[session {} failed: {e}]", command.verb()),
+                        )),
                     }
                     continue;
                 }
@@ -640,6 +692,22 @@ fn build_shell(s: &TuiState) -> Shell {
     }
 
     shell
+}
+
+fn branch_picker_command(input: &str) -> Option<BranchPickerCommand> {
+    match input {
+        "/branch" => Some(BranchPickerCommand::Branch),
+        "/tree" => Some(BranchPickerCommand::Tree),
+        _ => None,
+    }
+}
+
+fn session_fork_command(input: &str) -> Option<SessionForkCommand> {
+    match input {
+        "/fork" => Some(SessionForkCommand::Fork),
+        "/clone" => Some(SessionForkCommand::Clone),
+        _ => None,
+    }
 }
 
 fn handle_picker_key(s: &mut TuiState, code: KeyCode) -> Option<PickerAction> {
@@ -764,6 +832,36 @@ mod tests {
         let action = handle_picker_key(&mut state, KeyCode::Enter);
         assert_eq!(action, Some(PickerAction::SelectBranch("mock:new".into())));
         assert!(state.picker.is_none());
+    }
+
+    #[test]
+    fn branch_picker_command_parses_branch_and_tree() {
+        assert_eq!(
+            branch_picker_command("/branch"),
+            Some(BranchPickerCommand::Branch)
+        );
+        assert_eq!(
+            branch_picker_command("/tree"),
+            Some(BranchPickerCommand::Tree)
+        );
+        assert_eq!(branch_picker_command("/session"), None);
+        assert_eq!(BranchPickerCommand::Branch.title(), "Select branch");
+        assert_eq!(BranchPickerCommand::Tree.title(), "Session tree");
+    }
+
+    #[test]
+    fn session_fork_command_parses_fork_and_clone() {
+        assert_eq!(
+            session_fork_command("/fork"),
+            Some(SessionForkCommand::Fork)
+        );
+        assert_eq!(
+            session_fork_command("/clone"),
+            Some(SessionForkCommand::Clone)
+        );
+        assert_eq!(session_fork_command("/branch"), None);
+        assert_eq!(SessionForkCommand::Fork.verb(), "forked");
+        assert_eq!(SessionForkCommand::Clone.verb(), "cloned");
     }
 
     #[test]

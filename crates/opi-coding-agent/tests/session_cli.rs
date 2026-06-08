@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use opi_agent::session::{MessageEntry, SessionEntry, SessionHeader, SessionWriter};
 use opi_ai::message::{InputContent, Message, UserMessage};
 use opi_coding_agent::session_cli::{
-    self, SessionInfo, delete_session, list_sessions, resume_session,
+    self, SessionInfo, delete_session, fork_session, list_sessions, resume_session,
 };
 
 // ---------------------------------------------------------------------------
@@ -218,6 +218,42 @@ fn resume_session_missing_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
+// fork_session tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fork_session_creates_new_session_with_parent_and_copied_entries() {
+    let dir = create_session_dir();
+    let header = make_header("sess-001", "/repo");
+    let path = dir.path().join("sess-001.jsonl");
+    let mut writer = SessionWriter::create(&path, header.clone()).unwrap();
+    writer.append(&test_message_entry("e1", "Hello")).unwrap();
+    writer.append(&test_message_entry("e2", "World")).unwrap();
+    drop(writer);
+
+    let forked = fork_session(dir.path(), "sess-001").unwrap();
+
+    assert_ne!(forked.header.id, "sess-001");
+    assert_eq!(forked.header.cwd, "/repo");
+    assert_eq!(forked.header.parent_session.as_deref(), Some("sess-001"));
+    assert_eq!(forked.entries.len(), 2);
+    assert!(forked.path.exists(), "forked session file should exist");
+
+    let (read_header, read_entries) = opi_agent::session::SessionReader::read_all(&forked.path)
+        .expect("forked session should be readable");
+    assert_eq!(read_header.id, forked.header.id);
+    assert_eq!(read_header.parent_session.as_deref(), Some("sess-001"));
+    assert_eq!(read_entries.len(), 2);
+}
+
+#[test]
+fn fork_session_missing_source_returns_error() {
+    let dir = create_session_dir();
+    let result = fork_session(dir.path(), "nonexistent");
+    assert!(result.is_err(), "forking a nonexistent session should fail");
+}
+
+// ---------------------------------------------------------------------------
 // delete_session tests
 // ---------------------------------------------------------------------------
 
@@ -339,6 +375,16 @@ fn cli_parse_delete_session() {
 }
 
 #[test]
+fn cli_parse_fork() {
+    use clap::Parser;
+    use opi_coding_agent::cli::Cli;
+
+    let cli = Cli::try_parse_from(["opi", "--fork", "sess-001"]);
+    assert!(cli.is_ok(), "--fork should parse");
+    assert_eq!(cli.unwrap().fork.as_deref(), Some("sess-001"));
+}
+
+#[test]
 fn cli_session_flags_are_independent() {
     use clap::Parser;
     use opi_coding_agent::cli::Cli;
@@ -347,6 +393,7 @@ fn cli_session_flags_are_independent() {
     let cli = Cli::try_parse_from(["opi", "--list-sessions"]).unwrap();
     assert!(cli.list_sessions);
     assert!(cli.resume.is_none());
+    assert!(cli.fork.is_none());
     assert!(cli.delete_session.is_none());
 }
 
@@ -361,6 +408,15 @@ fn resume_session_rejects_path_traversal() {
     assert!(resume_session(dir.path(), "..\\windows\\system32").is_err());
     assert!(resume_session(dir.path(), "../../secret").is_err());
     assert!(resume_session(dir.path(), "").is_err());
+}
+
+#[test]
+fn fork_session_rejects_path_traversal() {
+    let dir = create_session_dir();
+    assert!(fork_session(dir.path(), "../etc/passwd").is_err());
+    assert!(fork_session(dir.path(), "..\\windows\\system32").is_err());
+    assert!(fork_session(dir.path(), "../../secret").is_err());
+    assert!(fork_session(dir.path(), "").is_err());
 }
 
 #[test]

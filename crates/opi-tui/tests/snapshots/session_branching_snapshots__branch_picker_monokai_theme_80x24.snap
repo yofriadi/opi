@@ -3,7 +3,7 @@ source: crates/opi-tui/tests/session_branching_snapshots.rs
 expression: "render(widget, 80, 24)"
 ---
 ┌ Branches ────────────────────────────────────────────────────────────────────┐
-│>  * Main conversation                                                5 messag│
+│>  * Main conversation                                              5 messages│
 │   Branch A                                                         3 messages│
 │   Branch B                                                         2 messages│
 │                                                                              │

@@ -9,6 +9,7 @@
 //! Phase 2 fields: providers.{openai,openrouter,mistral,openai_responses,gemini}
 //! config with api_key_env, base_url, and OpenRouter-specific referer.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -82,6 +83,7 @@ pub struct ProvidersConfig {
     pub bedrock: BedrockProviderConfig,
     pub azure: AzureProviderConfig,
     pub vertex: VertexProviderConfig,
+    pub openai_compatible: BTreeMap<String, OpenAiCompatibleProviderConfig>,
 }
 
 /// `[providers.anthropic]` section.
@@ -168,6 +170,41 @@ pub struct VertexProviderConfig {
     pub base_url: Option<String>,
     /// Proxy configuration.
     pub proxy: Option<ProviderProxyConfig>,
+}
+
+/// Configured OpenAI-compatible provider profile.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpenAiCompatibleProviderConfig {
+    /// Provider id used in `provider:model` specs.
+    pub id: String,
+    /// Env var name for the API key.
+    pub api_key_env: String,
+    /// Base URL without the `/v1/chat/completions` suffix.
+    pub base_url: String,
+    /// Models advertised by this profile.
+    pub models: Vec<ConfiguredModelConfig>,
+    /// Optional role override for system messages.
+    pub system_role_override: Option<String>,
+    /// Optional request field name for max token limits.
+    pub max_tokens_field: Option<String>,
+    /// Whether tool result messages should include a `name` field.
+    pub tool_result_name_field: bool,
+    /// Whether usage can appear throughout the stream.
+    pub usage_in_stream: bool,
+    /// Proxy configuration.
+    pub proxy: Option<ProviderProxyConfig>,
+}
+
+/// Model metadata from provider profile configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConfiguredModelConfig {
+    pub id: String,
+    pub display_name: String,
+    pub context_window: u64,
+    pub max_output_tokens: u64,
+    pub supports_images: bool,
+    pub supports_streaming: bool,
+    pub supports_thinking: bool,
 }
 
 /// Per-provider proxy configuration from `[providers.*.proxy]`.
@@ -270,6 +307,7 @@ struct TomlProviders {
     gemini: TomlGenericProvider,
     azure: TomlAzureProvider,
     vertex: TomlVertexProvider,
+    openai_compatible: BTreeMap<String, TomlOpenAiCompatibleProvider>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -328,6 +366,31 @@ struct TomlOpenRouterProvider {
     base_url: Option<String>,
     referer: Option<String>,
     proxy: Option<TomlProxy>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlOpenAiCompatibleProvider {
+    api_key_env: Option<String>,
+    base_url: Option<String>,
+    models: Option<Vec<TomlConfiguredModel>>,
+    system_role_override: Option<String>,
+    max_tokens_field: Option<String>,
+    tool_result_name_field: Option<bool>,
+    usage_in_stream: Option<bool>,
+    proxy: Option<TomlProxy>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlConfiguredModel {
+    id: Option<String>,
+    display_name: Option<String>,
+    context_window: Option<u64>,
+    max_output_tokens: Option<u64>,
+    supports_images: Option<bool>,
+    supports_streaming: Option<bool>,
+    supports_thinking: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -547,6 +610,60 @@ impl TomlConfig {
                 url,
                 no_proxy: p.no_proxy,
             });
+        }
+        for (id, profile) in self.providers.openai_compatible {
+            let target = config
+                .providers
+                .openai_compatible
+                .entry(id.clone())
+                .or_insert_with(|| OpenAiCompatibleProviderConfig {
+                    id: id.clone(),
+                    ..Default::default()
+                });
+            target.id = id;
+            if let Some(v) = profile.api_key_env {
+                target.api_key_env = v;
+            }
+            if let Some(v) = profile.base_url {
+                target.base_url = v;
+            }
+            if let Some(v) = profile.system_role_override {
+                target.system_role_override = Some(v);
+            }
+            if let Some(v) = profile.max_tokens_field {
+                target.max_tokens_field = Some(v);
+            }
+            if let Some(v) = profile.tool_result_name_field {
+                target.tool_result_name_field = v;
+            }
+            if let Some(v) = profile.usage_in_stream {
+                target.usage_in_stream = v;
+            }
+            if let Some(models) = profile.models {
+                target.models = models
+                    .into_iter()
+                    .map(|model| {
+                        let id = model.id.unwrap_or_default();
+                        ConfiguredModelConfig {
+                            display_name: model.display_name.unwrap_or_else(|| id.clone()),
+                            id,
+                            context_window: model.context_window.unwrap_or_default(),
+                            max_output_tokens: model.max_output_tokens.unwrap_or_default(),
+                            supports_images: model.supports_images.unwrap_or(false),
+                            supports_streaming: model.supports_streaming.unwrap_or(true),
+                            supports_thinking: model.supports_thinking.unwrap_or(false),
+                        }
+                    })
+                    .collect();
+            }
+            if let Some(p) = profile.proxy
+                && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+            {
+                target.proxy = Some(ProviderProxyConfig {
+                    url,
+                    no_proxy: p.no_proxy,
+                });
+            }
         }
         if let Some(v) = self.keybindings.submit {
             config.keybindings.submit = v;

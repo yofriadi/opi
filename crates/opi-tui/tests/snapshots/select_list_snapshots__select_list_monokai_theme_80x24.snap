@@ -1,15 +1,14 @@
 ---
 source: crates/opi-tui/tests/select_list_snapshots.rs
-assertion_line: 105
 expression: "render(widget, 80, 24)"
 ---
 ┌ Models ──────────────────────────────────────────────────────────────────────┐
 │Type to filter...                                                             │
-│> Claude Sonnet 4.5                                                   Anthropi│
-│Claude Opus 4                                                       Anthropic │
-│GPT-4o                                                                 OpenAI │
-│GPT-4o Mini                                                            OpenAI │
-│Gemini 2.5 Flash                                                       Google │
+│> Claude Sonnet 4.5                                                  Anthropic│
+│Claude Opus 4                                                        Anthropic│
+│GPT-4o                                                                  OpenAI│
+│GPT-4o Mini                                                             OpenAI│
+│Gemini 2.5 Flash                                                        Google│
 │                                                                              │
 │                                                                              │
 │                                                                              │

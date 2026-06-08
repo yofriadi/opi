@@ -63,6 +63,29 @@ fn two_branches() -> Vec<BranchItem> {
     ]
 }
 
+fn cjk_branches() -> Vec<BranchItem> {
+    vec![
+        BranchItem {
+            tip_id: "cn-root".into(),
+            label: "主分支 会话".into(),
+            metadata: "12 条消息".into(),
+            is_active: true,
+        },
+        BranchItem {
+            tip_id: "cn-alt".into(),
+            label: "修复路径".into(),
+            metadata: "8 条消息".into(),
+            is_active: false,
+        },
+        BranchItem {
+            tip_id: "jp-alt".into(),
+            label: "検証ブランチ".into(),
+            metadata: "3 件".into(),
+            is_active: false,
+        },
+    ]
+}
+
 // ---------------------------------------------------------------------------
 // 80x24 snapshots
 // ---------------------------------------------------------------------------
@@ -97,6 +120,13 @@ fn branch_picker_empty_80x24() {
     let state = BranchPickerState::new(vec![]);
     let widget = BranchPicker::new(&state, "Branches").theme(Theme::default());
     insta::assert_snapshot!("branch_picker_empty_80x24", render(widget, 80, 24));
+}
+
+#[test]
+fn branch_picker_cjk_labels_40x10() {
+    let state = BranchPickerState::new(cjk_branches());
+    let widget = BranchPicker::new(&state, "Branches").theme(Theme::default());
+    insta::assert_snapshot!("branch_picker_cjk_labels_40x10", render(widget, 40, 10));
 }
 
 #[test]

@@ -29,6 +29,7 @@
 //! | `set_thinking_level` | Set reasoning/thinking level                  |
 //! | `compact`         | Trigger manual compaction                        |
 //! | `session_info`    | Query session metadata                           |
+//! | `extension_command` | Dispatch a command to registered extensions    |
 //! | `quit`            | Shut down the RPC session                        |
 //!
 //! # Responses and Errors
@@ -48,6 +49,7 @@ use std::time::Duration;
 
 use opi_agent::agent::AgentControl;
 use opi_agent::event::AgentEvent;
+use opi_agent::extension::ExtensionRegistry;
 use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
 use opi_agent::sdk::{SDK_SCHEMA_VERSION, SdkCommand, SdkResponse, agent_event_to_value};
@@ -99,23 +101,75 @@ impl RpcRunner {
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
     ) -> Result<Self, crate::policy::ToolPolicyError> {
-        let tool_config = crate::policy::ToolRuntimeConfig::resolve(
-            RunMode::NonInteractive,
-            allow_mutating,
-            tool_selection,
-        )?;
-        let hooks = Box::new(crate::runner::NonInteractiveHooks::new(allow_mutating));
-        let harness = CodingHarness::new_with_hooks_and_resume_tool_config(
+        Self::new_with_optional_extension_registry(
             provider,
             model,
             config,
             workspace_root,
-            hooks,
+            allow_mutating,
+            tool_selection,
             user_system_prompt,
             initial_messages,
             None,
-            tool_config,
-        );
+        )
+    }
+
+    /// Create a new RPC runner with an in-process extension registry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_extension_registry(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        allow_mutating: bool,
+        tool_selection: ToolSelection,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        extension_registry: ExtensionRegistry,
+    ) -> Result<Self, crate::policy::ToolPolicyError> {
+        Self::new_with_optional_extension_registry(
+            provider,
+            model,
+            config,
+            workspace_root,
+            allow_mutating,
+            tool_selection,
+            user_system_prompt,
+            initial_messages,
+            Some(extension_registry),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_optional_extension_registry(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        allow_mutating: bool,
+        tool_selection: ToolSelection,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        extension_registry: Option<ExtensionRegistry>,
+    ) -> Result<Self, crate::policy::ToolPolicyError> {
+        let tool_config = crate::policy::ToolRuntimeConfig::resolve(
+            RunMode::NonInteractive,
+            allow_mutating,
+            tool_selection.clone(),
+        )?;
+        let hooks = Box::new(crate::runner::NonInteractiveHooks::new(allow_mutating));
+        let mut builder = CodingHarness::builder(provider, model, config, workspace_root)
+            .hooks(hooks)
+            .initial_messages(initial_messages)
+            .tool_selection(tool_selection)
+            .tool_config(tool_config);
+        if let Some(prompt) = user_system_prompt {
+            builder = builder.user_system_prompt(prompt);
+        }
+        if let Some(registry) = extension_registry {
+            builder = builder.extension_registry(registry);
+        }
+        let harness = builder.build();
         let control = harness.control_handle();
         Ok(Self {
             harness: Some(harness),
@@ -274,7 +328,10 @@ impl RpcRunner {
                                 return ExitCode::Success as i32;
                             }
 
-                            if !self.handle_command(command, &mut run_task, &mut emit) {
+                            if !self
+                                .handle_command(command, &mut run_task, &mut emit)
+                                .await
+                            {
                                 let _ = self
                                     .shutdown_active_run(&mut run_task, &mut event_rx, &mut emit)
                                     .await;
@@ -378,7 +435,7 @@ impl RpcRunner {
         }
     }
 
-    fn handle_command(
+    async fn handle_command(
         &mut self,
         command: SdkCommand,
         run_task: &mut Option<tokio::task::JoinHandle<RunResult>>,
@@ -547,6 +604,38 @@ impl RpcRunner {
                     cmd_name,
                     data,
                 ))
+            }
+            SdkCommand::extension_command { name, args, .. } => {
+                if self.running {
+                    return emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "cannot dispatch extension command while agent is running",
+                    ));
+                }
+                let Some(harness) = self.harness.as_ref() else {
+                    return emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        "agent harness is unavailable",
+                    ));
+                };
+                match harness
+                    .dispatch_extension_command(&name, cmd_id.as_deref(), args)
+                    .await
+                {
+                    Ok(Some(data)) => emit(&response_success_with_data(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        data,
+                    )),
+                    Ok(None) => emit(&response_error(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        &format!("extension command not handled: {name}"),
+                    )),
+                    Err(e) => emit(&response_error(cmd_id.as_deref(), cmd_name, &e)),
+                }
             }
             SdkCommand::quit { .. } => true,
         }

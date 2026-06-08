@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 workspace 版本：`0.4.0`。
+当前 workspace 版本：`0.5.0`。
 
 `opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、RPC JSONL 模式、8 个内置工具、图片附件、模型/会话/分支选择器、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、token 用量累计，以及尽力而为的费用摘要。
 
@@ -126,6 +126,7 @@ Provider 支持在 `opi-ai` 中实现，并已接入 `opi-coding-agent`。
 | `bedrock:` | AWS Bedrock Converse streaming，使用 SigV4 | AWS 环境变量或共享 AWS config/credentials |
 | `azure:` | Azure OpenAI Chat Completions deployment | `AZURE_OPENAI_API_KEY` 加配置中的 endpoint |
 | `vertex:` | Google Vertex AI Gemini streaming | `VERTEX_ACCESS_TOKEN` 加配置中的 project/location |
+| 已配置 profile | OpenAI-compatible Chat Completions profile | profile 自己的 `api_key_env` |
 
 使用 `opi --list-models` 可列出已配置 Provider 暴露的模型；加 `--json` 可输出机器可读格式。
 
@@ -238,6 +239,23 @@ project = "my-gcp-project"
 location = "us-central1"
 models = ["gemini-2.5-flash", "gemini-2.5-pro"]
 
+[providers.openai_compatible.localai]
+api_key_env = "LOCALAI_API_KEY"
+base_url = "https://localai.example.com"
+system_role_override = "developer"
+max_tokens_field = "max_completion_tokens"
+tool_result_name_field = true
+usage_in_stream = true
+
+[[providers.openai_compatible.localai.models]]
+id = "local-model"
+display_name = "Local Model"
+context_window = 128000
+max_output_tokens = 4096
+supports_images = true
+supports_streaming = true
+supports_thinking = false
+
 [providers.openai.proxy]
 url = "http://proxy.example.com:8080"
 no_proxy = "localhost,127.0.0.1"
@@ -260,6 +278,9 @@ paths = ["vendor/my-package"]
 | `/model` | 打开当前 Provider 的模型选择器 |
 | `/session` | 打开会话选择器并恢复已有会话 |
 | `/branch` | 打开当前会话的分支选择器 |
+| `/tree` | 打开当前会话的会话树选择器 |
+| `/fork` | 把当前活跃分支 fork 成新的父子会话 |
+| `/clone` | 把当前活跃分支 clone 成新的父子会话 |
 | `/image <path>` | 为下一条提示词排队一张图片 |
 | `exit` 或 `quit` | 退出 TUI |
 
@@ -279,10 +300,11 @@ paths = ["vendor/my-package"]
 ```sh
 opi --list-sessions
 opi --resume <session-id> "从这个会话继续。"
+opi --fork <session-id> "从这个会话的 fork 继续。"
 opi --delete-session <session-id>
 ```
 
-会话文件保存 header，以及 message、compaction、leaf 条目。Resume 会重建活跃分支并保留压缩摘要语义。`--json` 会输出 session 事件、retry 事件、compaction 事件、thinking-level 事件，以及带 token 总量和可选费用总量的最终 session summary。
+会话文件保存 header，以及 message、compaction、leaf 条目。Resume 会重建活跃分支并保留压缩摘要语义。Fork 命令会创建新的 JSONL 会话，并让新 header 的 `parent_session` 指向源会话；源文件保持 append-only，不会被改写。`--json` 会输出 session 事件、retry 事件、compaction 事件、thinking-level 事件，以及带 token 总量和可选费用总量的最终 session summary。
 
 ## 上下文文件
 
@@ -290,7 +312,7 @@ opi --delete-session <session-id>
 
 ## RPC、SDK 与扩展
 
-`opi --rpc` 会通过 stdin/stdout 启动一个持久 JSONL 命令/事件会话。启动时会输出 `schema_version = 2` 的 `rpc_ready` 头；命令包括 `prompt`、`continue`、`abort`、`steer`、`follow_up`、`set_model`、`set_thinking_level`、`compact`、`session_info` 和 `quit`。响应可用可选的 `id` 关联；已接受的 prompt 输出会作为异步 agent 事件流式返回。
+`opi --rpc` 会通过 stdin/stdout 启动一个持久 JSONL 命令/事件会话。启动时会输出 `schema_version = 2` 的 `rpc_ready` 头；命令包括 `prompt`、`continue`、`abort`、`steer`、`follow_up`、`set_model`、`set_thinking_level`、`compact`、`session_info`、`extension_command` 和 `quit`。响应可用可选的 `id` 关联；已接受的 prompt 输出会作为异步 agent 事件流式返回。
 
 共享 SDK 类型位于 `opi_agent::sdk`。`opi-agent` 的 extension API 面向嵌入方支持生命周期 hook、自定义工具、自定义命令、自定义 agent message/state，以及自定义 provider/model 注册。CLI 会从用户、项目、package 和显式路径发现已配置的资源元数据，并把它暴露到 prompt/RPC metadata 中。它不会从磁盘动态加载任意 Rust 代码。
 

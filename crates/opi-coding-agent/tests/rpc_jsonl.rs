@@ -13,7 +13,9 @@
 //! - Interleaved async events
 //! - Compatibility with existing JSON mode event semantics
 
+use std::future::Future;
 use std::io::{BufRead, Write};
+use std::pin::Pin;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{
     Arc, Mutex,
@@ -22,6 +24,7 @@ use std::sync::{
 use std::time::Duration;
 
 use futures_util::stream;
+use opi_agent::extension::{Extension, ExtensionCommand, ExtensionError, ExtensionRegistry};
 use opi_ai::provider::{EventStream, ModelInfo, Provider, Request};
 use opi_ai::stream::{AssistantStreamEvent, StopReason};
 use opi_ai::test_support::{MockProvider, base_assistant, text_response};
@@ -113,6 +116,18 @@ fn rpc_parse_follow_up_command() {
     let cmd: RpcCommand =
         serde_json::from_str(r#"{"type":"follow_up","message":"then that"}"#).unwrap();
     assert!(matches!(cmd, RpcCommand::follow_up { .. }));
+}
+
+#[test]
+fn rpc_parse_extension_command() {
+    let cmd: RpcCommand = serde_json::from_str(
+        r#"{"type":"extension_command","id":"ext-1","name":"echo/upper","args":{"text":"hello"}}"#,
+    )
+    .unwrap();
+
+    assert!(matches!(cmd, RpcCommand::extension_command { .. }));
+    assert_eq!(cmd.id(), Some("ext-1"));
+    assert_eq!(cmd.command_name(), "extension_command");
 }
 
 #[test]
@@ -1498,6 +1513,78 @@ Body should remain undisclosed.
     assert_eq!(task.await.unwrap(), 0);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_extension_command_dispatches_to_registry_with_correlated_response_id() {
+    struct RpcCommandExtension;
+
+    impl Extension for RpcCommandExtension {
+        fn name(&self) -> &str {
+            "rpc-command-extension"
+        }
+
+        fn on_command(
+            &self,
+            command: &ExtensionCommand,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>, ExtensionError>> + Send>>
+        {
+            let command = command.clone();
+            Box::pin(async move {
+                if command.name != "test/echo" {
+                    return Ok(None);
+                }
+                Ok(Some(serde_json::json!({
+                    "handled": command.name,
+                    "args": command.args,
+                })))
+            })
+        }
+    }
+
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Box::new(RpcCommandExtension)).unwrap();
+    let (command_tx, mut output_rx, task) = custom_provider_runner_with_extension_registry(
+        MockProvider::new("mock", Vec::new()),
+        registry,
+    );
+
+    let header = recv_rpc_line(&mut output_rx).await;
+    assert_eq!(header["type"], "rpc_ready");
+
+    command_tx
+        .send(RpcCommand::extension_command {
+            id: Some("ext-42".into()),
+            name: "test/echo".into(),
+            args: serde_json::json!({ "value": 7 }),
+        })
+        .unwrap();
+    let response = recv_response(&mut output_rx, "extension_command").await;
+
+    assert_eq!(response["success"], true);
+    assert_eq!(response["id"], "ext-42");
+    assert_eq!(response["data"]["handled"], "test/echo");
+    assert_eq!(response["data"]["args"]["value"], 7);
+
+    command_tx
+        .send(RpcCommand::extension_command {
+            id: Some("ext-missing".into()),
+            name: "missing/command".into(),
+            args: serde_json::json!({}),
+        })
+        .unwrap();
+    let missing = recv_response(&mut output_rx, "extension_command").await;
+
+    assert_eq!(missing["success"], false);
+    assert_eq!(missing["id"], "ext-missing");
+    assert_eq!(
+        missing["error"],
+        "extension command not handled: missing/command"
+    );
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
+}
+
 fn rpc_model_info(id: &str, supports_thinking: bool) -> ModelInfo {
     rpc_model_info_with_max_output(id, supports_thinking, 100_000)
 }
@@ -2128,6 +2215,40 @@ fn rpc_test_runner(
         ToolSelection::Disabled,
         None,
         Vec::new(),
+    )
+    .expect("rpc runner should construct");
+
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_tx, output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut runner = runner;
+        runner.run_with_channels(command_rx, output_tx).await
+    });
+    (command_tx, output_rx, task)
+}
+
+fn custom_provider_runner_with_extension_registry<P>(
+    provider: P,
+    registry: ExtensionRegistry,
+) -> (
+    tokio::sync::mpsc::UnboundedSender<RpcCommand>,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    tokio::task::JoinHandle<i32>,
+)
+where
+    P: Provider + 'static,
+{
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let runner = RpcRunner::new_with_extension_registry(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        false,
+        ToolSelection::Disabled,
+        None,
+        Vec::new(),
+        registry,
     )
     .expect("rpc runner should construct");
 

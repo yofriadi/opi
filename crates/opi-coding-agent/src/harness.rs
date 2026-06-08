@@ -41,6 +41,7 @@ pub struct CodingHarness {
     system_prompt: String,
     resources: HarnessResources,
     model_registry: opi_ai::ProviderRegistry,
+    extension_registry: Option<ExtensionRegistry>,
     session: Option<SessionCoordinator>,
     /// Message count before the current turn — used to slice only new messages for persistence.
     turn_offset: usize,
@@ -580,9 +581,10 @@ impl CodingHarness {
         let mut injected_extension_names = Vec::new();
         let mut extension_event_registry = None;
         let extension_registry = build_options.extension_registry;
+        let active_extension_registry = extension_registry.clone();
         let (model_registry, model_registry_diagnostics) =
             Self::build_model_registry(provider.as_ref(), extension_registry.as_ref());
-        if let Some(registry) = extension_registry {
+        if let Some(registry) = extension_registry.as_ref() {
             extension_event_registry = Some(registry.clone());
             injected_extension_names = registry
                 .names()
@@ -703,6 +705,7 @@ impl CodingHarness {
             system_prompt,
             resources,
             model_registry,
+            extension_registry: active_extension_registry,
             session,
             turn_offset: initial_len,
             pending_images: Vec::new(),
@@ -851,6 +854,49 @@ impl CodingHarness {
         .ok();
         self.turn_offset = message_count;
         Ok(message_count)
+    }
+
+    /// Fork the active session into a new parented session and switch to it.
+    pub fn fork_current_session(&mut self) -> Result<(String, usize), String> {
+        let (dir, source_session_id) = {
+            let session = self
+                .session
+                .as_ref()
+                .ok_or_else(|| "no active session".to_owned())?;
+            let dir = session
+                .session_path()
+                .parent()
+                .ok_or_else(|| "active session has no parent directory".to_owned())?
+                .to_path_buf();
+            (dir, session.session_id().to_owned())
+        };
+
+        let forked = crate::session_cli::fork_session(&dir, &source_session_id)
+            .map_err(|e| e.to_string())?;
+        let messages = crate::session_cli::reconstruct_context(&forked.entries);
+        let message_count = messages.len();
+        self.agent.replace_messages(messages);
+
+        let compaction_config = opi_agent::compaction::CompactionConfig {
+            enabled: self.config.compaction.enabled,
+            threshold_tokens: self.config.compaction.threshold_tokens,
+        };
+        let path = forked.path;
+        let session_id = forked.header.id;
+        let entries = forked.entries;
+        self.session = Some(
+            SessionCoordinator::open_existing(
+                path,
+                session_id.clone(),
+                &entries,
+                message_count,
+                compaction_config,
+                self.agent.model().to_string(),
+            )
+            .map_err(|e| format!("failed to open forked session: {e}"))?,
+        );
+        self.turn_offset = message_count;
+        Ok((session_id, message_count))
     }
 
     /// Return branch picker items for the currently active session.
@@ -1071,6 +1117,26 @@ impl CodingHarness {
     /// Return resource metadata in the compact RPC/session-info shape.
     pub fn resource_metadata_json(&self) -> serde_json::Value {
         self.resources.metadata.to_rpc_json()
+    }
+
+    /// Dispatch a custom command to registered extensions.
+    pub async fn dispatch_extension_command(
+        &self,
+        name: &str,
+        id: Option<&str>,
+        args: serde_json::Value,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let Some(registry) = self.extension_registry.as_ref() else {
+            return Ok(None);
+        };
+        let mut command = opi_agent::extension::ExtensionCommand::new(name, args);
+        if let Some(id) = id {
+            command = command.with_id(id);
+        }
+        registry
+            .dispatch_command(&command)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Resolve a theme using discovered themes first, then built-ins.

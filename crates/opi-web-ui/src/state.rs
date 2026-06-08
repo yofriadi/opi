@@ -42,6 +42,8 @@ pub struct ConversationState {
     agent_running: bool,
     compacting: bool,
     last_response: Option<TrackedResponse>,
+    resources: Option<serde_json::Value>,
+    last_compaction: Option<serde_json::Value>,
     // Streaming state
     current_text: String,
     current_model: Option<String>,
@@ -65,6 +67,8 @@ impl ConversationState {
             agent_running: false,
             compacting: false,
             last_response: None,
+            resources: None,
+            last_compaction: None,
             current_text: String::new(),
             current_model: None,
             current_provider: None,
@@ -234,6 +238,16 @@ impl ConversationState {
         self.last_response.as_ref()
     }
 
+    /// Last resource metadata received from `session_info`.
+    pub fn resources(&self) -> Option<&serde_json::Value> {
+        self.resources.as_ref()
+    }
+
+    /// Last successful compaction response payload.
+    pub fn last_compaction(&self) -> Option<&serde_json::Value> {
+        self.last_compaction.as_ref()
+    }
+
     /// Build a [`ConversationView`] from the current state.
     pub fn to_conversation_view(&self) -> ConversationView {
         let mut view = ConversationView::new();
@@ -311,11 +325,18 @@ impl ConversationState {
                 {
                     self.message_count = message_count;
                 }
+                if let Some(resources) = data.get("resources") {
+                    self.resources = Some(resources.clone());
+                }
             }
             "set_model" => {
                 if let Some(model) = data.get("model").and_then(|value| value.as_str()) {
                     self.model = Some(model.to_owned());
                 }
+            }
+            "compact" => {
+                self.compacting = false;
+                self.last_compaction = Some(serde_json::Value::Object(data.clone()));
             }
             _ => {}
         }

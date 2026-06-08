@@ -289,3 +289,52 @@ api_key_env = "ANTHROPIC_API_KEY"
         "output should contain openai models, got: {stdout}",
     );
 }
+
+#[test]
+fn list_models_includes_configured_openai_compatible_profile() {
+    let output = run_opi_with_config(
+        r#"
+[providers.openai_compatible.localai]
+api_key_env = "LOCALAI_API_KEY"
+base_url = "https://localai.example.com"
+system_role_override = "developer"
+max_tokens_field = "max_completion_tokens"
+tool_result_name_field = true
+usage_in_stream = true
+
+[[providers.openai_compatible.localai.models]]
+id = "local-model"
+display_name = "Local Model"
+context_window = 128000
+max_output_tokens = 4096
+supports_images = true
+supports_streaming = true
+supports_thinking = true
+"#,
+        &["--list-models", "--json"],
+        &[("LOCALAI_API_KEY", "test-key-for-listing")],
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
+
+    let found = stdout.lines().any(|line| {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return false;
+        };
+        value["provider"].as_str() == Some("localai")
+            && value["model"].as_str() == Some("local-model")
+            && value["display_name"].as_str() == Some("Local Model")
+    });
+
+    assert!(
+        found,
+        "expected configured profile model in --list-models output, got: {stdout}"
+    );
+}

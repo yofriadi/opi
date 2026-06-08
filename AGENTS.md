@@ -6,7 +6,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 `opi` is a Rust reimplementation of ideas from [earendil-works/pi](https://github.com/earendil-works/pi), organized as an AI agent toolkit and terminal-first coding agent.
 
-Current workspace version: `0.4.0`.
+Current workspace version: `0.5.0`.
 
 The current implementation includes:
 
@@ -18,13 +18,13 @@ The current implementation includes:
 - Image attachments through `--image` and the TUI `/image` command.
 - Multi-provider streaming through Anthropic, OpenAI Chat Completions, OpenAI Responses, OpenRouter, Mistral, Gemini, AWS Bedrock, Azure OpenAI, and Google Vertex AI.
 - TOML config with layered precedence, per-provider proxy config, image limits, and mutating-tool defaults.
-- Session JSONL persistence with list/resume/delete CLI commands.
+- Session JSONL persistence with list/resume/fork/delete CLI commands, active branch `parent_id` links, and `leaf` pointers.
 - AGENTS.md / CLAUDE.md context file loading from workspace ancestors and the user config directory.
 - Context compaction, retry/backoff, usage accumulation, configurable keybindings/themes, shell completion generation, edit diff rendering, and best-effort cost tracking.
 - RPC JSONL mode and shared SDK command/response/event types.
 - Extension hooks/tools/state for embedders, plus config-driven resource discovery for extensions, packages, skills, prompt fragments, and themes.
-- Custom provider/model registration through the provider registry.
-- Interactive branch selection through `/branch`.
+- Custom provider/model registration through the provider registry, including config-driven OpenAI-compatible provider profiles.
+- Interactive session tree/fork/clone paths through `/branch`, `/tree`, `/fork`, and `/clone`.
 - An unpublished `opi-web-ui` component/state/rendering crate that consumes RPC/SDK events.
 
 `opi-web-ui` remains `publish = false`; it is not a standalone browser app.
@@ -75,6 +75,7 @@ The `opi` binary is produced by `opi-coding-agent`. Startup flow:
 - Model listing (`--list-models`, optionally with `--json`) resolves config, lists models advertised by configured providers, and then exits.
 - Session commands (`--list-sessions`, `--delete-session`) are handled before full provider construction and then exit.
 - `--resume <ID>` loads a JSONL session, reconstructs the active branch, and then continues in interactive or non-interactive mode.
+- `--fork <ID>` copies the source session's active branch into a new JSONL session whose `parent_session` points at the source, then continues from the fork.
 - Tool selection is resolved from `--no-tools`, `--tools`, `--no-builtin-tools`, run mode, and mutating-tool opt-in.
 - Non-interactive mode is selected by non-empty positional `[PROMPT]...`, `--non-interactive`, or `--json`. It builds a provider, runs `NonInteractiveRunner`, prints stdout/stderr, and exits with a numeric code.
 - Interactive mode is the default with no prompt args. It builds a `CodingHarness` with `InteractiveCodingHooks` and launches `interactive::run_interactive_tui()`.

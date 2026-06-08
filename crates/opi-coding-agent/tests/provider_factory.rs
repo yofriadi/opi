@@ -124,6 +124,67 @@ base_url = "https://custom.openai.example.com"
 }
 
 #[test]
+fn toml_parses_openai_compatible_profile_with_models_and_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[providers.openai_compatible.localai]
+api_key_env = "LOCALAI_API_KEY"
+base_url = "https://localai.example.com"
+system_role_override = "developer"
+max_tokens_field = "max_completion_tokens"
+tool_result_name_field = true
+usage_in_stream = true
+
+[providers.openai_compatible.localai.proxy]
+url = "http://proxy.example.com:8080"
+
+[[providers.openai_compatible.localai.models]]
+id = "local-model"
+display_name = "Local Model"
+context_window = 128000
+max_output_tokens = 4096
+supports_images = true
+supports_streaming = true
+supports_thinking = true
+"#,
+    )
+    .unwrap();
+    let config = load_config_file(&path).unwrap();
+
+    let profile = config
+        .providers
+        .openai_compatible
+        .get("localai")
+        .expect("profile should be parsed");
+    assert_eq!(profile.id, "localai");
+    assert_eq!(profile.api_key_env, "LOCALAI_API_KEY");
+    assert_eq!(profile.base_url, "https://localai.example.com");
+    assert_eq!(profile.system_role_override.as_deref(), Some("developer"));
+    assert_eq!(
+        profile.max_tokens_field.as_deref(),
+        Some("max_completion_tokens")
+    );
+    assert!(profile.tool_result_name_field);
+    assert!(profile.usage_in_stream);
+    assert_eq!(
+        profile.proxy.as_ref().map(|proxy| proxy.url.as_str()),
+        Some("http://proxy.example.com:8080")
+    );
+
+    let model = profile.models.first().expect("model should be parsed");
+    assert_eq!(model.id, "local-model");
+    assert_eq!(model.display_name, "Local Model");
+    assert_eq!(model.context_window, 128000);
+    assert_eq!(model.max_output_tokens, 4096);
+    assert!(model.supports_images);
+    assert!(model.supports_streaming);
+    assert!(model.supports_thinking);
+}
+
+#[test]
 fn toml_parses_openrouter_provider() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

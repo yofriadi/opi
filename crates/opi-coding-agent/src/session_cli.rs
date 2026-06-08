@@ -141,6 +141,34 @@ pub fn resume_session(dir: &Path, session_id: &str) -> Result<ResumedSession, Se
     })
 }
 
+/// Fork a session into a new JSONL file and return the fork as a resumed session.
+///
+/// The source session file is not modified. The new session copies only the
+/// active branch that would be reconstructed by `--resume`, then records the
+/// source session ID in `parent_session`.
+pub fn fork_session(dir: &Path, session_id: &str) -> Result<ResumedSession, SessionCliError> {
+    let source = resume_session(dir, session_id)?;
+    let entries: Vec<opi_agent::session::SessionEntry> = select_ordered_entries(&source.entries)
+        .into_iter()
+        .cloned()
+        .collect();
+    let (header, path) = new_fork_session_target(dir, &source.header)?;
+
+    std::fs::create_dir_all(dir)?;
+    let mut writer = opi_agent::session::SessionWriter::create(&path, header.clone())?;
+    for entry in &entries {
+        writer.append(entry)?;
+    }
+    drop(writer);
+
+    Ok(ResumedSession {
+        header,
+        entries,
+        path,
+        skipped_entries: 0,
+    })
+}
+
 /// Delete a session file by ID.
 pub fn delete_session(dir: &Path, session_id: &str) -> Result<(), SessionCliError> {
     validate_session_id(session_id)?;
@@ -177,6 +205,7 @@ pub fn format_sessions(sessions: &[SessionInfo]) -> String {
 pub fn handle_session_cli(
     list: bool,
     resume: Option<&str>,
+    fork: Option<&str>,
     delete: Option<&str>,
 ) -> Result<(bool, Option<ResumedSession>), i32> {
     let dir = session_dir();
@@ -218,6 +247,22 @@ pub fn handle_session_cli(
                 Err(1)
             }
         }
+    } else if let Some(id) = fork {
+        match fork_session(&dir, id) {
+            Ok(session) => {
+                eprintln!(
+                    "Forked session {id} -> {} ({} entries, cwd: {})",
+                    session.header.id,
+                    session.entries.len(),
+                    session.header.cwd,
+                );
+                Ok((true, Some(session)))
+            }
+            Err(e) => {
+                eprintln!("opi: {e}");
+                Err(1)
+            }
+        }
     } else if let Some(id) = delete {
         match delete_session(&dir, id) {
             Ok(()) => {
@@ -232,6 +277,100 @@ pub fn handle_session_cli(
     } else {
         Ok((false, None))
     }
+}
+
+fn new_fork_session_target(
+    dir: &Path,
+    source: &opi_agent::session::SessionHeader,
+) -> Result<(opi_agent::session::SessionHeader, PathBuf), SessionCliError> {
+    for suffix in 0..1000 {
+        let base = generate_session_id();
+        let id = if suffix == 0 {
+            base
+        } else {
+            format!("{base}-{suffix}")
+        };
+        let path = dir.join(format!("{id}.jsonl"));
+        if path.exists() {
+            continue;
+        }
+        let header = opi_agent::session::SessionHeader::new(
+            id,
+            now_iso(),
+            source.cwd.clone(),
+            Some(source.id.clone()),
+        );
+        return Ok((header, path));
+    }
+
+    Err(SessionCliError::Io(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "failed to allocate unique fork session id",
+    )))
+}
+
+fn generate_session_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("{ts:x}")
+}
+
+fn now_iso() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = secs / 86400;
+    let tod = secs % 86400;
+    let h = tod / 3600;
+    let m = (tod % 3600) / 60;
+    let s = tod % 60;
+    let (y, mo, d) = days_to_ymd(days);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
+    let mut year = 1970u64;
+    loop {
+        let diy = if is_leap(year) { 366 } else { 365 };
+        if days < diy {
+            break;
+        }
+        days -= diy;
+        year += 1;
+    }
+
+    let md = [
+        31,
+        if is_leap(year) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month = 0u64;
+    for &d in &md {
+        if days < d {
+            break;
+        }
+        days -= d;
+        month += 1;
+    }
+    (year, month + 1, days + 1)
+}
+
+fn is_leap(y: u64) -> bool {
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 /// Reconstruct agent messages from session entries for resume.

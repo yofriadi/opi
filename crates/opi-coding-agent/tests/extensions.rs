@@ -622,6 +622,77 @@ async fn harness_builder_extension_observes_agent_events() {
 }
 
 #[tokio::test]
+async fn harness_builder_dispatches_extension_commands() {
+    struct CommandExtension;
+
+    impl Extension for CommandExtension {
+        fn name(&self) -> &str {
+            "command-extension"
+        }
+
+        fn on_command(
+            &self,
+            command: &opi_agent::extension::ExtensionCommand,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<serde_json::Value>, ExtensionError>> + Send>>
+        {
+            let command = command.clone();
+            Box::pin(async move {
+                if command.name != "echo/upper" {
+                    return Ok(None);
+                }
+                let text = command
+                    .args
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_ascii_uppercase();
+                Ok(Some(serde_json::json!({
+                    "id": command.id,
+                    "text": text,
+                })))
+            })
+        }
+    }
+
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Box::new(CommandExtension)).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+
+    let harness = CodingHarness::builder(
+        Box::new(MockProvider::new("mock", vec![text_response("Done")])),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .extension_registry(registry)
+    .tool_selection(ToolSelection::Disabled)
+    .build();
+
+    let response = harness
+        .dispatch_extension_command(
+            "echo/upper",
+            Some("cmd-1"),
+            serde_json::json!({ "text": "hello" }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response,
+        Some(serde_json::json!({
+            "id": "cmd-1",
+            "text": "HELLO",
+        }))
+    );
+
+    let unhandled = harness
+        .dispatch_extension_command("unknown/command", None, serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(unhandled, None);
+}
+
+#[tokio::test]
 async fn harness_builder_tool_selection_disabled_filters_extension_tools() {
     let mut registry = ExtensionRegistry::new();
     registry

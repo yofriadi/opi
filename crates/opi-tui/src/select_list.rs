@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::Theme;
 
@@ -395,12 +396,19 @@ impl Widget for SelectList<'_> {
 
                 let meta_style = Style::default().fg(t.picker_metadata);
 
-                let display_text = truncate_str(display, inner.width as usize);
-                let meta_text = truncate_str(metadata, inner.width as usize);
-                let display_width = unicode_display_width(&display_text);
+                let selected_marker = if is_selected { "> " } else { "" };
+                let marker_width = unicode_display_width(selected_marker);
+                let row_width = inner.width as usize;
+
+                let meta_text = truncate_str(metadata, row_width.saturating_sub(marker_width));
                 let meta_width = unicode_display_width(&meta_text);
-                let padding = inner.width as usize;
-                let gap = padding.saturating_sub(display_width + 1 + meta_width);
+                let min_gap = usize::from(!meta_text.is_empty());
+                let display_text = truncate_str(
+                    display,
+                    row_width.saturating_sub(marker_width + meta_width + min_gap),
+                );
+                let display_width = unicode_display_width(&display_text);
+                let gap = row_width.saturating_sub(marker_width + display_width + meta_width);
 
                 let mut spans = vec![
                     Span::styled(display_text, style),
@@ -410,7 +418,7 @@ impl Widget for SelectList<'_> {
 
                 if is_selected {
                     // Prefix with pointer.
-                    spans.insert(0, Span::styled("> ", style));
+                    spans.insert(0, Span::styled(selected_marker, style));
                 }
 
                 lines.push(Line::from(spans));
@@ -427,7 +435,7 @@ fn truncate_str(s: &str, max_width: usize) -> String {
     let mut width = 0;
     let mut result = String::new();
     for ch in s.chars() {
-        let cw = unicode_display_width_char(ch);
+        let cw = ch.width().unwrap_or(0);
         if width + cw > max_width {
             break;
         }
@@ -438,13 +446,16 @@ fn truncate_str(s: &str, max_width: usize) -> String {
 }
 
 fn unicode_display_width(s: &str) -> usize {
-    s.chars().map(unicode_display_width_char).sum()
+    UnicodeWidthStr::width(s)
 }
 
-fn unicode_display_width_char(ch: char) -> usize {
-    match ch {
-        '\t' => 4,
-        c if c.is_control() => 0,
-        _ => 1,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unicode_width_counts_cjk_as_double_width() {
+        assert_eq!(unicode_display_width("分支"), 4);
+        assert_eq!(truncate_str("分支A", 4), "分支");
     }
 }

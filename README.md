@@ -9,7 +9,7 @@
 
 ## Status
 
-Current workspace version: `0.4.0`.
+Current workspace version: `0.5.0`.
 
 `opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, RPC JSONL mode, eight built-in tools, image attachments, model/session/branch pickers, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, token usage accumulation, and best-effort cost summaries.
 
@@ -126,6 +126,7 @@ Provider support is implemented in `opi-ai` and wired into `opi-coding-agent`.
 | `bedrock:` | AWS Bedrock Converse streaming with SigV4 | AWS env vars or shared AWS config/credentials |
 | `azure:` | Azure OpenAI Chat Completions deployment | `AZURE_OPENAI_API_KEY` plus config endpoint |
 | `vertex:` | Google Vertex AI Gemini streaming | `VERTEX_ACCESS_TOKEN` plus config project/location |
+| configured profile | OpenAI-compatible Chat Completions profile | profile-specific `api_key_env` |
 
 Use `opi --list-models` to list models advertised by configured providers. Add `--json` for machine-readable output.
 
@@ -238,6 +239,23 @@ project = "my-gcp-project"
 location = "us-central1"
 models = ["gemini-2.5-flash", "gemini-2.5-pro"]
 
+[providers.openai_compatible.localai]
+api_key_env = "LOCALAI_API_KEY"
+base_url = "https://localai.example.com"
+system_role_override = "developer"
+max_tokens_field = "max_completion_tokens"
+tool_result_name_field = true
+usage_in_stream = true
+
+[[providers.openai_compatible.localai.models]]
+id = "local-model"
+display_name = "Local Model"
+context_window = 128000
+max_output_tokens = 4096
+supports_images = true
+supports_streaming = true
+supports_thinking = false
+
 [providers.openai.proxy]
 url = "http://proxy.example.com:8080"
 no_proxy = "localhost,127.0.0.1"
@@ -260,6 +278,9 @@ With no prompt args, `opi` starts the ratatui TUI. Useful commands inside the in
 | `/model` | Open the model picker for the active provider |
 | `/session` | Open the session picker and resume a stored session |
 | `/branch` | Open the branch picker for the active session |
+| `/tree` | Open the session tree picker for the active session |
+| `/fork` | Fork the active branch into a new parented session |
+| `/clone` | Clone the active branch into a new parented session |
 | `/image <path>` | Queue an image for the next prompt |
 | `exit` or `quit` | Exit the TUI |
 
@@ -279,10 +300,11 @@ Override with `OPI_SESSIONS_DIR`.
 ```sh
 opi --list-sessions
 opi --resume <session-id> "Continue from this session."
+opi --fork <session-id> "Continue from a fork of this session."
 opi --delete-session <session-id>
 ```
 
-Session files store a header plus message, compaction, and leaf entries. Resume reconstructs the active branch and preserves compaction summaries. `--json` emits session events, retry events, compaction events, thinking-level events, and a final session summary with token totals and optional cost totals.
+Session files store a header plus message, compaction, and leaf entries. Resume reconstructs the active branch and preserves compaction summaries. Fork commands create a new JSONL session whose `parent_session` points at the source session; the source file remains append-only and unmodified. `--json` emits session events, retry events, compaction events, thinking-level events, and a final session summary with token totals and optional cost totals.
 
 ## Context Files
 
@@ -290,7 +312,7 @@ The coding harness discovers `AGENTS.md` and `CLAUDE.md` from the workspace dire
 
 ## RPC, SDK, and Extensions
 
-`opi --rpc` starts a persistent JSONL command/event session over stdin/stdout. It emits an initial `rpc_ready` header with `schema_version = 2`; commands include `prompt`, `continue`, `abort`, `steer`, `follow_up`, `set_model`, `set_thinking_level`, `compact`, `session_info`, and `quit`. Responses are correlated by optional `id`, while accepted prompt output streams as async agent events.
+`opi --rpc` starts a persistent JSONL command/event session over stdin/stdout. It emits an initial `rpc_ready` header with `schema_version = 2`; commands include `prompt`, `continue`, `abort`, `steer`, `follow_up`, `set_model`, `set_thinking_level`, `compact`, `session_info`, `extension_command`, and `quit`. Responses are correlated by optional `id`, while accepted prompt output streams as async agent events.
 
 The shared SDK types live in `opi_agent::sdk`. The extension API in `opi-agent` supports lifecycle hooks, custom tools, custom commands, custom agent messages/state, and custom provider/model registration for embedders. The CLI discovers configured resource metadata from user, project, package, and explicit paths and exposes it in prompts/RPC metadata. It does not dynamically load arbitrary Rust code from disk.
 

@@ -187,15 +187,22 @@ impl Widget for BranchPicker<'_> {
                 Style::default()
             };
 
+            let selected_marker = if is_selected { "> " } else { "" };
             let active_marker = if item.is_active { " * " } else { "   " };
             let meta_style = Style::default().fg(t.picker_metadata);
 
-            let label_text = truncate_to_width(&item.label, inner.width as usize);
-            let meta_text = truncate_to_width(&item.metadata, inner.width as usize);
-            let label_w = unicode_display_width(&label_text);
+            let row_width = inner.width as usize;
+            let marker_w =
+                unicode_display_width(selected_marker) + unicode_display_width(active_marker);
+            let meta_text = truncate_to_width(&item.metadata, row_width.saturating_sub(marker_w));
             let meta_w = unicode_display_width(&meta_text);
-            let padding = inner.width as usize;
-            let gap = padding.saturating_sub(label_w + 3 + meta_w);
+            let min_gap = usize::from(!meta_text.is_empty());
+            let label_text = truncate_to_width(
+                &item.label,
+                row_width.saturating_sub(marker_w + meta_w + min_gap),
+            );
+            let label_w = unicode_display_width(&label_text);
+            let gap = row_width.saturating_sub(marker_w + label_w + meta_w);
 
             let mut spans = vec![
                 Span::styled(active_marker.to_string(), meta_style),
@@ -205,7 +212,7 @@ impl Widget for BranchPicker<'_> {
             ];
 
             if is_selected {
-                spans.insert(0, Span::styled("> ", style));
+                spans.insert(0, Span::styled(selected_marker, style));
             }
 
             lines.push(Line::from(spans));

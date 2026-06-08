@@ -51,6 +51,7 @@ fn main() {
     let (resumed_messages, resume_info) = match opi_coding_agent::session_cli::handle_session_cli(
         cli.list_sessions,
         cli.resume.as_deref(),
+        cli.fork.as_deref(),
         cli.delete_session.as_deref(),
     ) {
         Ok((true, Some(session))) => {
@@ -679,9 +680,16 @@ fn build_runtime_provider(
             .with_client(build_http_client(vertex_config.proxy.as_ref())?);
             Ok(Box::new(provider) as Box<dyn Provider>)
         }
-        other => Err(ProviderBuildError::Config(format!(
-            "unknown provider: {other}"
-        ))),
+        other => {
+            if let Some(profile) = config.providers.openai_compatible.get(other) {
+                let provider = build_runtime_openai_compatible_profile(profile)?;
+                Ok(Box::new(provider) as Box<dyn Provider>)
+            } else {
+                Err(ProviderBuildError::Config(format!(
+                    "unknown provider: {other}"
+                )))
+            }
+        }
     }
 }
 
@@ -865,6 +873,15 @@ fn build_list_models_registry(
             Err(e @ ListModelsError::Config(_)) => return Err(e),
         }
     }
+    for profile in config.providers.openai_compatible.values() {
+        match build_list_models_openai_compatible_profile(profile) {
+            Ok(provider) => registry
+                .register_provider(Box::new(provider))
+                .map_err(|e| ListModelsError::Config(e.to_string()))?,
+            Err(ListModelsError::MissingCredentials) => {}
+            Err(e @ ListModelsError::Config(_)) => return Err(e),
+        }
+    }
     Ok(registry)
 }
 
@@ -973,6 +990,98 @@ fn build_mistral(
     Ok(
         opi_ai::mistral::mistral_provider(api_key, config.providers.mistral.base_url.clone())
             .with_shared_client(client),
+    )
+}
+
+fn build_runtime_openai_compatible_profile(
+    profile: &opi_coding_agent::config::OpenAiCompatibleProviderConfig,
+) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ProviderBuildError> {
+    let default_env = profile_api_key_env_default(&profile.id);
+    let env_name = resolve_env_name(&profile.api_key_env, &default_env);
+    let api_key = require_api_key(&env_name)?;
+    let client = build_http_client(profile.proxy.as_ref())?;
+    build_openai_compatible_profile(profile, api_key, client).map_err(ProviderBuildError::Config)
+}
+
+fn build_list_models_openai_compatible_profile(
+    profile: &opi_coding_agent::config::OpenAiCompatibleProviderConfig,
+) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ListModelsError> {
+    let default_env = profile_api_key_env_default(&profile.id);
+    let env_name = resolve_env_name(&profile.api_key_env, &default_env);
+    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let client = build_http_client(profile.proxy.as_ref())
+        .map_err(|e| ListModelsError::Config(e.to_string()))?;
+    build_openai_compatible_profile(profile, api_key, client).map_err(ListModelsError::Config)
+}
+
+fn build_openai_compatible_profile(
+    profile: &opi_coding_agent::config::OpenAiCompatibleProviderConfig,
+    api_key: String,
+    client: Arc<opi_ai::http::HttpClient>,
+) -> Result<opi_ai::openai_chat::OpenAiChatProvider, String> {
+    if profile.id.trim().is_empty() {
+        return Err("openai-compatible profile id cannot be empty".into());
+    }
+    if profile.base_url.trim().is_empty() {
+        return Err(format!(
+            "openai-compatible profile '{}' requires base_url",
+            profile.id
+        ));
+    }
+    if profile.models.is_empty() {
+        return Err(format!(
+            "openai-compatible profile '{}' requires at least one model",
+            profile.id
+        ));
+    }
+
+    let mut models = Vec::with_capacity(profile.models.len());
+    for model in &profile.models {
+        if model.id.trim().is_empty() {
+            return Err(format!(
+                "openai-compatible profile '{}' has a model with an empty id",
+                profile.id
+            ));
+        }
+        models.push(opi_ai::provider::ModelInfo {
+            id: model.id.clone(),
+            display_name: if model.display_name.is_empty() {
+                model.id.clone()
+            } else {
+                model.display_name.clone()
+            },
+            context_window: model.context_window,
+            max_output_tokens: model.max_output_tokens,
+            supports_images: model.supports_images,
+            supports_streaming: model.supports_streaming,
+            supports_thinking: model.supports_thinking,
+        });
+    }
+
+    let compat = opi_ai::openai_chat::CompatConfig {
+        system_role_override: profile.system_role_override.clone(),
+        max_tokens_field: profile
+            .max_tokens_field
+            .clone()
+            .unwrap_or_else(|| "max_tokens".into()),
+        tool_result_name_field: profile.tool_result_name_field,
+        usage_in_stream: profile.usage_in_stream,
+    };
+    Ok(opi_ai::openai_chat::OpenAiChatProvider::new_for_profile(
+        api_key,
+        profile.base_url.clone(),
+        profile.id.clone(),
+        compat,
+        vec![],
+        models,
+    )
+    .with_shared_client(client))
+}
+
+fn profile_api_key_env_default(provider_id: &str) -> String {
+    format!(
+        "{}_API_KEY",
+        provider_id.replace('-', "_").to_ascii_uppercase()
     )
 }
 

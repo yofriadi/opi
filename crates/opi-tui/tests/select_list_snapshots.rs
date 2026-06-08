@@ -53,6 +53,26 @@ fn sample_items() -> Vec<SelectItem> {
     ]
 }
 
+fn cjk_items() -> Vec<SelectItem> {
+    vec![
+        SelectItem {
+            id: "session-cn-root".into(),
+            display: "主分支 会话".into(),
+            metadata: "12 条消息".into(),
+        },
+        SelectItem {
+            id: "session-cn-alt".into(),
+            display: "修复路径".into(),
+            metadata: "8 条消息".into(),
+        },
+        SelectItem {
+            id: "session-jp-alt".into(),
+            display: "検証ブランチ".into(),
+            metadata: "3 件".into(),
+        },
+    ]
+}
+
 // ---------------------------------------------------------------------------
 // 80x24 snapshots
 // ---------------------------------------------------------------------------
@@ -93,6 +113,13 @@ fn select_list_empty_items_80x24() {
     let state = SelectListState::new(vec![]);
     let widget = opi_tui::select_list::SelectList::new(&state, "Sessions").theme(Theme::default());
     insta::assert_snapshot!("select_list_empty_items_80x24", render(widget, 80, 24));
+}
+
+#[test]
+fn select_list_cjk_labels_40x10() {
+    let state = SelectListState::new(cjk_items());
+    let widget = opi_tui::select_list::SelectList::new(&state, "Sessions").theme(Theme::default());
+    insta::assert_snapshot!("select_list_cjk_labels_40x10", render(widget, 40, 10));
 }
 
 // ---------------------------------------------------------------------------

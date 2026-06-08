@@ -14,8 +14,8 @@
 //!
 //! [`SdkCommand`] covers the full set of operations: prompt, continue, steer,
 //! follow_up, abort, set_model, set_thinking_level, compact, session_info,
-//! and quit. Each variant carries an optional `id` for request/response
-//! correlation.
+//! extension_command, and quit. Each variant carries an optional `id` for
+//! request/response correlation.
 //!
 //! # Responses
 //!
@@ -108,6 +108,13 @@ pub enum SdkCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    /// Dispatch a custom command to registered extensions.
+    extension_command {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        name: String,
+        args: serde_json::Value,
+    },
     /// Shut down the session.
     quit {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,6 +135,7 @@ impl SdkCommand {
             | Self::set_thinking_level { id, .. }
             | Self::compact { id }
             | Self::session_info { id }
+            | Self::extension_command { id, .. }
             | Self::quit { id } => id.as_deref(),
         }
     }
@@ -144,6 +152,7 @@ impl SdkCommand {
             Self::set_thinking_level { .. } => "set_thinking_level",
             Self::compact { .. } => "compact",
             Self::session_info { .. } => "session_info",
+            Self::extension_command { .. } => "extension_command",
             Self::quit { .. } => "quit",
         }
     }

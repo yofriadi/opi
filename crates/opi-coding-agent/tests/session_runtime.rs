@@ -31,6 +31,13 @@ fn test_message_entry(id: &str, text: &str) -> SessionEntry {
     })
 }
 
+fn message_entry_count(entries: &[SessionEntry]) -> usize {
+    entries
+        .iter()
+        .filter(|entry| matches!(entry, SessionEntry::Message(_)))
+        .count()
+}
+
 /// Set env var safely (edition 2024 requires unsafe for set_var).
 fn set_sessions_dir(dir: &std::path::Path) {
     // SAFETY: test-only env var mutation; no other thread reads this var
@@ -113,7 +120,15 @@ fn session_coordinator_persists_messages_on_turn_end() {
     // Read back
     let jsonl_path = dir.path().join(format!("{}.jsonl", coord.session_id()));
     let (_header, entries) = SessionReader::read_all(&jsonl_path).unwrap();
-    assert_eq!(entries.len(), 2, "should have two message entries");
+    assert_eq!(
+        message_entry_count(&entries),
+        2,
+        "should have two message entries"
+    );
+    assert!(
+        matches!(entries.last(), Some(SessionEntry::Leaf(_))),
+        "runtime should update the active branch leaf"
+    );
 }
 
 #[test]
@@ -409,6 +424,50 @@ async fn multi_turn_session_persistence() {
     clear_sessions_dir();
 }
 
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn harness_forks_current_session_into_new_parented_session() {
+    let _lock = session_lock();
+    let dir = tempfile::tempdir().unwrap();
+    set_sessions_dir(dir.path());
+
+    let response = test_support::text_response("Fork me");
+    let provider = MockProvider::new("mock", vec![response]);
+
+    let mut harness = CodingHarness::new(
+        Box::new(provider),
+        "mock-model".into(),
+        OpiConfig::default(),
+        std::env::current_dir().unwrap(),
+    );
+
+    let _ = harness.prompt("Hello").await.unwrap();
+    let source_session_id = harness.session().unwrap().session_id().to_owned();
+    let source_path = dir.path().join(format!("{source_session_id}.jsonl"));
+    let (_, source_entries) = SessionReader::read_all(&source_path).unwrap();
+
+    let (forked_session_id, message_count) = harness.fork_current_session().unwrap();
+    let source_content_entries = message_entry_count(&source_entries);
+
+    assert_ne!(forked_session_id, source_session_id);
+    assert_eq!(harness.session().unwrap().session_id(), forked_session_id);
+    assert_eq!(message_count, source_content_entries);
+
+    let forked_path = dir.path().join(format!("{forked_session_id}.jsonl"));
+    let (forked_header, forked_entries) = SessionReader::read_all(&forked_path).unwrap();
+    assert_eq!(
+        forked_header.parent_session.as_deref(),
+        Some(source_session_id.as_str())
+    );
+    assert_eq!(forked_entries.len(), source_content_entries);
+    assert!(
+        source_path.exists(),
+        "source session must remain append-only"
+    );
+
+    clear_sessions_dir();
+}
+
 // ---------------------------------------------------------------------------
 // Compaction tests
 // ---------------------------------------------------------------------------
@@ -615,7 +674,11 @@ fn open_existing_appends_to_original_file() {
 
     let (header_before, entries_before) =
         opi_agent::session::SessionReader::read_all(&session_path).unwrap();
-    assert_eq!(entries_before.len(), 1);
+    assert_eq!(message_entry_count(&entries_before), 1);
+    assert!(
+        matches!(entries_before.last(), Some(SessionEntry::Leaf(_))),
+        "first turn should persist a leaf pointer"
+    );
 
     // Open the same file and append another turn.
     let mut resumed = SessionCoordinator::open_existing(
@@ -642,9 +705,13 @@ fn open_existing_appends_to_original_file() {
         opi_agent::session::SessionReader::read_all(&session_path).unwrap();
     assert_eq!(header_after.id, header_before.id);
     assert_eq!(
-        entries_after.len(),
+        message_entry_count(&entries_after),
         2,
-        "resumed session should grow, not start over"
+        "resumed session should grow by message entries, not start over"
+    );
+    assert!(
+        matches!(entries_after.last(), Some(SessionEntry::Leaf(_))),
+        "resumed turn should update the active branch leaf"
     );
 }
 
@@ -1064,6 +1131,137 @@ fn session_coordinator_append_leaf_switches_active_branch() {
     } else {
         panic!("expected branch-b after appended leaf");
     }
+}
+
+#[test]
+fn session_coordinator_links_turn_entries_and_updates_leaf_tip() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut coord = SessionCoordinator::new(
+        dir.path(),
+        "/test",
+        opi_agent::compaction::CompactionConfig::default(),
+        "anthropic:claude-sonnet-4",
+    )
+    .unwrap();
+
+    let messages = vec![
+        AgentMessage::Llm(Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "first".into(),
+            }],
+            timestamp_ms: 0,
+        })),
+        AgentMessage::Llm(Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "second".into(),
+            }],
+            timestamp_ms: 0,
+        })),
+    ];
+
+    coord
+        .on_turn_end_simple(&messages, &opi_ai::stream::Usage::default())
+        .unwrap();
+
+    let path = dir.path().join(format!("{}.jsonl", coord.session_id()));
+    let (_header, entries) = SessionReader::read_all(&path).unwrap();
+    assert_eq!(entries.len(), 3, "two messages plus a leaf pointer");
+
+    let first = match &entries[0] {
+        SessionEntry::Message(m) => m,
+        other => panic!("expected first message entry, got {other:?}"),
+    };
+    let second = match &entries[1] {
+        SessionEntry::Message(m) => m,
+        other => panic!("expected second message entry, got {other:?}"),
+    };
+    assert_eq!(first.parent_id, None);
+    assert_eq!(second.parent_id.as_deref(), Some(first.id.as_str()));
+
+    let leaf = match &entries[2] {
+        SessionEntry::Leaf(l) => l,
+        other => panic!("expected leaf entry, got {other:?}"),
+    };
+    assert_eq!(leaf.entry_id, second.id);
+    assert_eq!(leaf.parent_id.as_deref(), Some(second.id.as_str()));
+}
+
+#[test]
+fn open_existing_appends_new_turn_under_active_leaf_tip() {
+    let dir = tempfile::tempdir().unwrap();
+    let header = make_header("branch-append-sess", "/repo");
+    let path = dir.path().join("branch-append-sess.jsonl");
+    let mut writer = SessionWriter::create(&path, header).unwrap();
+
+    let user = |id: &str, parent: Option<&str>, text: &str| {
+        SessionEntry::Message(MessageEntry {
+            id: id.into(),
+            parent_id: parent.map(|s| s.into()),
+            timestamp: "2026-05-23T12:00:00Z".into(),
+            message: Message::User(UserMessage {
+                content: vec![InputContent::Text { text: text.into() }],
+                timestamp_ms: 0,
+            }),
+        })
+    };
+
+    writer.append(&user("e1", None, "root")).unwrap();
+    writer.append(&user("e2a", Some("e1"), "branch-a")).unwrap();
+    writer.append(&user("e2b", Some("e1"), "branch-b")).unwrap();
+    writer
+        .append(&SessionEntry::Leaf(opi_agent::session::LeafEntry {
+            id: "leaf-a".into(),
+            parent_id: Some("e2a".into()),
+            timestamp: "2026-05-23T12:00:01Z".into(),
+            entry_id: "e2a".into(),
+        }))
+        .unwrap();
+    drop(writer);
+
+    let (_header, entries) = SessionReader::read_all(&path).unwrap();
+    let mut coord = SessionCoordinator::open_existing(
+        path.clone(),
+        "branch-append-sess".into(),
+        &entries,
+        2,
+        opi_agent::compaction::CompactionConfig::default(),
+        "anthropic:claude-sonnet-4",
+    )
+    .unwrap();
+
+    coord
+        .on_turn_end_simple(
+            &[AgentMessage::Llm(Message::User(UserMessage {
+                content: vec![InputContent::Text {
+                    text: "after-a".into(),
+                }],
+                timestamp_ms: 0,
+            }))],
+            &opi_ai::stream::Usage::default(),
+        )
+        .unwrap();
+
+    let (_header, entries) = SessionReader::read_all(&path).unwrap();
+    let appended = entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::Message(m) => match &m.message {
+                Message::User(u) => match &u.content[0] {
+                    InputContent::Text { text } if text == "after-a" => Some(m),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("new branch message should be persisted");
+    assert_eq!(appended.parent_id.as_deref(), Some("e2a"));
+
+    let last_leaf_tip = entries.iter().rev().find_map(|entry| match entry {
+        SessionEntry::Leaf(l) => Some(l.entry_id.as_str()),
+        _ => None,
+    });
+    assert_eq!(last_leaf_tip, Some(appended.id.as_str()));
 }
 
 #[test]

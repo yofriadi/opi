@@ -298,6 +298,29 @@ fn parse_rpc_response_event() {
 }
 
 #[test]
+fn parse_rpc_response_preserves_data_payload() {
+    let raw = serde_json::json!({
+        "type": "response",
+        "command": "extension_command",
+        "success": true,
+        "id": "ext-1",
+        "data": {
+            "handled": "todo/list",
+            "items": [{"id": "t1", "title": "Ship"}]
+        }
+    });
+    let event = WebUiEvent::parse(&raw).expect("should parse RPC response data");
+    match event {
+        WebUiEvent::RpcResponse { data, .. } => {
+            let data = data.expect("data should be preserved");
+            assert_eq!(data["handled"], "todo/list");
+            assert_eq!(data["items"][0]["title"], "Ship");
+        }
+        other => panic!("expected RpcResponse, got {:?}", other),
+    }
+}
+
+#[test]
 fn parse_rpc_response_error() {
     let raw = serde_json::json!({
         "type": "response",
@@ -532,6 +555,60 @@ fn rpc_session_info_response_updates_status_state() {
     assert_eq!(state.session_id(), Some("abc123"));
     assert_eq!(state.turn_count(), 2);
     assert_eq!(state.message_count(), 5);
+}
+
+#[test]
+fn rpc_session_info_response_preserves_resources_state() {
+    let raw = serde_json::json!({
+        "type": "response",
+        "command": "session_info",
+        "success": true,
+        "id": "resources-1",
+        "data": {
+            "model": "anthropic:claude-sonnet-4",
+            "session_id": "abc123",
+            "resources": {
+                "skills": ["review"],
+                "packages": ["workflow-pack"]
+            }
+        }
+    });
+    let event = WebUiEvent::parse(&raw).unwrap();
+    let mut state = ConversationState::new();
+    state.process(event);
+
+    let resources = state.resources().expect("resources should be tracked");
+    assert_eq!(resources["skills"][0], "review");
+    assert_eq!(resources["packages"][0], "workflow-pack");
+}
+
+#[test]
+fn rpc_compact_response_updates_compaction_status_state() {
+    let raw = serde_json::json!({
+        "type": "response",
+        "command": "compact",
+        "success": true,
+        "id": "compact-1",
+        "data": {
+            "summary": "Earlier context summarized.",
+            "first_kept_entry_id": "entry-9",
+            "tokens_before": 120000,
+            "tokens_after": 40000
+        }
+    });
+    let event = WebUiEvent::parse(&raw).unwrap();
+    let mut state = ConversationState::new();
+    state.process(WebUiEvent::CompactionStart {
+        reason: "manual".to_owned(),
+    });
+    state.process(event);
+
+    assert!(!state.is_compacting());
+    let compaction = state
+        .last_compaction()
+        .expect("compaction data should be tracked");
+    assert_eq!(compaction["summary"], "Earlier context summarized.");
+    assert_eq!(compaction["tokens_after"], 40000);
 }
 
 #[test]

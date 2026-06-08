@@ -67,6 +67,10 @@ pub struct Cli {
     #[arg(long)]
     pub resume: Option<String>,
 
+    /// Fork a session by ID into a new session.
+    #[arg(long)]
+    pub fork: Option<String>,
+
     /// Delete a session by ID.
     #[arg(long)]
     pub delete_session: Option<String>,

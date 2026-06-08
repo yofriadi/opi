@@ -53,6 +53,8 @@ pub struct SessionCoordinator {
     /// uses `current_total - watermark` so compaction doesn't re-trigger
     /// every turn after the threshold is crossed once.
     compaction_watermark_tokens: u64,
+    /// Last persisted Message/Compaction entry on the active branch.
+    active_tip_entry_id: Option<String>,
 }
 
 impl SessionCoordinator {
@@ -79,6 +81,7 @@ impl SessionCoordinator {
             agent_message_indices: Vec::new(),
             agent_message_count: 0,
             compaction_watermark_tokens: 0,
+            active_tip_entry_id: None,
         })
     }
 
@@ -117,6 +120,10 @@ impl SessionCoordinator {
         // selection as reconstruct_context so the coordinator's internal
         // state stays aligned with the Agent's message buffer.
         let ordered = crate::session_cli::select_ordered_entries(existing_entries);
+        let active_tip_entry_id = ordered
+            .iter()
+            .rev()
+            .find_map(|entry| content_entry_id(entry).map(ToOwned::to_owned));
 
         let mut entries: Vec<Entry> = Vec::new();
         let mut indices: Vec<usize> = Vec::new();
@@ -207,6 +214,7 @@ impl SessionCoordinator {
             agent_message_indices: indices,
             agent_message_count: prior_agent_message_count,
             compaction_watermark_tokens: watermark,
+            active_tip_entry_id,
         })
     }
 
@@ -230,25 +238,33 @@ impl SessionCoordinator {
         self.usage.accumulate(usage);
 
         let mut agent_idx = turn_start_agent_index;
+        let mut parent_id = self.active_tip_entry_id.clone();
+        let mut last_persisted_entry_id = None;
         for msg in new_messages {
             if let AgentMessage::Llm(m) = msg {
                 let entry_id = format!("msg-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed));
                 let entry = SessionEntry::Message(MessageEntry {
                     id: entry_id.clone(),
-                    parent_id: None,
+                    parent_id: parent_id.clone(),
                     timestamp: now_iso(),
                     message: m.clone(),
                 });
                 self.writer.append(&entry)?;
                 self.entries.push(Entry {
-                    id: entry_id,
+                    id: entry_id.clone(),
                     message: msg.clone(),
                 });
                 self.agent_message_indices.push(agent_idx);
+                parent_id = Some(entry_id.clone());
+                last_persisted_entry_id = Some(entry_id);
             }
             agent_idx += 1;
         }
         self.agent_message_count = agent_idx;
+        if let Some(tip) = last_persisted_entry_id {
+            self.active_tip_entry_id = Some(tip.clone());
+            self.append_leaf_for_tip(&tip)?;
+        }
 
         // Check threshold-based compaction after each turn.
         // Use tokens accumulated since the last compaction (watermark) so
@@ -323,9 +339,10 @@ impl SessionCoordinator {
                     tokens_after: output.tokens_after,
                 };
 
+                let compaction_id = format!("cmp-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed));
                 let compaction_entry = SessionEntry::Compaction(CompactionEntry {
-                    id: format!("cmp-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed)),
-                    parent_id: None,
+                    id: compaction_id.clone(),
+                    parent_id: self.active_tip_entry_id.clone(),
                     timestamp: now_iso(),
                     summary: output.summary_text.clone(),
                     first_kept_entry_id: output.first_kept_entry_id.clone(),
@@ -337,6 +354,7 @@ impl SessionCoordinator {
                 // If this fails, the runtime context remains un-compacted so
                 // the session file and memory stay consistent.
                 self.writer.append(&compaction_entry)?;
+                self.append_leaf_for_tip(&compaction_id)?;
 
                 // Reset internal entries to [summary, ...kept]. The summary
                 // must be included so that a subsequent compaction can see the
@@ -354,6 +372,7 @@ impl SessionCoordinator {
                 // Advance the watermark so the next threshold check measures
                 // tokens accumulated from this point forward.
                 self.compaction_watermark_tokens = self.usage.as_usage().total_tokens();
+                self.active_tip_entry_id = Some(compaction_id);
 
                 // Build the new Agent buffer: [summary, ...kept].
                 let mut new_agent_messages = Vec::with_capacity(1 + kept_messages.len());
@@ -400,9 +419,14 @@ impl SessionCoordinator {
 
     /// Append a Leaf pointer marking the selected active branch tip.
     pub fn append_leaf(&mut self, entry_id: &str) -> Result<(), std::io::Error> {
+        self.active_tip_entry_id = Some(entry_id.to_owned());
+        self.append_leaf_for_tip(entry_id)
+    }
+
+    fn append_leaf_for_tip(&mut self, entry_id: &str) -> Result<(), std::io::Error> {
         let entry = SessionEntry::Leaf(LeafEntry {
             id: format!("leaf-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed)),
-            parent_id: None,
+            parent_id: Some(entry_id.to_owned()),
             timestamp: now_iso(),
             entry_id: entry_id.to_owned(),
         });
@@ -421,6 +445,15 @@ impl SessionCoordinator {
 
     pub fn model(&self) -> &str {
         &self.model
+    }
+}
+
+fn content_entry_id(entry: &SessionEntry) -> Option<&str> {
+    match entry {
+        SessionEntry::Message(m) => Some(m.id.as_str()),
+        SessionEntry::Compaction(c) => Some(c.id.as_str()),
+        SessionEntry::Leaf(_) => None,
+        _ => None,
     }
 }
 
