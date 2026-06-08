@@ -6,6 +6,7 @@ pub mod image;
 pub mod interactive;
 pub mod model_listing;
 pub mod package_discovery;
+pub mod package_store;
 pub mod picker;
 pub mod policy;
 pub mod pricing;
