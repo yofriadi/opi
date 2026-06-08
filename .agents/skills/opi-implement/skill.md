@@ -5,8 +5,9 @@ description: Use when executing opi-spec.md tasks, checking implementation statu
 
 # opi-implement
 
-Long-running-agent harness that drives `docs/opi-spec.md` implementation one
-task at a time with TDD, tiered verification, and JSON-ledger checkpointing.
+Long-running-agent harness that drives `docs/opi-spec.md` implementation, plus
+reviewed supplemental product-hardening specs listed in this skill, one task at
+a time with TDD, tiered verification, and JSON-ledger checkpointing.
 
 This is a **harness**, not a coding assistant. It encodes opinions about state,
 evidence, failure recovery, and escalation. It does NOT edit `opi-spec.md`,
@@ -20,6 +21,14 @@ execution and direct the user to `opi-implement --reinit`. Status-only commands
 are allowed because their `Opi-DoD-SHA256` commit footers are the authoritative
 contract for shipped work. Do not run stale ledger tasks whose title or DoD
 contradicts the current spec.
+
+**Supplemental Phase 5 sources:** Phase 5 productized extension/package tasks
+are sourced from `docs/superpowers/specs/2026-06-08-productized-extensions-package-ecosystem-design.md`
+and the reviewed implementation plan
+`docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md`.
+When a Phase 5 ledger is initialized or reconciled, both files MUST be included
+in `spec_files` and hashed in `spec_files_sha256` alongside `docs/opi-spec.md`.
+Do not auto-parse arbitrary specs from `docs/superpowers/specs/`.
 
 ## Invocation
 
@@ -256,7 +265,8 @@ Print a summary table of all tasks:
 
 ## Scope Boundaries (Never Cross)
 
-- Editing `opi-spec.md`
+- Editing `docs/opi-spec.md` except for a reviewed documentation/alignment task
+  whose DoD explicitly owns `docs/opi-spec.md` and its localized counterpart
 - Pushing commits or tags to `origin`
 - Publishing to crates.io
 - Building cross-platform binaries
@@ -269,3 +279,7 @@ Print a summary table of all tasks:
 ## Design Spec
 
 Full design rationale: `docs/superpowers/specs/2026-05-20-opi-implement-skill-design.md`
+
+Supplemental Phase 5 design: `docs/superpowers/specs/2026-06-08-productized-extensions-package-ecosystem-design.md`
+
+Supplemental Phase 5 implementation plan: `docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md`

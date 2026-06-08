@@ -24,6 +24,25 @@ Parse `opi-spec.md` §15 roadmap tables. For each task row extract:
   - The task remains non-executable until the task-graph review gate confirms
     the inferred DoD.
 
+### A.init.2b Supplemental Phase 5 Task Source
+
+After Phase 4 exits, Phase 5 productized extension/package tasks are not
+derived from arbitrary roadmap rows. They are derived from these reviewed
+sources:
+
+- `docs/superpowers/specs/2026-06-08-productized-extensions-package-ecosystem-design.md`
+- `docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md`
+
+When either source exists, the initializer MAY add Phase 5 tasks from the
+implementation plan's task list, but it MUST include both paths in
+`spec_files` and MUST record SHA-256 hashes for both in `spec_files_sha256`.
+Do not auto-scan `docs/superpowers/specs/` or `docs/superpowers/plans/`.
+
+Phase 5 task IDs use `5.<N>` in plan order. Task titles, DoDs, owned paths,
+verification gates, and dependencies come from the reviewed implementation
+plan, not from inferred prose. If the plan and design spec contradict each
+other, stop and ask for a revised design/plan before writing the ledger.
+
 ### A.init.2a Composite Row Detection
 
 Some spec roadmap rows describe N independent deliverables in one line

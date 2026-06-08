@@ -39,6 +39,17 @@ Repository: https://github.com/OdradekAI/opi
 - Technical prose only; be kind but direct.
 - When the user asks a question, answer it first before making edits or running commands.
 
+## Operating principles
+
+These rules bias toward caution over speed. For trivial tasks, use judgment.
+
+- Think before editing. State assumptions that affect the outcome. If requirements have multiple reasonable interpretations, present them instead of choosing silently. If something is unclear, stop, name the uncertainty, and ask.
+- Prefer the minimum change that solves the request. Do not add features, abstractions, configurability, or error handling for impossible cases unless the user asked for them.
+- Push back when a simpler approach exists or the requested path would add unnecessary complexity.
+- Make surgical changes. Every changed line should trace directly to the user's request. Do not refactor, reformat, or "improve" adjacent code that is outside the task.
+- Clean up only changes you caused. Remove imports, variables, functions, tests, or docs made unused by your work; mention unrelated dead code instead of deleting it.
+- For multi-step work, define success criteria and a short verification plan before implementation. Loop until the criteria are met or state exactly what remains unverified.
+
 ## Code quality
 
 - Read files in full before making wide-ranging changes, before editing files you have not already fully inspected, and when the user asks you to investigate or audit something. Do not rely only on search snippets for broad changes.
