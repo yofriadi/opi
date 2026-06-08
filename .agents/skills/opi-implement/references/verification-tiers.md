@@ -136,9 +136,17 @@ Before confirming an init or reinit graph:
 3. If any behavioral or snapshot test lives under `crates/opi-tui/tests/`, set `snapshot_tests` for the affected snapshot path and mark snapshot acceptance as explicit human approval.
 4. Direct spec rows use `parent_spec_row = null`; only dotted sub-task IDs use a parent row string.
 5. Rows with open crate labels such as `examples / package template` must include the concrete test paths they declare, even when implementation files live under `examples/**`.
-6. Example/package tasks must not own `docs/**`; use a task-specific docs subtree such as `docs/extension-examples/**`.
-7. Public protocol or extension substrate tasks must include documentation requirements in their DoD when they introduce RPC, SDK, extension, provider/model registration, transport, or proxy surfaces.
-8. No task may include `docs/opi-spec.md` in `task_owned_paths`.
+6. Example/package tasks must not own broad `docs/**`; use a task-specific
+   docs subtree such as `docs/extension-examples/**`.
+7. Reviewed documentation/alignment tasks may own exact documentation files
+   required by their DoD, including `docs/opi-spec.md` and localized
+   counterparts. They still must not own broad `docs/**`.
+8. Public protocol or extension substrate tasks must include documentation
+   requirements in their DoD when they introduce RPC, SDK, extension,
+   provider/model registration, adapter protocol, transport, or proxy surfaces.
+9. No task may include `docs/opi-spec.md` in `task_owned_paths` unless it is a
+   reviewed documentation/alignment task whose DoD explicitly requires updating
+   `docs/opi-spec.md` and the localized counterpart. Use exact file paths only.
 
 ## Risk Evaluator Gate
 
