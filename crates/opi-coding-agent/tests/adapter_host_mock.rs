@@ -25,6 +25,7 @@ fn main() {
         "hang" => run_hang(&mut reader),
         "crash" => run_crash(&mut reader),
         "hang_request" => run_hang_request(&mut reader, &mut writer),
+        "gate" => run_gate(&mut reader, &mut writer),
         _ => std::process::exit(1),
     }
 }
@@ -194,5 +195,137 @@ fn run_hang_request(reader: &mut impl BufRead, writer: &mut impl Write) {
     // Never respond to subsequent requests
     loop {
         std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+/// Gate mode: advertises before_tool_call hook that blocks bash commands
+/// containing "rm -rf", and a "gate/status" command. Also supports
+/// state_serialize/restore and event hooks.
+fn run_gate(reader: &mut impl BufRead, writer: &mut impl Write) {
+    // Handle initialize handshake
+    if let Some(line) = read_line(reader) {
+        let msg: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        if msg["type"].as_str() != Some("initialize") {
+            return;
+        }
+        let id = msg["id"].as_str().unwrap_or("1");
+        write_msg(
+            writer,
+            &serde_json::json!({
+                "type": "capabilities",
+                "id": id,
+                "tools": [],
+                "commands": [{"name": "gate/status", "description": "Gate status"}],
+                "hooks": ["before_tool_call", "event"],
+                "model_overrides": []
+            }),
+        );
+    }
+
+    // Handle subsequent messages
+    while let Some(line) = read_line(reader) {
+        let msg: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let msg_type = msg["type"].as_str().unwrap_or("");
+        let id = msg["id"].as_str().unwrap_or("").to_string();
+
+        match msg_type {
+            "hook" => {
+                let hook = msg["hook"].as_str().unwrap_or("");
+                match hook {
+                    "before_tool_call" => {
+                        let payload = &msg["payload"];
+                        let tool = payload["tool"].as_str().unwrap_or("");
+                        let args_str = serde_json::to_string(&payload["args"]).unwrap_or_default();
+                        if tool == "bash" && args_str.contains("rm -rf") {
+                            write_msg(
+                                writer,
+                                &serde_json::json!({
+                                    "type": "hook_result",
+                                    "id": id,
+                                    "action": "block",
+                                    "data": {"reason": "destructive command blocked"}
+                                }),
+                            );
+                        } else {
+                            write_msg(
+                                writer,
+                                &serde_json::json!({
+                                    "type": "hook_result",
+                                    "id": id,
+                                    "action": "continue",
+                                    "data": null
+                                }),
+                            );
+                        }
+                    }
+                    _ => {
+                        write_msg(
+                            writer,
+                            &serde_json::json!({
+                                "type": "hook_result",
+                                "id": id,
+                                "action": "continue",
+                                "data": null
+                            }),
+                        );
+                    }
+                }
+            }
+            "command" => {
+                let name = msg["name"].as_str().unwrap_or("");
+                if name == "gate/status" {
+                    write_msg(
+                        writer,
+                        &serde_json::json!({
+                            "type": "command_result",
+                            "id": id,
+                            "data": {"active": true, "blocked": 0}
+                        }),
+                    );
+                } else {
+                    write_msg(
+                        writer,
+                        &serde_json::json!({
+                            "type": "error",
+                            "id": id,
+                            "message": format!("unknown command: {name}")
+                        }),
+                    );
+                }
+            }
+            "state_serialize" => {
+                write_msg(
+                    writer,
+                    &serde_json::json!({
+                        "type": "state_result",
+                        "id": id,
+                        "state": {"blocked": 0}
+                    }),
+                );
+            }
+            "state_restore" => {
+                write_msg(
+                    writer,
+                    &serde_json::json!({
+                        "type": "state_result",
+                        "id": id,
+                        "state": {}
+                    }),
+                );
+            }
+            "event" | "cancel" => {
+                // Fire-and-forget, no response
+            }
+            "shutdown" => {
+                return;
+            }
+            _ => {}
+        }
     }
 }

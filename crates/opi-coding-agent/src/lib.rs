@@ -1,3 +1,4 @@
+pub mod adapter_extension;
 pub mod adapter_host;
 pub mod adapter_protocol;
 pub mod cli;
