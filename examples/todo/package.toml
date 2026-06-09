@@ -3,3 +3,10 @@ description = "Example package demonstrating a todo extension that tracks task s
 version = "0.1.0"
 
 extensions = ["todo"]
+
+[adapter]
+kind = "process-jsonl"
+command = "package_adapter_example"
+args = ["todo"]
+protocol = "opi-extension-jsonl-v1"
+timeout_ms = 30000

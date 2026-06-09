@@ -3,3 +3,10 @@ description = "Example protected paths extension that gates file-tool operations
 version = "0.1.0"
 
 extensions = ["protected-paths"]
+
+[adapter]
+kind = "process-jsonl"
+command = "package_adapter_example"
+args = ["protected-paths"]
+protocol = "opi-extension-jsonl-v1"
+timeout_ms = 30000

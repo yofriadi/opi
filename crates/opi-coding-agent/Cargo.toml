@@ -48,3 +48,8 @@ sha2 = { workspace = true }
 name = "adapter_host_mock"
 path = "tests/adapter_host_mock.rs"
 harness = false
+
+[[test]]
+name = "package_adapter_example"
+path = "tests/package_adapter_example.rs"
+harness = false

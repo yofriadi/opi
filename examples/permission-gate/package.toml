@@ -3,3 +3,10 @@ description = "Example permission gate extension that gates mutating tool calls 
 version = "0.1.0"
 
 extensions = ["permission-gate"]
+
+[adapter]
+kind = "process-jsonl"
+command = "package_adapter_example"
+args = ["permission-gate"]
+protocol = "opi-extension-jsonl-v1"
+timeout_ms = 30000

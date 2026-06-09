@@ -41,3 +41,14 @@ permission-gate/
 The actual Rust implementation lives in the test file
 `crates/opi-coding-agent/tests/permission_gate_example.rs`, which serves as
 both the example code and the integration test suite.
+
+## Process Adapter
+
+This package also declares a process adapter in `package.toml`. The adapter
+binary (`package_adapter_example` with mode `permission-gate`) runs as a
+child process communicating over the opi extension JSONL protocol. It
+implements `before_tool_call` to block mutating tools (bash, write, edit)
+while allowing read-only tools through.
+
+Adapter tests live in
+`crates/opi-coding-agent/tests/example_adapters.rs`.
