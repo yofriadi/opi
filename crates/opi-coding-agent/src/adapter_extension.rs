@@ -44,18 +44,21 @@
 //! may occur between minor versions without a major version bump.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use opi_agent::event::AgentEvent;
-use opi_agent::extension::{Extension, ExtensionCommand, ExtensionError, ExtensionHookResult};
+use opi_agent::extension::{
+    Extension, ExtensionCommand, ExtensionError, ExtensionHookResult, ExtensionRegistry,
+};
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_ai::message::{OutputContent, ToolDef};
 use opi_ai::provider::ModelInfo;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::adapter_host::{AdapterCapabilities, AdapterHost};
+use crate::adapter_host::{AdapterCapabilities, AdapterHost, AdapterProcessConfig};
 use crate::adapter_protocol::AdapterHostMessage;
 
 /// Default timeout for adapter tool calls and command dispatch.
@@ -542,4 +545,115 @@ fn other_type(msg: &crate::adapter_protocol::AdapterProcessMessage) -> &'static 
         crate::adapter_protocol::AdapterProcessMessage::StateResult { .. } => "state_result",
         crate::adapter_protocol::AdapterProcessMessage::Error { .. } => "error",
     }
+}
+
+// ---------------------------------------------------------------------------
+// Adapter startup from packages
+// ---------------------------------------------------------------------------
+
+/// Default timeout for adapter startup handshake.
+const DEFAULT_ADAPTER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Start adapter processes from discovered packages.
+///
+/// Takes packages that have `[adapter]` manifests, starts each adapter process
+/// in deterministic order (ascending by layer precedence, then package name),
+/// and registers successfully started adapters into the provided registry.
+/// Returns the registry and any diagnostics from startup failures.
+///
+/// Packages without adapter manifests are silently skipped.
+///
+/// # Command Resolution
+///
+/// The adapter command from the manifest is resolved as follows:
+/// - Absolute paths are used as-is.
+/// - Relative paths (containing `/` or `\` or starting with `.`) are resolved
+///   against the package root directory.
+/// - Bare names are left for OS PATH lookup.
+///
+/// # Protocol Validation
+///
+/// Only `kind = "process-jsonl"` and `protocol = "opi-extension-jsonl-v1"` are
+/// supported. Other values produce diagnostics and the package is skipped.
+///
+/// # Deterministic Order
+///
+/// Adapters are started in ascending order by `(layer_precedence, name)`. This
+/// ensures reproducible tool/hook composition across sessions.
+pub async fn start_adapters_from_packages(
+    packages: &[crate::package_discovery::PackageResource],
+    working_dir: &Path,
+    mut registry: ExtensionRegistry,
+) -> (ExtensionRegistry, Vec<String>) {
+    let mut diagnostics = Vec::new();
+
+    // Filter and sort packages with adapter manifests
+    let mut adapter_packages: Vec<&crate::package_discovery::PackageResource> = packages
+        .iter()
+        .filter(|p| p.manifest.adapter.is_some())
+        .collect();
+    adapter_packages.sort_by(|a, b| {
+        a.layer_precedence
+            .cmp(&b.layer_precedence)
+            .then_with(|| a.manifest.name.cmp(&b.manifest.name))
+    });
+
+    for package in adapter_packages {
+        let adapter = package.manifest.adapter.as_ref().expect("filtered above");
+
+        // Validate protocol
+        if adapter.protocol != "opi-extension-jsonl-v1" {
+            diagnostics.push(format!(
+                "package '{}': unsupported adapter protocol '{}'",
+                package.manifest.name, adapter.protocol
+            ));
+            continue;
+        }
+
+        // Validate kind
+        if adapter.kind != "process-jsonl" {
+            diagnostics.push(format!(
+                "package '{}': unsupported adapter kind '{}'",
+                package.manifest.name, adapter.kind
+            ));
+            continue;
+        }
+
+        // Resolve command path
+        let command = crate::package_discovery::resolve_adapter_command(adapter, &package.path);
+
+        let config = AdapterProcessConfig {
+            command,
+            args: adapter.args.clone(),
+            working_dir: working_dir.to_path_buf(),
+            env: vec![],
+        };
+
+        let timeout = adapter
+            .timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(DEFAULT_ADAPTER_TIMEOUT);
+
+        match AdapterHost::start(&package.manifest.name, config, timeout).await {
+            Ok(host) => {
+                let caps = host.capabilities().clone();
+                let host = Arc::new(host);
+                let process_adapter = ProcessAdapter::from_host(&package.manifest.name, host, caps);
+                if let Err(e) = registry.register(Box::new(process_adapter)) {
+                    diagnostics.push(format!(
+                        "package '{}': adapter registration failed: {e}",
+                        package.manifest.name
+                    ));
+                }
+            }
+            Err(e) => {
+                diagnostics.push(format!(
+                    "package '{}': adapter startup failed: {e}",
+                    package.manifest.name
+                ));
+            }
+        }
+    }
+
+    (registry, diagnostics)
 }
