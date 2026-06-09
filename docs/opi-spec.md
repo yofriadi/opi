@@ -11,8 +11,8 @@
 | Last updated | 2026-06-08 |
 | Repository | `https://github.com/OdradekAI/opi` |
 | Upstream studied | `pi` 0.75.3 at `.repo/pi-0.75.3/` |
-| Current implementation | `opi` 0.5.0 workspace, Phase 4 extensibility substrate implemented |
-| Next milestone | product hardening for extension workflows and standalone web surfaces |
+| Current implementation | `opi` 0.5.0 workspace, Phase 5 productized extension/package ecosystem implemented |
+| Next milestone | API stabilization and broader adapter protocol support |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
 
@@ -32,7 +32,7 @@ Opi mirrors pi's package structure with five Rust crates:
 - `opi-coding-agent`: the `opi` CLI binary.
 - `opi-web-ui`: unpublished reusable RPC/SDK event, state, component, and HTML rendering crate.
 
-The repository has completed the Phase 4 extensibility substrate on top of the Phase 3 terminal coding agent: RPC JSONL mode, shared SDK types, extension hooks/tools/state, resource discovery, skills, prompt fragments, themes, packages, custom provider/model registration, session branch selection, streaming proxy primitives, and reusable web-facing component/state/rendering code are present. MCP, sub-agents, plan mode, todos, permission gates, dynamic plugin loading, and a standalone browser app should build on that substrate rather than become core features.
+The repository has completed the Phase 4 extensibility substrate on top of the Phase 3 terminal coding agent: RPC JSONL mode, shared SDK types, extension hooks/tools/state, resource discovery, skills, prompt fragments, themes, packages, custom provider/model registration, session branch selection, streaming proxy primitives, and reusable web-facing component/state/rendering code are present. Phase 5 adds a productized extension/package ecosystem: local and git package sources, a `package add/remove/list/doctor` CLI, manifest V2 with `[adapter]` declarations, `process-jsonl` adapter hosting with the `opi-extension-jsonl-v1` protocol, and adapter-to-runtime bridging for tools, commands, hooks, events, state, and cancellation. MCP, sub-agents, plan mode, todos, permission gates, dynamic plugin loading, and a standalone browser app should build on that substrate rather than become core features.
 
 The central design rule:
 
@@ -144,7 +144,7 @@ The maintained package/phase drift ledger lives in
 | Binary | `opi` supports interactive TUI, non-interactive text mode, `--json`, `--rpc`, session commands, `--version`, and `--help` |
 | CI | `fmt`, `clippy`, `test`, `doc` |
 | Release CI | six platform binary workflow |
-| Extensibility | RPC JSONL, SDK types, extension API, resource/package discovery, custom provider/model registry, branch selection, streaming proxy, and reusable web UI component/state/rendering surfaces are implemented as unstable 0.x APIs |
+| Extensibility | RPC JSONL, SDK types, extension API, resource/package discovery, custom provider/model registry, branch selection, streaming proxy, process-JSONL adapter hosting (`opi-extension-jsonl-v1`), package CLI (`add/remove/list/doctor`), and reusable web UI component/state/rendering surfaces are implemented as unstable 0.x APIs |
 | crates.io | publishable crates are quality-gated; `opi-web-ui` remains unpublished |
 
 ### 4.2 Pre-Stable API Notes
@@ -896,6 +896,35 @@ RPC mode is an early Phase 4 extensibility surface. It should use strict JSONL f
 
 The default extension execution strategy is explicit registration, not dynamic Rust library loading. Embedders can register in-process Rust extensions through `ExtensionRegistry`; external packages should expose executable behavior through process/RPC adapters that translate package commands into SDK commands such as `extension_command`. Package/resource discovery remains metadata and resource composition unless an adapter explicitly registers executable code. The core binary MUST NOT `dlopen` arbitrary Rust crates by default, and it MUST NOT require Node/`jiti` to preserve pi's TypeScript extension mechanism.
 
+### 10.1 Package CLI
+
+Phase 5 adds an `opi package` subcommand group that runs before provider construction:
+
+| Command | Purpose |
+|---|---|
+| `opi package add <source>` | Install a package from a local directory or git source |
+| `opi package remove <name>` | Uninstall a package |
+| `opi package list` | List installed packages (supports `--json`) |
+| `opi package doctor` | Diagnose package issues (supports `--json`) |
+
+Packages are installed into global (`~/.local/share/opi/packages/`) or project (`.opi/packages/`) stores. The store records source path, optional git commit, cache path, and manifest hash in `package-lock.toml`.
+
+### 10.2 Process Adapters
+
+Packages with an `[adapter]` section in their manifest run as child process adapters. The Phase 5 MVP supports the `process-jsonl` adapter kind with the `opi-extension-jsonl-v1` protocol.
+
+Adapter lifecycle:
+
+1. The harness starts the adapter child process with the configured command and args.
+2. The harness sends an `initialize` message; the adapter responds with `capabilities` (tools, commands, hooks).
+3. At runtime, the harness bridges adapter capabilities into existing `Extension` trait methods: `on_command`, `on_before_tool_call`, `on_after_tool_call`, `on_event`, `serialize_state`, `restore_state`.
+4. Adapter tools are merged into the tool set; adapter hooks are composed with `CodingAgentHooks` via `ExtensionRegistry::wrap_hooks`.
+5. On shutdown, the harness sends a `shutdown` message and reaps the child process.
+
+Adapter protocol messages: `initialize`, `capabilities`, `tool`, `command`, `hook`, `event`, `state_serialize`, `state_restore`, `cancel`, `shutdown`. All messages are single-line JSON over stdin/stdout with correlated `id` fields.
+
+Adapter commands that are not routed to a registered extension are available through the RPC `extension_command` dispatch.
+
 ## 11. Cross-Cutting Runtime Concerns
 
 ### 11.1 Error Handling
@@ -1171,6 +1200,26 @@ core policy.
 | 4.11 | web UI implementation that consumes RPC/SDK events | `opi-web-ui` |
 
 Exit criteria: third parties can compose and extend opi through RPC, SDK, extension APIs, discovered resources, skills, prompt fragments, themes, packages, and custom provider/model registration without patching core crates. MCP, sub-agents, plan mode, todos, and permission gates should be demonstrable as extensions or packages, not core features. The `Transport` public surface is absent; it must not be reintroduced as a stable public claim without a real implementation.
+
+### Phase 5 - Productized Extension/Package Ecosystem
+
+Status: implemented in the current `0.5.0` workspace.
+
+Phase 5 adds package management and executable adapter hosting so that external packages can provide tools, commands, hooks, and events through child process adapters without patching core crates.
+
+| # | Task | Crate |
+|---|---|---|
+| 5.1 | Package store and source model | `opi-coding-agent` |
+| 5.2 | Package CLI MVP | `opi-coding-agent` |
+| 5.3 | Manifest V2 compatibility with adapter and opi_version | `opi-coding-agent` |
+| 5.4 | Adapter JSONL protocol types | `opi-coding-agent` |
+| 5.5 | Adapter process host | `opi-coding-agent` |
+| 5.6 | Adapter runtime bridge into Extension trait | `opi-coding-agent` / `opi-agent` |
+| 5.7 | Harness and startup integration | `opi-coding-agent` / `opi-agent` |
+| 5.8 | Runnable example adapter packages | examples / `opi-coding-agent` |
+| 5.9 | Documentation, alignment, and guards | workspace |
+
+Exit criteria: `opi package add/remove/list/doctor` works; packages with `[adapter]` sections start as child processes using `opi-extension-jsonl-v1`; adapter tools, commands, hooks, state, and cancellation bridge into the existing extension API; example packages (todo, permission-gate, protected-paths) exercise the full pipeline; documentation is truthful and guard tests reject claims about npm, marketplace, hot reload, provider streaming adapters, custom TUI adapters, or package permission enforcement.
 
 ## 16. Decision Log
 

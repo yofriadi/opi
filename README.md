@@ -316,7 +316,19 @@ The coding harness discovers `AGENTS.md` and `CLAUDE.md` from the workspace dire
 
 The shared SDK types live in `opi_agent::sdk`. The extension API in `opi-agent` supports lifecycle hooks, custom tools, custom commands, custom agent messages/state, and custom provider/model registration for embedders. The CLI discovers configured resource metadata from user, project, package, and explicit paths and exposes it in prompts/RPC metadata. It does not dynamically load arbitrary Rust code from disk.
 
-Packages can compose extensions, skills, prompt fragments, and themes from flat `package.toml` manifests. Skills and prompt fragments use progressive disclosure: metadata is discovered up front, while bodies are loaded only when needed. Themes can be discovered from `theme.toml` resources and are resolved before falling back to built-in `default` and `monokai`. Duplicate resource names within the same discovery layer are errors; higher-precedence layers override lower-precedence layers.
+Packages can compose extensions, skills, prompt fragments, and themes from flat `package.toml` manifests. The `opi package` CLI manages local and git sources:
+
+```sh
+opi package add ./vendor/todo          # local directory
+opi package add git:github.com/user/pkg@v1  # git source
+opi package list                       # show installed packages
+opi package doctor                     # diagnose package issues
+opi package remove todo                # uninstall a package
+```
+
+Packages with `[adapter]` declarations run as child process adapters using the `opi-extension-jsonl-v1` protocol. The adapter process communicates over JSONL stdin/stdout and can expose custom tools, commands, hooks, event observers, session-scoped state, and cancellation through the existing extension API — without Node, npm, or live providers. The `process-jsonl` adapter kind is the only supported adapter type in the Phase 5 MVP.
+
+Skills and prompt fragments use progressive disclosure: metadata is discovered up front, while bodies are loaded only when needed. Themes can be discovered from `theme.toml` resources and are resolved before falling back to built-in `default` and `monokai`. Duplicate resource names within the same discovery layer are errors; higher-precedence layers override lower-precedence layers.
 
 ## Build From Source
 

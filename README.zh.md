@@ -316,7 +316,19 @@ opi --delete-session <session-id>
 
 共享 SDK 类型位于 `opi_agent::sdk`。`opi-agent` 的 extension API 面向嵌入方支持生命周期 hook、自定义工具、自定义命令、自定义 agent message/state，以及自定义 provider/model 注册。CLI 会从用户、项目、package 和显式路径发现已配置的资源元数据，并把它暴露到 prompt/RPC metadata 中。它不会从磁盘动态加载任意 Rust 代码。
 
-Package 可以通过扁平 `package.toml` manifest 组合 extensions、skills、prompt fragments 和 themes。Skills 与 prompt fragments 采用渐进式披露：先发现元数据，只有需要时才加载正文。Themes 可以从 `theme.toml` 资源发现，并在回退到内置 `default` 和 `monokai` 前优先解析。同一发现层内的重复资源名会报错；高优先级层会覆盖低优先级层。
+Package 可以通过扁平 `package.toml` manifest 组合 extensions、skills、prompt fragments 和 themes。`opi package` CLI 管理本地和 git 来源：
+
+```sh
+opi package add ./vendor/todo          # 本地目录
+opi package add git:github.com/user/pkg@v1  # git 来源
+opi package list                       # 列出已安装的 package
+opi package doctor                     # 诊断 package 问题
+opi package remove todo                # 卸载 package
+```
+
+带有 `[adapter]` 声明的 package 会以子进程 adapter 的方式运行，使用 `opi-extension-jsonl-v1` 协议。Adapter 进程通过 JSONL stdin/stdout 通信，可以通过现有 extension API 暴露自定义工具、命令、hooks、事件观察者、会话作用域状态和取消桥接——无需 Node、npm 或在线 provider。`process-jsonl` 是第五阶段 MVP 中唯一支持的 adapter 类型。
+
+Skills 与 prompt fragments 采用渐进式披露：先发现元数据，只有需要时才加载正文。Themes 可以从 `theme.toml` 资源发现，并在回退到内置 `default` 和 `monokai` 前优先解析。同一发现层内的重复资源名会报错；高优先级层会覆盖低优先级层。
 
 ## 从源码构建
 
