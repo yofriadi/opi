@@ -7,12 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-12
+
 ### Added
 
 - `opi-coding-agent`: OpenAI Codex OAuth login (`opi login`, `opi login --device`), logout (`opi logout`), and status (`opi login status`) commands.
 - `opi-ai`: `openai-codex` provider with OAuth access-token management, custom headers (`chatgpt-account-id`, `originator: pi`), and per-request UUID session tracking.
 - `opi-coding-agent`: pricing support for `gpt-5.3-codex-spark`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.5` models.
 - `opi-coding-agent`: `[providers.openai_codex]` TOML configuration support.
+
+### Fixed
+
+- `opi-coding-agent`: Removed `opi-web-ui` dev-dependency for crates.io publish.
+- `opi-coding-agent`: Resolved `collapsible_match` clippy lint in `mcp_adapter_example`.
 
 ## [0.5.0] - 2026-06-07
 
@@ -231,6 +238,7 @@ boundaries; functional implementations land in subsequent releases.
 - This release is published as a GitHub Release only; crates.io publish
   is deferred until the crates have real implementations.
 
+[0.5.1]: https://github.com/OdradekAI/opi/releases/tag/v0.5.1
 [0.5.0]: https://github.com/OdradekAI/opi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/OdradekAI/opi/releases/tag/v0.4.0
 [0.3.0]: https://github.com/OdradekAI/opi/releases/tag/v0.3.0
