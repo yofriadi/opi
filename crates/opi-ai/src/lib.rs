@@ -14,6 +14,7 @@ pub mod message;
 pub mod mistral;
 pub mod model;
 pub mod openai_chat;
+pub mod openai_codex;
 pub mod openai_responses;
 pub mod openrouter;
 pub mod provider;
@@ -26,6 +27,7 @@ pub mod vertex;
 
 pub use config::{Config, Error};
 pub use model::Model;
+pub use openai_codex::OpenAiCodexProvider;
 pub use provider::Provider;
 pub use registry::{ProviderRegistry, RegistrationError, RegistryError};
 pub use stream::AssistantStreamEvent;

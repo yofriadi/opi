@@ -22,13 +22,13 @@ use crate::stream::{AssistantStreamEvent, StopReason, Usage};
 // ---------------------------------------------------------------------------
 
 /// A parsed SSE frame with both event type and data.
-struct SseFrame {
-    event: String,
-    data: String,
+pub(crate) struct SseFrame {
+    pub(crate) event: String,
+    pub(crate) data: String,
 }
 
 /// Result of parsing a single SSE frame.
-enum ParsedEvent {
+pub(crate) enum ParsedEvent {
     Valid(ResponsesEvent),
     Malformed { data: String, error: String },
 }
@@ -163,7 +163,7 @@ struct RawInputTokenDetails {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-enum ResponsesEvent {
+pub(crate) enum ResponsesEvent {
     Created {
         model: Option<String>,
     },
@@ -202,7 +202,7 @@ enum ResponsesEvent {
 /// Owned version of output item data for event storage.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-struct RawOutputItemOwned {
+pub(crate) struct RawOutputItemOwned {
     item_type: String,
     id: Option<String>,
     call_id: Option<String>,
@@ -211,7 +211,7 @@ struct RawOutputItemOwned {
 }
 
 impl ResponsesEvent {
-    fn try_from_frame(frame: &SseFrame) -> ParsedEvent {
+    pub(crate) fn try_from_frame(frame: &SseFrame) -> ParsedEvent {
         let data: RawResponseEvent = match serde_json::from_str(&frame.data) {
             Ok(d) => d,
             Err(e) => {
@@ -311,7 +311,7 @@ struct ToolCallState {
 
 pub struct ResponsesMapper {
     partial: AssistantMessage,
-    saw_done: bool,
+    pub(crate) saw_done: bool,
     text_started: bool,
     tool_calls: Vec<ToolCallState>,
 }
@@ -326,7 +326,7 @@ impl ResponsesMapper {
         }
     }
 
-    fn process(&mut self, event: ResponsesEvent) -> Vec<AssistantStreamEvent> {
+    pub(crate) fn process(&mut self, event: ResponsesEvent) -> Vec<AssistantStreamEvent> {
         if self.saw_done {
             return Vec::new();
         }
@@ -921,7 +921,7 @@ impl futures_core::Stream for ReceiverStream {
 
 /// Drain complete SSE frames from the buffer, leaving incomplete data for the
 /// next chunk.
-fn drain_sse_frames(buffer: &mut String) -> Vec<SseFrame> {
+pub(crate) fn drain_sse_frames(buffer: &mut String) -> Vec<SseFrame> {
     if buffer.contains('\r') {
         *buffer = buffer.replace("\r\n", "\n").replace('\r', "\n");
     }
@@ -935,7 +935,7 @@ fn drain_sse_frames(buffer: &mut String) -> Vec<SseFrame> {
     frames
 }
 
-fn map_http_status(
+pub(crate) fn map_http_status(
     status: reqwest::StatusCode,
     body: &str,
     headers: &reqwest::header::HeaderMap,

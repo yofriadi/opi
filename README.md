@@ -72,6 +72,14 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # or AWS credentials for Bedrock, AZURE_OPENAI_API_KEY, VERTEX_ACCESS_TOKEN
 ```
 
+Or log in to OpenAI Codex subscription (no API key needed):
+
+```sh
+opi login
+# or device-code flow: opi login --device
+# check status: opi login status
+# logout: opi logout
+```
 Run the interactive TUI:
 
 ```sh
@@ -109,6 +117,7 @@ opi -m gemini:gemini-2.5-flash "Summarize the README files."
 opi -m bedrock:anthropic.claude-sonnet-4-20250514-v2:0 "Summarize this repo."
 opi -m azure:my-deployment "Use my Azure OpenAI deployment."
 opi -m vertex:gemini-2.5-flash "Use Vertex AI."
+opi -m openai-codex:gpt-5.5 "Explain crates/opi-agent/src/lib.rs"
 ```
 
 ## Supported Providers
@@ -120,6 +129,7 @@ Provider support is implemented in `opi-ai` and wired into `opi-coding-agent`.
 | `anthropic:` | Anthropic Messages SSE | `ANTHROPIC_API_KEY` |
 | `openai:` | OpenAI Chat Completions SSE | `OPENAI_API_KEY` |
 | `openai-responses:` | OpenAI Responses SSE | `OPENAI_API_KEY` |
+| `openai-codex:` | OpenAI Codex Responses SSE | OAuth login (`opi login` credentials) |
 | `openrouter:` | OpenAI-compatible OpenRouter profile | `OPENROUTER_API_KEY` |
 | `mistral:` | OpenAI-compatible Mistral profile | `MISTRAL_API_KEY` |
 | `gemini:` | Gemini `streamGenerateContent` SSE | `GEMINI_API_KEY` |
@@ -354,7 +364,6 @@ Key abstractions:
 - Production sub-agent, permission-gate, plan/todo, and MCP workflows. The repository includes package/example scaffolds, but these are not built-in core product workflows.
 - Runtime expansion of prompt fragments as interactive slash commands.
 - Dynamic Rust plugin loading from arbitrary extension paths.
-- OAuth or subscription login flows.
 - A standalone browser-hosted web app.
 
 ## Releasing

@@ -23,7 +23,7 @@ opi-tui = { path = "crates/opi-tui", version = "0.5.0" }
 opi-web-ui = { path = "crates/opi-web-ui", version = "0.5.0" }
 
 # async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs", "net", "io-std"] }
 tokio-util = "0.7"
 futures-core = "0.3"
 futures-util = "0.3"
@@ -60,7 +60,7 @@ schemars = "1"
 jsonschema = "0.28"
 
 # IDs/time
-uuid = { version = "1", features = ["v7"] }
+uuid = { version = "1", features = ["v7", "v4"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 
 # file search
@@ -80,6 +80,7 @@ tempfile = "3"
 insta = "1"
 wiremock = "0.6"
 proptest = "1"
+serial_test = "3"
 
 # cryptography (SigV4 for Bedrock)
 hmac = "0.12"
@@ -88,3 +89,8 @@ hex = "0.4"
 
 # env loading
 dotenvy = "0.15"
+fd-lock = "4"
+rand = "0.8"
+url = "2"
+percent-encoding = "2.3"
+webbrowser = "1"

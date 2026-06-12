@@ -23,6 +23,73 @@ fn main() {
         clap_complete::generate(shell, &mut cmd, "opi", &mut std::io::stdout());
         return;
     }
+    if let Some(cmd) = &cli.command {
+        let config = match resolve_config(ConfigSource {
+            cli_model: cli.model.clone(),
+            config_path: cli.config.clone(),
+            env_model: std::env::var("OPI_MODEL").ok(),
+            project_dir: std::env::current_dir().ok(),
+            user_config_path: None,
+        }) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("opi: config error: {e}");
+                std::process::exit(2);
+            }
+        };
+
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("opi: runtime error: {e}");
+                std::process::exit(1);
+            }
+        };
+
+        match cmd {
+            opi_coding_agent::cli::CliCommand::Login(login_cmd) => {
+                if let Some(opi_coding_agent::cli::LoginSubcommand::Status) = &login_cmd.subcommand
+                {
+                    if opi_coding_agent::auth::login::login_status().is_err() {
+                        std::process::exit(1);
+                    }
+                    return;
+                }
+
+                let issuer = Some(config.providers.openai_codex.issuer.as_str());
+                let client_id = Some(config.providers.openai_codex.client_id.as_str());
+
+                let result = if login_cmd.device {
+                    rt.block_on(opi_coding_agent::auth::login::login_device(
+                        issuer,
+                        client_id,
+                        config.providers.openai_codex.proxy.as_ref(),
+                    ))
+                } else {
+                    rt.block_on(opi_coding_agent::auth::login::login_browser(
+                        issuer,
+                        client_id,
+                        config.providers.openai_codex.proxy.as_ref(),
+                    ))
+                };
+
+                if let Err(e) = result {
+                    eprintln!("Login failed: {}", e);
+                    std::process::exit(1);
+                }
+                return;
+            }
+            opi_coding_agent::cli::CliCommand::Logout => {
+                if let Err(e) = rt.block_on(opi_coding_agent::auth::login::logout(
+                    config.providers.openai_codex.proxy.as_ref(),
+                )) {
+                    eprintln!("Logout failed: {}", e);
+                    std::process::exit(1);
+                }
+                return;
+            }
+        }
+    }
 
     if cli.verbose {
         eprintln!("opi {} - debug mode", env!("CARGO_PKG_VERSION"));
@@ -465,6 +532,23 @@ fn build_runtime_provider(
 
     let spec = &config.defaults.model;
     match provider_id {
+        "openai-codex" => {
+            let (access_token, account_id) =
+                match block_on_async(opi_coding_agent::auth::refresh::get_valid_token(
+                    config.providers.openai_codex.proxy.as_ref(),
+                )) {
+                    Ok(creds) => creds,
+                    Err(e) => return Err(ProviderBuildError::Auth(e.to_string())),
+                };
+            let client = build_http_client(config.providers.openai_codex.proxy.as_ref())?;
+            let provider = opi_ai::openai_codex::OpenAiCodexProvider::new(
+                access_token,
+                account_id,
+                config.providers.openai_codex.base_url.clone(),
+                client,
+            );
+            Ok(Box::new(provider) as Box<dyn Provider>)
+        }
         "anthropic" => {
             let env_name = &config.providers.anthropic.api_key_env;
             let api_key = require_api_key(env_name)?;
@@ -850,6 +934,7 @@ const BUILT_IN_PROVIDER_IDS: &[&str] = &[
     "bedrock",
     "azure",
     "vertex",
+    "openai-codex",
 ];
 
 fn build_list_models_registry(
@@ -882,6 +967,34 @@ fn build_list_models_provider(
         "bedrock" => Ok(Box::new(build_bedrock(config)?) as Box<dyn Provider>),
         "azure" => Ok(Box::new(build_azure(config)?) as Box<dyn Provider>),
         "vertex" => Ok(Box::new(build_vertex(config)?) as Box<dyn Provider>),
+        "openai-codex" => match opi_coding_agent::auth::storage::load_auth() {
+            Ok(None) => Err(ListModelsError::MissingCredentials),
+            Err(e) => Err(ListModelsError::Config(format!(
+                "OpenAI Codex credentials file is malformed: {e}"
+            ))),
+            Ok(Some(_)) => {
+                let (access_token, account_id) =
+                    match block_on_async(opi_coding_agent::auth::refresh::get_valid_token(
+                        config.providers.openai_codex.proxy.as_ref(),
+                    )) {
+                        Ok(creds) => creds,
+                        Err(e) => {
+                            return Err(ListModelsError::Config(format!(
+                                "OpenAI Codex auth refresh failed: {e}"
+                            )));
+                        }
+                    };
+                let client = build_http_client(config.providers.openai_codex.proxy.as_ref())
+                    .map_err(|e| ListModelsError::Config(e.to_string()))?;
+                let provider = opi_ai::openai_codex::OpenAiCodexProvider::new(
+                    access_token,
+                    account_id,
+                    config.providers.openai_codex.base_url.clone(),
+                    client,
+                );
+                Ok(Box::new(provider) as Box<dyn Provider>)
+            }
+        },
         other => Err(ListModelsError::Config(format!(
             "unknown provider in built-in list: {other}"
         ))),
@@ -1108,4 +1221,13 @@ fn build_vertex(
         build_http_client(vertex_config.proxy.as_ref())
             .map_err(|e| ListModelsError::Config(e.to_string()))?,
     ))
+}
+
+fn block_on_async<F: std::future::Future>(f: F) -> F::Output {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(|| handle.block_on(f))
+    } else {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(f)
+    }
 }

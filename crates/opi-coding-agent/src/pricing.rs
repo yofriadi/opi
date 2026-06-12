@@ -20,6 +20,7 @@ pub fn lookup_pricing(model_spec: &str) -> Option<Pricing> {
     match provider {
         "anthropic" => anthropic_pricing(model),
         "openai" | "openai-responses" => openai_pricing(model),
+        "openai-codex" => openai_codex_pricing(model),
         "openrouter" => openrouter_pricing(model),
         "gemini" => gemini_pricing(model),
         "mistral" => mistral_pricing(model),
@@ -149,6 +150,36 @@ fn mistral_pricing(model: &str) -> Option<Pricing> {
         })
     } else {
         None
+    }
+}
+
+fn openai_codex_pricing(model: &str) -> Option<Pricing> {
+    match model {
+        "gpt-5.3-codex-spark" => Some(Pricing {
+            input_cost_per_mtok: 1.75,
+            output_cost_per_mtok: 14.0,
+            cache_read_cost_per_mtok: 0.175,
+            cache_write_cost_per_mtok: 0.0,
+        }),
+        "gpt-5.4" => Some(Pricing {
+            input_cost_per_mtok: 2.5,
+            output_cost_per_mtok: 15.0,
+            cache_read_cost_per_mtok: 0.25,
+            cache_write_cost_per_mtok: 0.0,
+        }),
+        "gpt-5.4-mini" => Some(Pricing {
+            input_cost_per_mtok: 0.75,
+            output_cost_per_mtok: 4.5,
+            cache_read_cost_per_mtok: 0.075,
+            cache_write_cost_per_mtok: 0.0,
+        }),
+        "gpt-5.5" => Some(Pricing {
+            input_cost_per_mtok: 5.0,
+            output_cost_per_mtok: 30.0,
+            cache_read_cost_per_mtok: 0.5,
+            cache_write_cost_per_mtok: 0.0,
+        }),
+        _ => None,
     }
 }
 

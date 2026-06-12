@@ -82,8 +82,32 @@ pub struct ProvidersConfig {
     pub bedrock: BedrockProviderConfig,
     pub azure: AzureProviderConfig,
     pub vertex: VertexProviderConfig,
+    pub openai_codex: OpenAiCodexProviderConfig,
 }
 
+pub const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
+pub const CODEX_DEFAULT_ISSUER: &str = "https://auth.openai.com";
+pub const CODEX_DEFAULT_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+
+/// `[providers.openai_codex]` section.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenAiCodexProviderConfig {
+    pub base_url: String,
+    pub issuer: String,
+    pub client_id: String,
+    pub proxy: Option<ProviderProxyConfig>,
+}
+
+impl Default for OpenAiCodexProviderConfig {
+    fn default() -> Self {
+        Self {
+            base_url: CODEX_DEFAULT_BASE_URL.to_string(),
+            issuer: CODEX_DEFAULT_ISSUER.to_string(),
+            client_id: CODEX_DEFAULT_CLIENT_ID.to_string(),
+            proxy: None,
+        }
+    }
+}
 /// `[providers.anthropic]` section.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnthropicProviderConfig {
@@ -270,8 +294,17 @@ struct TomlProviders {
     gemini: TomlGenericProvider,
     azure: TomlAzureProvider,
     vertex: TomlVertexProvider,
+    openai_codex: TomlOpenAiCodex,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct TomlOpenAiCodex {
+    base_url: Option<String>,
+    issuer: Option<String>,
+    client_id: Option<String>,
+    proxy: Option<TomlProxy>,
+}
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 struct TomlAnthropic {
@@ -544,6 +577,23 @@ impl TomlConfig {
             && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
         {
             config.providers.gemini.proxy = Some(ProviderProxyConfig {
+                url,
+                no_proxy: p.no_proxy,
+            });
+        }
+        if let Some(v) = self.providers.openai_codex.base_url {
+            config.providers.openai_codex.base_url = v;
+        }
+        if let Some(v) = self.providers.openai_codex.issuer {
+            config.providers.openai_codex.issuer = v;
+        }
+        if let Some(v) = self.providers.openai_codex.client_id {
+            config.providers.openai_codex.client_id = v;
+        }
+        if let Some(p) = self.providers.openai_codex.proxy
+            && let Some(url) = p.url.filter(|s| !s.trim().is_empty())
+        {
+            config.providers.openai_codex.proxy = Some(ProviderProxyConfig {
                 url,
                 no_proxy: p.no_proxy,
             });

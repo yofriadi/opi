@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// Supported shells for completion generation.
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -102,4 +102,33 @@ pub struct Cli {
     /// Initial prompt (positional).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub prompt: Vec<String>,
+
+    /// Optional auth/other subcommand.
+    #[command(subcommand)]
+    pub command: Option<CliCommand>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum CliCommand {
+    /// Log in to OpenAI Codex.
+    Login(LoginCommand),
+    /// Log out from OpenAI Codex.
+    Logout,
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct LoginCommand {
+    /// Use device code authentication flow.
+    #[arg(long)]
+    pub device: bool,
+
+    /// Optional login subcommand.
+    #[command(subcommand)]
+    pub subcommand: Option<LoginSubcommand>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum LoginSubcommand {
+    /// Show current login status.
+    Status,
 }

@@ -38,8 +38,16 @@ dotenvy = { workspace = true }
 base64 = { workspace = true }
 reqwest = { workspace = true }
 futures-util = { workspace = true }
+fd-lock = { workspace = true }
+rand = { workspace = true }
+url = { workspace = true }
+webbrowser = { workspace = true }
+percent-encoding = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+wiremock = { workspace = true }
+serial_test = { workspace = true }
 base64 = { workspace = true }
-sha2 = { workspace = true }

@@ -289,3 +289,75 @@ api_key_env = "ANTHROPIC_API_KEY"
         "output should contain openai models, got: {stdout}",
     );
 }
+
+#[test]
+fn list_models_openai_codex_behavior() {
+    use base64::Engine;
+    // 1. Without auth, openai-codex models should not appear
+    let tmp = tempfile::tempdir().unwrap();
+
+    let output = run_opi_with_config(
+        r#"[defaults]
+model = "openai:gpt-4o"
+"#,
+        &["--list-models"],
+        &[
+            ("OPI_AUTH_DIR", tmp.path().to_str().unwrap()),
+            ("OPENAI_API_KEY", "test-key-for-listing"),
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(!stdout.contains("openai-codex"));
+
+    // 2. With auth, openai-codex models should appear
+    let auth_dir = tmp.path().join("auth");
+    std::fs::create_dir_all(&auth_dir).unwrap();
+
+    let header =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+    let payload_val = serde_json::json!({
+        "chatgpt_account_id": "test-account-codex",
+        "exp": 2999999999i64
+    });
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_string(&payload_val).unwrap());
+    let mock_jwt = format!("{}.{}.signature", header, payload);
+
+    let auth_file_content = serde_json::json!({
+        "openai-codex": {
+            "type": "oauth",
+            "oauth": {
+                "accessToken": mock_jwt,
+                "refreshToken": "ref-tok",
+                "idToken": serde_json::Value::Null,
+                "expiresAt": 2999999999i64,
+                "accountId": "test-account-codex"
+            },
+            "issuer": "https://auth.openai.com",
+            "clientId": "app_EMoamEEZ73f0CkXaXp7hrann"
+        }
+    });
+    std::fs::write(
+        auth_dir.join("auth.json"),
+        serde_json::to_string_pretty(&auth_file_content).unwrap(),
+    )
+    .unwrap();
+
+    let output_with_auth = run_opi_with_config(
+        r#"[defaults]
+model = "openai:gpt-4o"
+"#,
+        &["--list-models"],
+        &[
+            ("OPI_AUTH_DIR", auth_dir.to_str().unwrap()),
+            ("OPENAI_API_KEY", "test-key-for-listing"),
+        ],
+    );
+
+    let stdout_with_auth = String::from_utf8_lossy(&output_with_auth.stdout);
+    assert!(output_with_auth.status.success());
+    assert!(stdout_with_auth.contains("openai-codex"));
+    assert!(stdout_with_auth.contains("gpt-5.5"));
+}

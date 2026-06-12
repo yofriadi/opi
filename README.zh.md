@@ -72,6 +72,14 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # 或 Bedrock 的 AWS 凭据、AZURE_OPENAI_API_KEY、VERTEX_ACCESS_TOKEN
 ```
 
+或登录 OpenAI Codex 订阅（不需要 API Key）：
+
+```sh
+opi login
+# 或使用设备码流登录：opi login --device
+# 查看登录状态：opi login status
+# 登出：opi logout
+```
 启动交互式 TUI：
 
 ```sh
@@ -109,6 +117,7 @@ opi -m gemini:gemini-2.5-flash "总结 README 文件。"
 opi -m bedrock:anthropic.claude-sonnet-4-20250514-v2:0 "总结这个仓库。"
 opi -m azure:my-deployment "使用我的 Azure OpenAI deployment。"
 opi -m vertex:gemini-2.5-flash "使用 Vertex AI。"
+opi -m openai-codex:gpt-5.5 "解释 crates/opi-agent/src/lib.rs"
 ```
 
 ## 支持的 Provider
@@ -120,6 +129,7 @@ Provider 支持在 `opi-ai` 中实现，并已接入 `opi-coding-agent`。
 | `anthropic:` | Anthropic Messages SSE | `ANTHROPIC_API_KEY` |
 | `openai:` | OpenAI Chat Completions SSE | `OPENAI_API_KEY` |
 | `openai-responses:` | OpenAI Responses SSE | `OPENAI_API_KEY` |
+| `openai-codex:` | OpenAI Codex Responses SSE | OAuth 登录（`opi login` 凭据） |
 | `openrouter:` | OpenAI-compatible OpenRouter profile | `OPENROUTER_API_KEY` |
 | `mistral:` | OpenAI-compatible Mistral profile | `MISTRAL_API_KEY` |
 | `gemini:` | Gemini `streamGenerateContent` SSE | `GEMINI_API_KEY` |
@@ -354,7 +364,6 @@ transform_context
 - 生产级子 Agent、permission gate、plan/todo 和 MCP 工作流。仓库包含 package/example 脚手架，但它们不是内置核心产品工作流。
 - 在交互式 slash command 中运行时展开 prompt fragments。
 - 从任意 extension 路径动态加载 Rust 插件。
-- OAuth 或订阅登录流程。
 - 独立的浏览器托管 Web 应用。
 
 ## 发布

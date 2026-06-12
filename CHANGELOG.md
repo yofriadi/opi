@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `opi-coding-agent`: OpenAI Codex OAuth login (`opi login`, `opi login --device`), logout (`opi logout`), and status (`opi login status`) commands.
+- `opi-ai`: `openai-codex` provider with OAuth access-token management, custom headers (`chatgpt-account-id`, `originator: pi`), and per-request UUID session tracking.
+- `opi-coding-agent`: pricing support for `gpt-5.3-codex-spark`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.5` models.
+- `opi-coding-agent`: `[providers.openai_codex]` TOML configuration support.
+
 ## [0.5.0] - 2026-06-07
 
 Phase 4: extension system, RPC JSONL protocol, SDK embedding surface,
