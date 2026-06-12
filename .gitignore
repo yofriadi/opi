@@ -30,3 +30,7 @@ release-notes.md
 .opi-impl-state.json
 .opi-impl-state.json.tmp
 .opi-impl-state.draft.json
+# Ignore local notes/plans
+PLAN.md
+PI_RUST_PORT_COMPARISON.md
+
