@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use opi_agent::compaction::{CompactionConfig, CompactionEngine, DefaultCompactionHooks, Entry};
 use opi_agent::message::{AgentMessage, CompactionSummaryMessage};
 use opi_agent::session::{
-    CompactionEntry, LeafEntry, MessageEntry, SessionEntry, SessionHeader, SessionWriter,
+    CompactionEntry, ExtensionStateEntry, LeafEntry, MessageEntry, SessionEntry, SessionHeader,
+    SessionWriter,
 };
 use opi_agent::session_event::{CompactionReason, CompactionResult};
 use opi_ai::message::Message;
@@ -423,6 +424,19 @@ impl SessionCoordinator {
         self.append_leaf_for_tip(entry_id)
     }
 
+    pub fn append_extension_state(
+        &mut self,
+        state: serde_json::Value,
+    ) -> Result<(), std::io::Error> {
+        let entry = SessionEntry::ExtensionState(ExtensionStateEntry {
+            id: format!("state-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed)),
+            parent_id: self.active_tip_entry_id.clone(),
+            timestamp: now_iso(),
+            state,
+        });
+        self.writer.append(&entry)
+    }
+
     fn append_leaf_for_tip(&mut self, entry_id: &str) -> Result<(), std::io::Error> {
         let entry = SessionEntry::Leaf(LeafEntry {
             id: format!("leaf-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed)),
@@ -453,8 +467,14 @@ fn content_entry_id(entry: &SessionEntry) -> Option<&str> {
         SessionEntry::Message(m) => Some(m.id.as_str()),
         SessionEntry::Compaction(c) => Some(c.id.as_str()),
         SessionEntry::Leaf(_) => None,
+        SessionEntry::ExtensionState(_) => None,
         _ => None,
     }
+}
+
+pub fn latest_extension_state(entries: &[SessionEntry]) -> Option<serde_json::Value> {
+    crate::session_cli::latest_extension_state_entry_for_active_branch(entries)
+        .map(|entry| entry.state.clone())
 }
 
 /// Extract the numeric suffix from entry IDs like `msg-3` or `cmp-7`.

@@ -11,6 +11,8 @@ Print this information:
 Task: <id> <title>
 DoD: <definition_of_done>
 Tier: <tier>
+Acceptance scenarios: <ids + status + verification command>
+Production call sites: <tasks[].production_call_sites>
 Iterations: <iteration_count> / <max_iterations>
 Last gate output (truncated to 50 lines): <…>
 Tests added but failing: <list>

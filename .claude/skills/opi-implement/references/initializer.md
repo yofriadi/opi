@@ -43,6 +43,35 @@ verification gates, and dependencies come from the reviewed implementation
 plan, not from inferred prose. If the plan and design spec contradict each
 other, stop and ask for a revised design/plan before writing the ledger.
 
+### A.init.2c Design Acceptance Extraction
+
+For every active phase whose source files include goals, success criteria, exit
+criteria, or named user workflows, extract them before task-graph review.
+
+For each criterion/workflow:
+
+- Create or assign at least one `acceptance_scenarios` entry.
+- Record `source` as an exact file path plus section/heading.
+- Write the scenario as an observable user or integration path, not a module
+  description.
+- Assign it to the task that will actually close the path. If no task closes it,
+  add a vertical-slice task or stop for human graph review.
+- Add `production_call_sites` for runtime/startup/CLI/session/adapter/provider
+  claims. Tests-only helpers do not count.
+- Mark helper/parser/protocol/bridge tasks `substrate_only = true` unless their
+  verification proves a production call path.
+
+DoD lint: if a DoD contains vague verbs such as `works`, `supports`, `loads`,
+`integrates`, `bridges`, `productizes`, or `handles`, expand it into concrete
+assertions before the task is executable. The expansion must name the command or
+API entry point, persisted artifact, production call site, runtime effect,
+diagnostics, and negative/error behavior where relevant.
+
+Vertical-slice rule: every product-facing phase must include at least one task
+whose acceptance scenario starts at a real user/API entry point and ends at the
+runtime effect claimed by the design. Component tasks may pass as substrate, but
+they cannot by themselves satisfy this rule.
+
 ### A.init.2a Composite Row Detection
 
 Some spec roadmap rows describe N independent deliverables in one line
@@ -83,7 +112,19 @@ Phase 4 examples:
 
 Render complete draft as table with: id, title, tier, `task_owned_paths`
 (default derived from `crate`, editable), commit_type, depends_on,
-execution order, evaluator_required, inference_notes.
+execution order, evaluator_required, acceptance scenario count,
+production call-site count, `substrate_only`, inference_notes.
+
+Also render an acceptance coverage table:
+
+- source criterion/workflow;
+- owning task;
+- verification command/test;
+- production call sites;
+- status (`covered`, `substrate-only`, `missing`, `deferred`).
+
+REFUSE `confirm-all` while any source criterion/workflow is `missing`, or while
+any runtime criterion is covered only by a `substrate_only` task.
 
 Gate options:
 - **confirm-all** — accept the graph as shown
@@ -147,7 +188,7 @@ When `--reinit` runs against an existing ledger:
    - **Only in new:** add with `status: failing`
    - **DoD changed for passing task:** warn, ask preserve-as-passing (cosmetic)
      or demote-to-failing (substantive)
-   - **depends_on/tier/commit_type/evaluator_required changed:** re-run
+   - **depends_on/tier/commit_type/evaluator_required/acceptance_scenarios/production_call_sites/substrate_only changed:** re-run
      task-graph review gate with row-level diff, require confirmation
 4. Update every entry in `spec_files_sha256` to the freshly recomputed hash
    after confirmation.

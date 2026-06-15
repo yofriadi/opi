@@ -62,6 +62,12 @@ fn config_for_mode(mode: &str) -> AdapterProcessConfig {
     }
 }
 
+fn config_for_mode_with_env(mode: &str, env: Vec<(String, String)>) -> AdapterProcessConfig {
+    let mut config = config_for_mode(mode);
+    config.env.extend(env);
+    config
+}
+
 /// Start a normal capabilities-mode adapter host with generous timeouts.
 async fn start_capabilities_host() -> AdapterHost {
     AdapterHost::start(
@@ -362,6 +368,38 @@ async fn host_sends_event_without_blocking() {
     host.shutdown("test_end").await.expect("shutdown");
 }
 
+#[tokio::test]
+async fn event_drop_records_diagnostic() {
+    let host = AdapterHost::start(
+        "mock",
+        config_for_mode("event_backpressure"),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("start event backpressure host");
+
+    let payload = "x".repeat(1024 * 1024);
+    for i in 0..64 {
+        host.send_event(serde_json::json!({
+            "type": "large_event",
+            "index": i,
+            "payload": payload
+        }))
+        .await;
+        if !host.take_diagnostics().is_empty() {
+            let _ = host.shutdown("test_end").await;
+            return;
+        }
+    }
+
+    let diagnostics = host.take_diagnostics();
+    let _ = host.shutdown("test_end").await;
+    assert!(
+        !diagnostics.is_empty(),
+        "backpressured event delivery should record diagnostics"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 12. Shutdown reaps child process
 // ---------------------------------------------------------------------------
@@ -378,6 +416,32 @@ async fn host_shutdown_reaps_child_process() {
     // For cross-platform simplicity, just verify shutdown succeeded without error
     // (if reap failed, we'd get an error or panic)
     let _ = pid;
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_child_exit_before_kill() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("shutdown-marker.txt");
+    let host = AdapterHost::start(
+        "mock",
+        config_for_mode_with_env(
+            "shutdown_marker",
+            vec![(
+                "OPI_ADAPTER_SHUTDOWN_MARKER".to_string(),
+                marker.display().to_string(),
+            )],
+        ),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("start shutdown marker host");
+
+    host.shutdown("test_marker").await.expect("shutdown");
+
+    assert!(
+        marker.exists(),
+        "adapter should be allowed to handle shutdown before host kills child"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -842,7 +842,11 @@ RPC 模式是第 4 阶段早期可扩展性表面。它应使用严格的 JSONL 
 | `opi package list` | 列出已安装的 package（支持 `--json`） |
 | `opi package doctor` | 诊断 package 问题（支持 `--json`） |
 
-Package 安装到全局（`~/.local/share/opi/packages/`）或项目（`.opi/packages/`）存储中。存储在 `package-lock.toml` 中记录来源路径、可选 git commit、缓存路径和 manifest 哈希。
+Package 会记录在全局用户配置目录（`packages.toml` 和 `package-lock.toml`）或项目 `.opi/` 目录（`.opi/packages.toml` 和 `.opi/package-lock.toml`）中。Git package checkout 会缓存在所选 scope 的 `package-cache/` 下。lock 会记录来源路径、可选 git commit、缓存路径和 manifest 哈希。
+
+`opi package add` 会验证 package manifest、记录声明并写入 lock 条目。运行时启动会读取已安装声明和 lock 状态，不需要 `config.packages.paths` 也能解析有效 package，启动有效的 adapter package，并报告 adapter 启动诊断。`opi package doctor` 会验证来源可用性、lock 一致性、manifest V2、资源路径包含关系、opi 版本约束和 adapter 命令解析。
+
+Package 是受信任代码。安装 package 后，其 adapter 子进程会以与 `opi` 相同的操作系统权限运行；第五阶段 package 代码不会被 sandbox，package 权限声明也不会由 package manager 执行。
 
 ### 10.2 进程 Adapter
 

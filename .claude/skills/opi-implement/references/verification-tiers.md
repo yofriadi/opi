@@ -90,6 +90,29 @@ Additional gates:
 3. TUI tests use deterministic snapshots or golden terminal protocol output; no
    visual snapshot is accepted without explicit user approval.
 
+## Product Acceptance Addendum
+
+Apply to any task with non-empty `acceptance_scenarios`, and to any task whose
+DoD claims runtime/startup/CLI/session/adapter/provider behavior.
+
+Additional gates:
+
+1. Run every command listed in each owned `acceptance_scenarios[].verification`
+   item.
+2. Inspect code paths and tests to prove each
+   `acceptance_scenarios[].production_call_sites` entry is exercised by the
+   verification. Direct helper, parser, protocol, mock bridge, or registry-only
+   tests are substrate evidence unless they enter through the production
+   call-site named in the scenario.
+3. For CLI/runtime scenarios, include at least one subprocess, harness, RPC, or
+   integration test that starts at the public command/API boundary. Unit tests
+   may supplement but cannot replace this.
+4. If a task cannot close an acceptance scenario yet, mark or keep the task as
+   `substrate_only = true`, leave the scenario `open`, and ensure a later
+   vertical-slice task owns closure.
+5. Before Phase E, the planned commit evidence must include `Opi-Acceptance`
+   for every closed scenario.
+
 ## Cross-Cutting Gates (Every Tier)
 
 Run after tier-specific gates:
@@ -147,6 +170,17 @@ Before confirming an init or reinit graph:
 9. No task may include `docs/opi-spec.md` in `task_owned_paths` unless it is a
    reviewed documentation/alignment task whose DoD explicitly requires updating
    `docs/opi-spec.md` and the localized counterpart. Use exact file paths only.
+10. Every source-spec goal, success criterion, exit criterion, or named user
+    workflow for the active phase must be covered by at least one
+    `acceptance_scenarios` entry, or be explicitly deferred by a current spec
+    citation.
+11. A runtime/startup/CLI/session/adapter/provider acceptance scenario must list
+    production call sites. If no production call site exists yet, the owning
+    task must be `substrate_only = true` and a later vertical-slice task must
+    close the scenario.
+12. Vague DoD verbs (`works`, `supports`, `loads`, `integrates`, `bridges`,
+    `productizes`, `handles`) must be expanded into observable assertions before
+    graph confirmation.
 
 ## Risk Evaluator Gate
 
@@ -160,11 +194,17 @@ A task has `evaluator_required = true` when ANY of:
 promote a task. Phase-exit evaluation is separate (Phase F).
 
 The evaluator receives: DoD, diff from `start_commit`, new/changed tests,
-verification outputs, planned commit evidence. It answers:
+verification outputs, planned commit evidence, acceptance scenarios, production
+call-site traces, and current source-spec success/exit criteria. It answers:
 1. Does diff satisfy DoD without scope creep?
 2. Do tests exercise behavior (not just implementation details)?
 3. Public API/protocol/security risks not covered by mechanical gates?
-4. Is evidence footer truthful and sufficient?
+4. Do closed acceptance scenarios start at the promised user/API boundary and
+   reach the runtime effect claimed by the design?
+5. Are all runtime claims wired through production call sites rather than only
+   tested through helper functions?
+6. Is evidence footer truthful and sufficient, including `Opi-Acceptance` when
+   scenarios are closed?
 
 If evaluator fails → back to Phase C with findings as input. Generator may NOT
 self-approve the finding away.

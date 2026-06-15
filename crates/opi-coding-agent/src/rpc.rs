@@ -60,6 +60,7 @@ use crate::config::OpiConfig;
 use crate::harness::CodingHarness;
 use crate::policy::{RunMode, ToolSelection};
 use crate::runner::ExitCode;
+use crate::runtime_packages::RuntimePackageStartup;
 
 const ACTIVE_RUN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -111,6 +112,8 @@ impl RpcRunner {
             user_system_prompt,
             initial_messages,
             None,
+            None,
+            Vec::new(),
         )
     }
 
@@ -137,6 +140,41 @@ impl RpcRunner {
             user_system_prompt,
             initial_messages,
             Some(extension_registry),
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// Create a new RPC runner with installed package adapters already started.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_runtime_packages(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        allow_mutating: bool,
+        tool_selection: ToolSelection,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        runtime_startup: RuntimePackageStartup,
+    ) -> Result<Self, crate::policy::ToolPolicyError> {
+        let RuntimePackageStartup {
+            extension_registry,
+            installed_packages,
+            diagnostics,
+        } = runtime_startup;
+        Self::new_with_optional_extension_registry(
+            provider,
+            model,
+            config,
+            workspace_root,
+            allow_mutating,
+            tool_selection,
+            user_system_prompt,
+            initial_messages,
+            Some(extension_registry),
+            Some(installed_packages),
+            diagnostics,
         )
     }
 
@@ -151,6 +189,8 @@ impl RpcRunner {
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
         extension_registry: Option<ExtensionRegistry>,
+        installed_packages: Option<Vec<crate::package_discovery::PackageResource>>,
+        startup_diagnostics: Vec<String>,
     ) -> Result<Self, crate::policy::ToolPolicyError> {
         let tool_config = crate::policy::ToolRuntimeConfig::resolve(
             RunMode::NonInteractive,
@@ -162,7 +202,11 @@ impl RpcRunner {
             .hooks(hooks)
             .initial_messages(initial_messages)
             .tool_selection(tool_selection)
-            .tool_config(tool_config);
+            .tool_config(tool_config)
+            .startup_diagnostics(startup_diagnostics);
+        if let Some(installed_packages) = installed_packages {
+            builder = builder.installed_packages(installed_packages);
+        }
         if let Some(prompt) = user_system_prompt {
             builder = builder.user_system_prompt(prompt);
         }

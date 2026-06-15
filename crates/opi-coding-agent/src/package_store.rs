@@ -63,6 +63,9 @@ pub enum PackageStoreError {
     /// A git operation failed.
     #[error("git operation failed: {0}")]
     Git(String),
+    /// A package lifecycle operation failed.
+    #[error("package error: {0}")]
+    Package(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -99,14 +102,17 @@ impl PackageSource {
 
         if let Some(rest) = trimmed.strip_prefix("git:") {
             // Git source
-            let (url, refspec) = if let Some(at_pos) = rest.rfind('@') {
-                (
-                    rest[..at_pos].to_string(),
-                    Some(rest[at_pos + 1..].to_string()),
-                )
-            } else {
-                (rest.to_string(), None)
-            };
+            if is_scp_like_git_source(rest) {
+                return Err(PackageStoreError::InvalidSource {
+                    input: raw.into(),
+                    reason:
+                        "scp-like git sources are not supported; use git:ssh://git@host/path@ref"
+                            .into(),
+                });
+            }
+            let (url, refspec) = split_git_url_and_ref(rest);
+            let url = url.to_string();
+            let refspec = refspec.map(str::to_string);
 
             if url.is_empty() {
                 return Err(PackageStoreError::InvalidSource {
@@ -285,6 +291,40 @@ pub struct PackageLockEntry {
     pub manifest_sha256: String,
 }
 
+/// A cache replacement that can be committed after package metadata is written.
+#[derive(Debug)]
+pub struct PendingCacheReplacement {
+    target: PathBuf,
+    backup: Option<PathBuf>,
+    committed: bool,
+}
+
+impl PendingCacheReplacement {
+    /// Keep the newly installed cache directory and remove the old backup.
+    pub fn commit(mut self) {
+        if let Some(backup) = &self.backup {
+            let _ = remove_path(backup);
+        }
+        self.committed = true;
+    }
+
+    /// Restore the cache directory that was present before replacement.
+    pub fn rollback(mut self) -> Result<(), PackageStoreError> {
+        rollback_cache_replacement(&self.target, self.backup.as_deref())?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for PendingCacheReplacement {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = rollback_cache_replacement(&self.target, self.backup.as_deref());
+            self.committed = true;
+        }
+    }
+}
+
 /// Top-level TOML structure for `package-lock.toml`.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct PackageLockFile {
@@ -390,9 +430,23 @@ impl PackageStore {
     pub fn git_clone(
         &self,
         url: &str,
-        refspec: &str,
+        refspec: Option<&str>,
         target: &Path,
     ) -> Result<(), PackageStoreError> {
+        let staging = self.git_clone_to_staging(url, refspec, target)?;
+        let replacement = self.stage_cache_replacement(target, &staging)?;
+        replacement.commit();
+        Ok(())
+    }
+
+    /// Clone a git repository into a temporary staging directory under the
+    /// target cache parent. The final target is not touched.
+    pub fn git_clone_to_staging(
+        &self,
+        url: &str,
+        refspec: Option<&str>,
+        target: &Path,
+    ) -> Result<PathBuf, PackageStoreError> {
         // Validate that the target is within the store's cache directory.
         let cache_dir = self.scope.cache_dir();
         // Canonicalize cache_dir (must already exist or be creatable).
@@ -408,40 +462,165 @@ impl PackageStore {
 
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
+        } else {
+            return Err(PackageStoreError::Git(format!(
+                "clone target {target:?} has no parent directory"
+            )));
+        }
+        let staging = staging_dir_for(target);
+        if staging.exists() {
+            remove_path(&staging)?;
         }
 
         // Clone the repository
         let output = std::process::Command::new("git")
             .args(["clone", url])
-            .arg(target)
+            .arg(&staging)
             .env("GIT_TERMINAL_PROMPT", "0")
             .output()
             .map_err(|e| PackageStoreError::Git(format!("failed to execute git clone: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = remove_path(&staging);
             return Err(PackageStoreError::Git(format!(
                 "git clone failed: {stderr}"
             )));
         }
 
-        // Checkout the specific ref
-        let checkout_output = std::process::Command::new("git")
-            .args(["checkout", refspec])
-            .current_dir(target)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .map_err(|e| PackageStoreError::Git(format!("failed to execute git checkout: {e}")))?;
+        if let Some(refspec) = refspec {
+            let checkout_output = std::process::Command::new("git")
+                .args(["checkout", refspec])
+                .current_dir(&staging)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .map_err(|e| {
+                    PackageStoreError::Git(format!("failed to execute git checkout: {e}"))
+                })?;
 
-        if !checkout_output.status.success() {
-            let stderr = String::from_utf8_lossy(&checkout_output.stderr);
+            if !checkout_output.status.success() {
+                let stderr = String::from_utf8_lossy(&checkout_output.stderr);
+                let _ = remove_path(&staging);
+                return Err(PackageStoreError::Git(format!(
+                    "git checkout {refspec} failed: {stderr}"
+                )));
+            }
+        }
+
+        Ok(staging)
+    }
+
+    /// Replace a cache directory with a previously validated staging directory.
+    pub fn replace_cache_dir(
+        &self,
+        target: &Path,
+        staging: &Path,
+    ) -> Result<(), PackageStoreError> {
+        let replacement = self.stage_cache_replacement(target, staging)?;
+        replacement.commit();
+        Ok(())
+    }
+
+    /// Replace a cache directory with a staging directory, keeping the old
+    /// cache available until the caller commits or rolls back.
+    pub fn stage_cache_replacement(
+        &self,
+        target: &Path,
+        staging: &Path,
+    ) -> Result<PendingCacheReplacement, PackageStoreError> {
+        let cache_dir = self.scope.cache_dir();
+        let target_normalized = normalize_path(target);
+        let staging_normalized = normalize_path(staging);
+        let cache_normalized = normalize_path(&cache_dir);
+        if !target_normalized.starts_with(&cache_normalized) {
             return Err(PackageStoreError::Git(format!(
-                "git checkout {refspec} failed: {stderr}"
+                "replace target {target:?} is outside the store cache directory {cache_dir:?}"
+            )));
+        }
+        if !staging_normalized.starts_with(&cache_normalized) {
+            return Err(PackageStoreError::Git(format!(
+                "staging directory {staging:?} is outside the store cache directory {cache_dir:?}"
+            )));
+        }
+        if !staging.is_dir() {
+            return Err(PackageStoreError::Git(format!(
+                "staging directory does not exist: {}",
+                staging.display()
             )));
         }
 
-        Ok(())
+        let backup = temporary_cache_dir_for(target, "backup");
+        if backup.exists() {
+            remove_path(&backup)?;
+        }
+
+        let had_target = target.exists();
+        if had_target {
+            std::fs::rename(target, &backup)?;
+        }
+
+        match std::fs::rename(staging, target) {
+            Ok(()) => Ok(PendingCacheReplacement {
+                target: target.to_path_buf(),
+                backup: had_target.then_some(backup),
+                committed: false,
+            }),
+            Err(e) => {
+                if had_target {
+                    let _ = std::fs::rename(&backup, target);
+                }
+                Err(PackageStoreError::Io(e))
+            }
+        }
     }
+
+    /// Return the current HEAD commit for a cloned repository.
+    pub fn git_rev_parse_head(&self, repo: &Path) -> Result<String, PackageStoreError> {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| PackageStoreError::Git(format!("failed to execute git rev-parse: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PackageStoreError::Git(format!(
+                "git rev-parse HEAD failed: {stderr}"
+            )));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+}
+
+fn split_git_url_and_ref(rest: &str) -> (&str, Option<&str>) {
+    let Some(at_pos) = rest.rfind('@') else {
+        return (rest, None);
+    };
+
+    if let Some(scheme_pos) = rest.find("://") {
+        let path_start = rest[scheme_pos + 3..]
+            .find('/')
+            .map(|offset| scheme_pos + 3 + offset);
+        if path_start.is_some_and(|slash| at_pos > slash) {
+            return (&rest[..at_pos], Some(&rest[at_pos + 1..]));
+        }
+        return (rest, None);
+    }
+
+    (&rest[..at_pos], Some(&rest[at_pos + 1..]))
+}
+
+fn is_scp_like_git_source(rest: &str) -> bool {
+    if rest.contains("://") || rest.starts_with("github.com/") {
+        return false;
+    }
+    let Some(first_slash) = rest.find('/') else {
+        return rest.contains('@') && rest.contains(':');
+    };
+    let authority = &rest[..first_slash];
+    authority.contains('@') && authority.contains(':')
 }
 
 // ---------------------------------------------------------------------------
@@ -500,4 +679,45 @@ fn normalize_path(path: &Path) -> PathBuf {
         }
     }
     components.iter().collect()
+}
+
+fn staging_dir_for(target: &Path) -> PathBuf {
+    temporary_cache_dir_for(target, "staging")
+}
+
+fn temporary_cache_dir_for(target: &Path, kind: &str) -> PathBuf {
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("package-cache");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    parent.join(format!(".{name}.{kind}.{}.{}", std::process::id(), nanos))
+}
+
+fn remove_path(path: &Path) -> Result<(), PackageStoreError> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn rollback_cache_replacement(
+    target: &Path,
+    backup: Option<&Path>,
+) -> Result<(), PackageStoreError> {
+    if target.exists() {
+        remove_path(target)?;
+    }
+    if let Some(backup) = backup
+        && backup.exists()
+    {
+        std::fs::rename(backup, target)?;
+    }
+    Ok(())
 }

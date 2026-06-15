@@ -8,7 +8,7 @@ use std::path::Path;
 
 use opi_coding_agent::package_discovery::{
     AdapterManifest, OpiVersionDiagnostic, PackageDiscoveryError, PackageManifest,
-    resolve_adapter_command,
+    resolve_adapter_command, resolve_adapter_command_checked,
 };
 
 // ---------------------------------------------------------------------------
@@ -328,6 +328,61 @@ fn resolve_command_path_lookup_when_no_separators() {
         Path::new("my-adapter"),
         "bare command name should be returned as-is for PATH lookup"
     );
+}
+
+#[test]
+fn adapter_relative_command_cannot_escape_package_root() {
+    let pkg_dir = tempfile::tempdir().unwrap();
+    let adapter = AdapterManifest {
+        kind: "process-jsonl".to_string(),
+        command: "../escape".to_string(),
+        args: vec![],
+        protocol: "opi-extension-jsonl-v1".to_string(),
+        timeout_ms: None,
+    };
+
+    let err = resolve_adapter_command_checked(&adapter, pkg_dir.path()).unwrap_err();
+
+    assert!(
+        err.to_string().contains("escapes package root"),
+        "expected escape diagnostic, got: {err}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn adapter_windows_drive_relative_command_cannot_bypass_containment() {
+    let pkg_dir = tempfile::tempdir().unwrap();
+    let adapter = AdapterManifest {
+        kind: "process-jsonl".to_string(),
+        command: "C:adapter.exe".to_string(),
+        args: vec![],
+        protocol: "opi-extension-jsonl-v1".to_string(),
+        timeout_ms: None,
+    };
+
+    let err = resolve_adapter_command_checked(&adapter, pkg_dir.path()).unwrap_err();
+
+    assert!(
+        err.to_string().contains("escapes package root"),
+        "expected escape diagnostic, got: {err}"
+    );
+}
+
+#[test]
+fn checked_resolver_allows_relative_command_inside_package_root() {
+    let pkg_dir = tempfile::tempdir().unwrap();
+    let adapter = AdapterManifest {
+        kind: "process-jsonl".to_string(),
+        command: "bin/adapter".to_string(),
+        args: vec![],
+        protocol: "opi-extension-jsonl-v1".to_string(),
+        timeout_ms: None,
+    };
+
+    let resolved = resolve_adapter_command_checked(&adapter, pkg_dir.path()).unwrap();
+
+    assert_eq!(resolved, pkg_dir.path().join("bin").join("adapter"));
 }
 
 // ---------------------------------------------------------------------------

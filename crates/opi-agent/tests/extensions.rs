@@ -308,6 +308,42 @@ impl Extension for CustomMessageExtension {
     }
 }
 
+/// An extension that appends a custom message during context transformation.
+struct TransformExtension {
+    name: String,
+    marker: String,
+}
+
+impl TransformExtension {
+    fn new(name: &str, marker: &str) -> Self {
+        Self {
+            name: name.into(),
+            marker: marker.into(),
+        }
+    }
+}
+
+impl Extension for TransformExtension {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn transform_context(
+        &self,
+        mut messages: Vec<AgentMessage>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AgentMessage>, ExtensionError>> + Send>> {
+        let marker = self.marker.clone();
+        Box::pin(async move {
+            messages.push(AgentMessage::Custom(CustomAgentMessage {
+                kind: "test/transform".into(),
+                data: serde_json::json!({"marker": marker}),
+                include_in_llm_context: false,
+            }));
+            Ok(messages)
+        })
+    }
+}
+
 /// Minimal hooks for testing.
 struct TestHooks;
 
@@ -323,6 +359,38 @@ impl AgentHooks for TestHooks {
                 _ => None,
             })
             .collect())
+    }
+}
+
+struct BaseTransformHooks;
+
+impl AgentHooks for BaseTransformHooks {
+    fn convert_to_llm(
+        &self,
+        messages: &[AgentMessage],
+    ) -> Result<Vec<opi_ai::message::Message>, AgentError> {
+        Ok(messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::Llm(msg) => Some(msg.clone()),
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn transform_context(
+        &self,
+        mut messages: Vec<AgentMessage>,
+        _signal: CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AgentMessage>, AgentError>> + Send>> {
+        Box::pin(async move {
+            messages.push(AgentMessage::Custom(CustomAgentMessage {
+                kind: "test/base-transform".into(),
+                data: serde_json::json!({"marker": "base"}),
+                include_in_llm_context: false,
+            }));
+            Ok(messages)
+        })
     }
 }
 
@@ -578,6 +646,34 @@ async fn composite_hooks_prepare_next_turn_includes_extension_custom_messages() 
         }
         other => panic!("expected custom message, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn composite_hooks_transform_context_runs_base_then_extensions_in_order() {
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(TransformExtension::new("first", "first")))
+        .unwrap();
+    registry
+        .register(Box::new(TransformExtension::new("second", "second")))
+        .unwrap();
+
+    let composite = registry.wrap_hooks(Box::new(BaseTransformHooks));
+    let messages = composite
+        .transform_context(vec![], CancellationToken::new())
+        .await
+        .expect("transform");
+
+    let markers: Vec<&str> = messages
+        .iter()
+        .map(|message| match message {
+            AgentMessage::Custom(message) => {
+                message.data["marker"].as_str().expect("marker string")
+            }
+            other => panic!("expected custom message, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(markers, vec!["base", "first", "second"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -853,6 +949,37 @@ fn serialize_and_restore_extension_state() {
         registry2.serialize_states().unwrap()["stateful"]["count"],
         42
     );
+}
+
+#[tokio::test]
+async fn serialize_and_restore_extension_state_async() {
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(StatefulExtension::new(
+            "stateful",
+            serde_json::json!({
+                "count": 42
+            }),
+        )))
+        .unwrap();
+
+    let states = registry.serialize_states_async().await.unwrap();
+    assert_eq!(states["stateful"]["count"], 42);
+
+    let mut registry2 = ExtensionRegistry::new();
+    registry2
+        .register(Box::new(StatefulExtension::new(
+            "stateful",
+            serde_json::json!({
+                "count": 0
+            }),
+        )))
+        .unwrap();
+
+    registry2.restore_states_async(states).await.unwrap();
+
+    let restored = registry2.serialize_states_async().await.unwrap();
+    assert_eq!(restored["stateful"]["count"], 42);
 }
 
 #[test]

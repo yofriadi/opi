@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use opi_agent::extension::{Extension, ExtensionCommand, ExtensionHookResult, ExtensionRegistry};
-use opi_agent::hooks::{AgentHooks, BeforeToolCallContext};
+use opi_agent::hooks::{AgentHooks, BeforeToolCallContext, PrepareNextTurnContext};
+use opi_agent::message::AgentMessage;
 use opi_coding_agent::adapter_extension::ProcessAdapter;
 use opi_coding_agent::adapter_host::{AdapterHost, AdapterProcessConfig};
 use opi_coding_agent::adapter_protocol::AdapterHostMessage;
@@ -103,6 +104,34 @@ async fn start_gate_adapter() -> (Arc<AdapterHost>, ProcessAdapter) {
     let caps = host.capabilities().clone();
     let host = Arc::new(host);
     let adapter = ProcessAdapter::from_host("gate", host.clone(), caps);
+    (host, adapter)
+}
+
+async fn start_prepare_adapter() -> (Arc<AdapterHost>, ProcessAdapter) {
+    let host = AdapterHost::start(
+        "prepare",
+        config_for_mode("prepare"),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("start host");
+    let caps = host.capabilities().clone();
+    let host = Arc::new(host);
+    let adapter = ProcessAdapter::from_host("prepare", host.clone(), caps);
+    (host, adapter)
+}
+
+async fn start_transform_adapter() -> (Arc<AdapterHost>, ProcessAdapter) {
+    let host = AdapterHost::start(
+        "transform",
+        config_for_mode("transform"),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("start host");
+    let caps = host.capabilities().clone();
+    let host = Arc::new(host);
+    let adapter = ProcessAdapter::from_host("transform", host.clone(), caps);
     (host, adapter)
 }
 
@@ -372,6 +401,23 @@ async fn adapter_state_restore_accepts_state() {
         .expect("restore");
 }
 
+#[tokio::test]
+async fn adapter_state_async_round_trip_works_on_current_thread_runtime() {
+    let (_host, adapter) = start_capabilities_adapter().await;
+
+    let state = adapter
+        .serialize_state_async()
+        .await
+        .expect("serialize")
+        .expect("state");
+    assert_eq!(state["mock"], true);
+
+    adapter
+        .restore_state_async(serde_json::json!({"items": ["a"]}))
+        .await
+        .expect("restore");
+}
+
 // ---------------------------------------------------------------------------
 // 13. Model overrides collected from capabilities
 // ---------------------------------------------------------------------------
@@ -455,4 +501,40 @@ async fn adapter_state_round_trip_through_registry() {
     assert!(states.get("gate").is_some());
 
     registry.restore_states(states).expect("restore");
+}
+
+#[tokio::test]
+async fn adapter_prepare_next_turn_can_inject_message() {
+    let (_host, adapter) = start_prepare_adapter().await;
+    let update = adapter
+        .prepare_next_turn(&PrepareNextTurnContext {
+            messages: vec![],
+            turn: 1,
+        })
+        .await
+        .expect("update");
+
+    assert_eq!(update.extra_messages.len(), 1);
+    match &update.extra_messages[0] {
+        AgentMessage::Custom(message) => {
+            assert_eq!(message.kind, "adapter_note");
+            assert_eq!(message.data["text"], "next turn");
+        }
+        other => panic!("expected custom message, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn adapter_transform_context_can_rewrite_messages() {
+    let (_host, adapter) = start_transform_adapter().await;
+    let messages = adapter.transform_context(vec![]).await.expect("transform");
+
+    assert_eq!(messages.len(), 1);
+    match &messages[0] {
+        AgentMessage::Custom(message) => {
+            assert_eq!(message.kind, "adapter_transform");
+            assert_eq!(message.data["text"], "transformed");
+        }
+        other => panic!("expected custom message, got {other:?}"),
+    }
 }

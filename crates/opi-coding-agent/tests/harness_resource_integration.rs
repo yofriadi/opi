@@ -1,13 +1,19 @@
 use std::path::{Path, PathBuf};
 
 use opi_agent::extension::ExtensionRegistry;
+use opi_agent::session::{
+    ExtensionStateEntry, MessageEntry, SessionEntry, SessionHeader, SessionWriter,
+};
+use opi_ai::message::{InputContent, Message, UserMessage};
 use opi_ai::test_support::MockProvider;
 use opi_coding_agent::adapter_extension::start_adapters_from_packages;
 use opi_coding_agent::config::OpiConfig;
-use opi_coding_agent::harness::{CodingHarness, DiscoveredResourceMetadata};
+use opi_coding_agent::harness::{CodingHarness, DiscoveredResourceMetadata, ResumeInfo};
 use opi_coding_agent::package_discovery::{
     AdapterManifest, PackageManifest, PackageResource, resolve_adapter_command,
 };
+use opi_coding_agent::package_resolver::local_lock_entry;
+use opi_coding_agent::package_store::{PackageDeclaration, PackageStore};
 use opi_coding_agent::policy::{RunMode, ToolRuntimeConfig, ToolSelection};
 
 fn write_package_with_resources(pkg_dir: &Path) {
@@ -124,6 +130,51 @@ fn harness_system_prompt_includes_configured_package_resource_metadata_only() {
     assert_eq!(theme.name, "metadata-theme");
 }
 
+#[test]
+fn harness_system_prompt_includes_installed_project_package_without_config_paths() {
+    let workspace = tempfile::tempdir().unwrap();
+    let global_config = tempfile::tempdir().unwrap();
+    let package_dir = workspace.path().join("vendor").join("metadata-suite");
+    write_package_with_resources(&package_dir);
+
+    let store = PackageStore::project(workspace.path().to_path_buf());
+    store
+        .write_declarations(&[PackageDeclaration {
+            source: "./vendor/metadata-suite".into(),
+            filters: Default::default(),
+        }])
+        .unwrap();
+    store
+        .write_lock(&[local_lock_entry("./vendor/metadata-suite".into(), &package_dir).unwrap()])
+        .unwrap();
+
+    let provider = MockProvider::new("mock", Vec::new());
+    let harness = CodingHarness::new_with_global_config_dir_tool_config(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        Box::new(opi_coding_agent::harness::CodingAgentHooks),
+        None,
+        Vec::new(),
+        None,
+        ToolRuntimeConfig {
+            run_mode: RunMode::Interactive,
+            active_tool_names: Vec::new(),
+        },
+        Some(global_config.path().to_path_buf()),
+    );
+
+    let prompt = harness.system_prompt();
+    assert!(prompt.contains("metadata-suite"));
+    assert!(prompt.contains("Metadata package."));
+    assert!(prompt.contains("metadata-skill"));
+
+    let metadata = harness.resource_metadata();
+    assert_eq!(metadata.packages[0].name, "metadata-suite");
+    assert_eq!(metadata.skills[0].name, "metadata-skill");
+}
+
 // ---------------------------------------------------------------------------
 // Adapter integration helpers
 // ---------------------------------------------------------------------------
@@ -163,6 +214,201 @@ fn mock_adapter_bin() -> PathBuf {
 
     best.map(|(_, p)| p)
         .expect("Could not find adapter_host_mock binary in deps directory")
+}
+
+fn write_adapter_package_toml(pkg_dir: &Path, name: &str, adapter_command: &Path) {
+    std::fs::create_dir_all(pkg_dir).unwrap();
+    std::fs::write(
+        pkg_dir.join("package.toml"),
+        format!(
+            "name = \"{name}\"\n\
+             description = \"Adapter package.\"\n\
+             version = \"0.1.0\"\n\
+             [adapter]\n\
+             kind = \"process-jsonl\"\n\
+             command = \"{}\"\n\
+             protocol = \"opi-extension-jsonl-v1\"\n",
+            adapter_command.display().to_string().replace('\\', "\\\\")
+        ),
+    )
+    .unwrap();
+}
+
+fn package_adapter_example_bin() -> PathBuf {
+    let current = std::env::current_exe().expect("current exe path");
+    let deps_dir = current.parent().expect("deps directory");
+
+    let exact_name = if cfg!(windows) {
+        "package_adapter_example.exe"
+    } else {
+        "package_adapter_example"
+    };
+    let exact_path = deps_dir.join(exact_name);
+    if exact_path.exists() {
+        return exact_path;
+    }
+
+    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+    let prefix = "package_adapter_example-";
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    if let Ok(entries) = std::fs::read_dir(deps_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with(prefix)
+                && name_str.ends_with(exe_suffix)
+                && let Ok(meta) = entry.metadata()
+                && let Ok(modified) = meta.modified()
+                && best.as_ref().is_none_or(|(t, _)| modified > *t)
+            {
+                best = Some((modified, entry.path()));
+            }
+        }
+    }
+
+    best.map(|(_, p)| p)
+        .expect("Could not find package_adapter_example binary in deps directory")
+}
+
+#[tokio::test]
+async fn runtime_startup_starts_installed_project_package_adapter() {
+    let workspace = tempfile::tempdir().unwrap();
+    let global_config = tempfile::tempdir().unwrap();
+    let package_dir = workspace.path().join("vendor").join("adapter-suite");
+    write_adapter_package_toml(&package_dir, "adapter-suite", &mock_adapter_bin());
+
+    let store = PackageStore::project(workspace.path().to_path_buf());
+    store
+        .write_declarations(&[PackageDeclaration {
+            source: "./vendor/adapter-suite".into(),
+            filters: Default::default(),
+        }])
+        .unwrap();
+    store
+        .write_lock(&[local_lock_entry("./vendor/adapter-suite".into(), &package_dir).unwrap()])
+        .unwrap();
+
+    let startup = opi_coding_agent::runtime_packages::start_installed_package_runtime(
+        workspace.path(),
+        global_config.path(),
+    )
+    .await;
+
+    assert!(
+        startup.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        startup.diagnostics
+    );
+    assert_eq!(startup.installed_packages.len(), 1);
+    assert_eq!(startup.installed_packages[0].manifest.name, "adapter-suite");
+    let tools = startup.extension_registry.collect_tools();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].definition().name, "test_tool");
+}
+
+#[tokio::test]
+async fn resumed_installed_adapter_state_restores_on_current_thread_runtime() {
+    let workspace = tempfile::tempdir().unwrap();
+    let global_config = tempfile::tempdir().unwrap();
+    let package_dir = workspace.path().join("vendor").join("todo");
+    write_adapter_package_toml(&package_dir, "todo", &package_adapter_example_bin());
+
+    let store = PackageStore::project(workspace.path().to_path_buf());
+    store
+        .write_declarations(&[PackageDeclaration {
+            source: "./vendor/todo".into(),
+            filters: Default::default(),
+        }])
+        .unwrap();
+    store
+        .write_lock(&[local_lock_entry("./vendor/todo".into(), &package_dir).unwrap()])
+        .unwrap();
+
+    let session_path = workspace.path().join("session.jsonl");
+    let header = SessionHeader::new(
+        "sess-adapter-restore".into(),
+        "2026-06-15T00:00:00Z".into(),
+        workspace.path().display().to_string(),
+        None,
+    );
+    let user = SessionEntry::Message(MessageEntry {
+        id: "msg-1".into(),
+        parent_id: None,
+        timestamp: "2026-06-15T00:00:00Z".into(),
+        message: Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "restore state".into(),
+            }],
+            timestamp_ms: 0,
+        }),
+    });
+    let state = SessionEntry::ExtensionState(ExtensionStateEntry {
+        id: "state-1".into(),
+        parent_id: Some("msg-1".into()),
+        timestamp: "2026-06-15T00:00:01Z".into(),
+        state: serde_json::json!({
+            "todo": {
+                "items": [{
+                    "id": "todo-1",
+                    "title": "resume me",
+                    "description": "state",
+                    "status": "pending"
+                }],
+                "next_id": 2
+            }
+        }),
+    });
+    let mut writer = SessionWriter::create(&session_path, header).unwrap();
+    writer.append(&user).unwrap();
+    writer.append(&state).unwrap();
+    drop(writer);
+    let entries = vec![user, state];
+
+    let startup = opi_coding_agent::runtime_packages::start_installed_package_runtime(
+        workspace.path(),
+        global_config.path(),
+    )
+    .await;
+    assert!(
+        startup.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        startup.diagnostics
+    );
+
+    let initial_messages = opi_coding_agent::session_cli::reconstruct_context(&entries);
+    let provider = MockProvider::new(
+        "mock",
+        vec![opi_ai::test_support::text_response("restored")],
+    );
+    let resume = ResumeInfo {
+        path: session_path,
+        session_id: "sess-adapter-restore".into(),
+        entries,
+        original_cwd: workspace.path().to_path_buf(),
+    };
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .initial_messages(initial_messages)
+    .resume(resume)
+    .extension_registry(startup.extension_registry)
+    .installed_packages(startup.installed_packages)
+    .startup_diagnostics(startup.diagnostics)
+    .build();
+
+    harness.prompt("trigger restore").await.unwrap();
+    let list = harness
+        .dispatch_extension_command("todo/list", None, serde_json::json!({}))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let items = list["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["title"], "resume me");
 }
 
 /// Create a `PackageResource` with an adapter manifest pointing at the mock.

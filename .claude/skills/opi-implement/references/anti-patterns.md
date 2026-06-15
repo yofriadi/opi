@@ -26,6 +26,10 @@ column explains reasoning so you can apply judgment in edge cases.
 | Never require unrelated user changes to become clean | This repository may be shared with users or other agents. The harness owns only the selected task's files and must not pressure cleanup of unrelated work. |
 | Never reintroduce MCP, permission profiles, sub-agents, plan mode, or todos as Phase 3 core work | The current spec keeps these as extension/package examples or later surfaces; putting them back in core recreates the drift the harness is supposed to prevent. |
 | Never satisfy DoD with placeholder stubs/TODOs | Stubs pass gates but don't deliver value. Poisons downstream tasks depending on real behavior. |
+| Never close a product scenario with component-only tests | Parser, protocol, helper, bridge, and mock-registry tests prove substrate only. Product scenarios require a production CLI/startup/runtime/session/API path. |
+| Never mark an unused runtime integration as passing | A function that is only called by tests is not integrated. Runtime/startup claims need production call sites and tests that exercise them. |
+| Never archive a phase from ledger status alone | The ledger can encode weak DoDs. Phase exit must independently rebuild current source-spec criteria and trace them to code and tests. |
+| Never leave vague DoD verbs unexpanded | Words like `works`, `supports`, `loads`, `integrates`, `bridges`, and `handles` hide missing observable behavior. Expand before task execution. |
 | Never broaden into cross-task refactors without graph update | Scope creep invalidates adjacent task assumptions. Graph must reflect reality. |
 | Never clean/restore/discard user changes from failure gate | Working tree may contain in-progress manual fixes. Automated cleanup destroys expensive context. |
 | Never let sub-agent completion order decide result order | Non-deterministic ordering = unreproducible results. `parallelize` array defines canonical order. |

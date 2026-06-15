@@ -73,6 +73,40 @@ fn parses_git_url_without_ref() {
 }
 
 #[test]
+fn parses_ssh_git_url_without_ref() {
+    let source = PackageSource::parse("git:ssh://git@github.com/user/repo").expect("parse");
+    match source {
+        PackageSource::Git { url, refspec } => {
+            assert_eq!(url, "ssh://git@github.com/user/repo");
+            assert!(refspec.is_none());
+        }
+        _ => panic!("expected git source"),
+    }
+}
+
+#[test]
+fn parses_ssh_git_url_with_ref() {
+    let source = PackageSource::parse("git:ssh://git@github.com/user/repo@main").expect("parse");
+    match source {
+        PackageSource::Git { url, refspec } => {
+            assert_eq!(url, "ssh://git@github.com/user/repo");
+            assert_eq!(refspec.as_deref(), Some("main"));
+        }
+        _ => panic!("expected git source"),
+    }
+}
+
+#[test]
+fn rejects_scp_like_git_source_until_explicitly_supported() {
+    let err = PackageSource::parse("git:git@github.com:user/repo@main").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("scp-like git sources are not supported"),
+        "expected scp-like guidance, got: {err}"
+    );
+}
+
+#[test]
 fn rejects_empty_source() {
     let err = PackageSource::parse("").unwrap_err();
     assert!(
@@ -391,7 +425,7 @@ description = "Test package"
     });
 
     let clone_dir = store.cache_dir().join("my-pkg");
-    let result = store.git_clone(&bare_url, &commit_sha, &clone_dir);
+    let result = store.git_clone(&bare_url, Some(&commit_sha), &clone_dir);
     assert!(result.is_ok(), "git_clone failed: {:?}", result.err());
 
     // Verify the cloned repo has the package.toml

@@ -72,7 +72,7 @@
 //! may occur between minor versions without a major version bump.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -816,6 +816,79 @@ pub fn discover_packages(
     let mut resources: Vec<PackageResource> = seen.into_values().collect();
     resources.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
     Ok(resources)
+}
+
+pub fn resolve_adapter_command_checked(
+    adapter: &AdapterManifest,
+    package_root: &Path,
+) -> Result<PathBuf, PackageDiscoveryError> {
+    let cmd = &adapter.command;
+    let path = Path::new(cmd);
+
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    if path
+        .components()
+        .any(|component| matches!(component, Component::Prefix(_)))
+    {
+        return Err(PackageDiscoveryError::SecurityDiagnostic {
+            package_name: "adapter".to_string(),
+            path: path.to_path_buf(),
+            reason: "adapter command escapes package root".to_string(),
+        });
+    }
+
+    if !(cmd.contains('/') || cmd.contains('\\')) {
+        return Ok(PathBuf::from(cmd));
+    }
+
+    let root = normalize_path(package_root);
+    let resolved = normalize_path(&package_root.join(path));
+    if !resolved.starts_with(&root) {
+        return Err(PackageDiscoveryError::SecurityDiagnostic {
+            package_name: "adapter".to_string(),
+            path: resolved,
+            reason: "adapter command escapes package root".to_string(),
+        });
+    }
+
+    Ok(resolved)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+pub fn discover_package_root(
+    path: &Path,
+    layer_precedence: u32,
+) -> Result<PackageResource, PackageDiscoveryError> {
+    let layer = crate::resource::DiscoveryLayer {
+        root: path.to_path_buf(),
+        subdirectory: None,
+        precedence: layer_precedence,
+    };
+    let mut seen = std::collections::HashMap::new();
+    discover_package_dir(path, &layer, &mut seen)?;
+    seen.into_values()
+        .next()
+        .ok_or_else(|| PackageDiscoveryError::InvalidManifest {
+            path: path.join("package.toml"),
+            reason: "package.toml did not produce a package resource".to_string(),
+        })
 }
 
 fn discover_package_dir(

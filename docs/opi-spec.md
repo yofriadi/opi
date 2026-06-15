@@ -907,7 +907,11 @@ Phase 5 adds an `opi package` subcommand group that runs before provider constru
 | `opi package list` | List installed packages (supports `--json`) |
 | `opi package doctor` | Diagnose package issues (supports `--json`) |
 
-Packages are installed into global (`~/.local/share/opi/packages/`) or project (`.opi/packages/`) stores. The store records source path, optional git commit, cache path, and manifest hash in `package-lock.toml`.
+Packages are recorded in the global user config directory (`packages.toml` and `package-lock.toml`) or the project `.opi/` directory (`.opi/packages.toml` and `.opi/package-lock.toml`). Git package checkouts are cached under the selected scope's `package-cache/`. The lock records source path, optional git commit, cache path, and manifest hash.
+
+`opi package add` validates the package manifest, records the declaration, and writes a lock entry. Runtime startup reads installed declarations and lock state, resolves valid packages without requiring `config.packages.paths`, starts valid adapter packages, and reports adapter startup diagnostics. `opi package doctor` validates source availability, lock consistency, manifest V2, resource containment, opi version constraints, and adapter command resolution.
+
+Packages are trusted code. Installing a package can run adapter child processes with the same OS privileges as `opi`; Phase 5 package code is not sandboxed, and package permission declarations are not enforced by the package manager.
 
 ### 10.2 Process Adapters
 

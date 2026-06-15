@@ -326,6 +326,10 @@ opi package doctor                     # 诊断 package 问题
 opi package remove todo                # 卸载 package
 ```
 
+`opi package add` 会验证 manifest 并写入 lock 条目。后续运行时启动会读取已安装声明和 lock 状态，然后启动有效的 adapter package，不需要再配置 `config.packages.paths`。
+
+Package 是受信任代码。安装 package 后，其 adapter 子进程会以与 `opi` 相同的操作系统权限运行；第五阶段 package 代码不会被 sandbox，package 权限声明也不会由 package manager 执行。
+
 带有 `[adapter]` 声明的 package 会以子进程 adapter 的方式运行，使用 `opi-extension-jsonl-v1` 协议。Adapter 进程通过 JSONL stdin/stdout 通信，可以通过现有 extension API 暴露自定义工具、命令、hooks、事件观察者、会话作用域状态和取消桥接——无需 Node、npm 或在线 provider。`process-jsonl` 是第五阶段 MVP 中唯一支持的 adapter 类型。
 
 Skills 与 prompt fragments 采用渐进式披露：先发现元数据，只有需要时才加载正文。Themes 可以从 `theme.toml` 资源发现，并在回退到内置 `default` 和 `monokai` 前优先解析。同一发现层内的重复资源名会报错；高优先级层会覆盖低优先级层。

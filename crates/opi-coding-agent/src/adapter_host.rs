@@ -129,6 +129,7 @@ pub struct AdapterHost {
     capabilities: AdapterCapabilities,
     stdin_writer: Arc<Mutex<ChildStdin>>,
     pending: PendingMap,
+    diagnostics: Arc<std::sync::Mutex<Vec<String>>>,
     child: Option<Child>,
     reader_handle: Option<tokio::task::JoinHandle<()>>,
     id_counter: AtomicU64,
@@ -205,6 +206,7 @@ impl AdapterHost {
 
         let stdin_writer = Arc::new(Mutex::new(stdin));
         let pending: PendingMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let diagnostics = Arc::new(std::sync::Mutex::new(Vec::new()));
 
         // Start the reader task
         let reader_pending = pending.clone();
@@ -223,6 +225,7 @@ impl AdapterHost {
             },
             stdin_writer,
             pending,
+            diagnostics,
             child: Some(child),
             reader_handle: Some(reader_handle),
             id_counter: AtomicU64::new(1),
@@ -317,6 +320,10 @@ impl AdapterHost {
         self.child.as_ref().and_then(|c| c.id()).unwrap_or(0)
     }
 
+    pub fn take_diagnostics(&self) -> Vec<String> {
+        std::mem::take(&mut *self.diagnostics.lock().unwrap())
+    }
+
     /// Send a request and await the response with a timeout.
     ///
     /// The request `id` field is used for correlation. The caller should use
@@ -347,7 +354,8 @@ impl AdapterHost {
 
     /// Send a fire-and-forget event. Returns immediately.
     ///
-    /// If the adapter's stdin is backpressured, the event is dropped silently.
+    /// If the adapter's stdin is backpressured, the event is dropped and a
+    /// diagnostic is recorded.
     pub async fn send_event(&self, event: serde_json::Value) {
         let msg = AdapterHostMessage::Event { event };
         let json = match serde_json::to_string(&msg) {
@@ -365,8 +373,11 @@ impl AdapterHost {
         })
         .await;
 
-        // If the write timed out or failed, the event is dropped
-        let _ = write_result;
+        match write_result {
+            Ok(Some(())) => {}
+            Ok(None) => self.record_diagnostic("event delivery failed"),
+            Err(_) => self.record_diagnostic("event delivery timed out after 100ms"),
+        }
     }
 
     /// Send a best-effort cancel for an in-flight request.
@@ -460,10 +471,14 @@ impl AdapterHost {
             .await;
         }
 
-        // Kill the child process
         if let Some(ref mut child) = self.child {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                Ok(_) => {}
+                Err(_) => {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                }
+            }
         }
 
         // Abort the reader task
@@ -480,6 +495,10 @@ impl AdapterHost {
         }
 
         Ok(())
+    }
+
+    fn record_diagnostic(&self, message: impl Into<String>) {
+        self.diagnostics.lock().unwrap().push(message.into());
     }
 }
 

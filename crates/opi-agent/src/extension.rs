@@ -100,6 +100,9 @@ pub enum ExtensionError {
     /// An extension command returned an error.
     #[error("extension command error: {0}")]
     CommandError(String),
+    /// An extension lifecycle hook returned an error.
+    #[error("extension hook error in {name}: {reason}")]
+    HookError { name: String, reason: String },
     /// A generic extension error.
     #[error("{0}")]
     Other(String),
@@ -229,6 +232,15 @@ pub trait Extension: Send + Sync {
         Box::pin(async {})
     }
 
+    /// Transform the agent message buffer after the base hook and before LLM
+    /// conversion.
+    fn transform_context(
+        &self,
+        messages: Vec<AgentMessage>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AgentMessage>, ExtensionError>> + Send>> {
+        Box::pin(async move { Ok(messages) })
+    }
+
     /// Prepare context before the next turn begins.
     ///
     /// Extensions may return extra messages to inject into the agent's next
@@ -263,9 +275,27 @@ pub trait Extension: Send + Sync {
         Ok(None)
     }
 
+    /// Async variant of [`serialize_state`](Self::serialize_state).
+    ///
+    /// Process-backed extensions can override this to avoid blocking an async
+    /// runtime while preserving the synchronous API for in-process extensions.
+    fn serialize_state_async(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, ExtensionError>> + Send + '_>> {
+        Box::pin(async { self.serialize_state() })
+    }
+
     /// Restore extension state from session persistence.
     fn restore_state(&self, _state: Value) -> Result<(), ExtensionError> {
         Ok(())
+    }
+
+    /// Async variant of [`restore_state`](Self::restore_state).
+    fn restore_state_async(
+        &self,
+        state: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ExtensionError>> + Send + '_>> {
+        Box::pin(async move { self.restore_state(state) })
     }
 }
 
@@ -408,6 +438,21 @@ impl ExtensionRegistry {
         Ok(Value::Object(map))
     }
 
+    /// Async variant of [`serialize_states`](Self::serialize_states).
+    pub async fn serialize_states_async(&self) -> Result<Value, ExtensionError> {
+        let mut map = serde_json::Map::new();
+        for ext in self.extensions.iter() {
+            match ext.serialize_state_async().await {
+                Ok(Some(state)) => {
+                    map.insert(ext.name().to_string(), state);
+                }
+                Ok(None) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(Value::Object(map))
+    }
+
     /// Restore extension states from a JSON object keyed by extension name.
     pub fn restore_states(&self, states: Value) -> Result<(), ExtensionError> {
         let map = match states {
@@ -417,6 +462,20 @@ impl ExtensionRegistry {
         for ext in self.extensions.iter() {
             if let Some(state) = map.get(ext.name()) {
                 ext.restore_state(state.clone())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Async variant of [`restore_states`](Self::restore_states).
+    pub async fn restore_states_async(&self, states: Value) -> Result<(), ExtensionError> {
+        let map = match states {
+            Value::Object(m) => m,
+            _ => return Ok(()),
+        };
+        for ext in self.extensions.iter() {
+            if let Some(state) = map.get(ext.name()) {
+                ext.restore_state_async(state.clone()).await?;
             }
         }
         Ok(())
@@ -480,7 +539,18 @@ impl AgentHooks for CompositeHooks {
         messages: Vec<AgentMessage>,
         signal: CancellationToken,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<AgentMessage>, AgentError>> + Send>> {
-        self.base.transform_context(messages, signal)
+        let base = self.base.clone();
+        let extensions = self.extensions.clone();
+        Box::pin(async move {
+            let mut messages = base.transform_context(messages, signal).await?;
+            for ext in extensions.iter() {
+                messages = ext
+                    .transform_context(messages)
+                    .await
+                    .map_err(|e| AgentError::Hook(e.to_string()))?;
+            }
+            Ok(messages)
+        })
     }
 
     fn should_stop_after_turn(

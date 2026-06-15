@@ -29,6 +29,8 @@ use opi_ai::provider::{EventStream, ModelInfo, Provider, Request};
 use opi_ai::stream::{AssistantStreamEvent, StopReason};
 use opi_ai::test_support::{MockProvider, base_assistant, text_response};
 use opi_coding_agent::config::OpiConfig;
+use opi_coding_agent::package_resolver::local_lock_entry;
+use opi_coding_agent::package_store::{PackageDeclaration, PackageStore};
 use opi_coding_agent::policy::ToolSelection;
 use opi_coding_agent::rpc::{RPC_SCHEMA_VERSION, RpcCommand, RpcRunner};
 
@@ -167,6 +169,74 @@ fn opi_binary_path() -> std::path::PathBuf {
     path
 }
 
+fn test_binary_path(name: &str) -> std::path::PathBuf {
+    let current = std::env::current_exe().expect("current exe path");
+    let deps_dir = current.parent().expect("deps directory");
+    let exact_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    let exact_path = deps_dir.join(exact_name);
+    if exact_path.exists() {
+        return exact_path;
+    }
+
+    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+    let prefix = format!("{name}-");
+    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    if let Ok(entries) = std::fs::read_dir(deps_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with(&prefix)
+                && name_str.ends_with(exe_suffix)
+                && let Ok(meta) = entry.metadata()
+                && let Ok(modified) = meta.modified()
+                && best.as_ref().is_none_or(|(t, _)| modified > *t)
+            {
+                best = Some((modified, entry.path()));
+            }
+        }
+    }
+
+    best.map(|(_, p)| p)
+        .unwrap_or_else(|| panic!("Could not find {name} binary in deps directory"))
+}
+
+fn install_rpc_adapter_package(workspace: &std::path::Path, name: &str) {
+    let package_dir = workspace.join("vendor").join(name);
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("package.toml"),
+        format!(
+            "name = \"{name}\"\n\
+             description = \"RPC adapter package.\"\n\
+             version = \"0.1.0\"\n\
+             [adapter]\n\
+             kind = \"process-jsonl\"\n\
+             command = \"{}\"\n\
+             protocol = \"opi-extension-jsonl-v1\"\n",
+            test_binary_path("adapter_host_mock")
+                .display()
+                .to_string()
+                .replace('\\', "\\\\")
+        ),
+    )
+    .unwrap();
+    let store = PackageStore::project(workspace.to_path_buf());
+    let source = format!("./vendor/{name}");
+    store
+        .write_declarations(&[PackageDeclaration {
+            source: source.clone(),
+            filters: Default::default(),
+        }])
+        .unwrap();
+    store
+        .write_lock(&[local_lock_entry(source, &package_dir).unwrap()])
+        .unwrap();
+}
+
 struct RpcProcess {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -175,15 +245,34 @@ struct RpcProcess {
 
 impl RpcProcess {
     fn spawn() -> Self {
+        Self::spawn_in(None, None)
+    }
+
+    fn spawn_in(
+        workspace: Option<&std::path::Path>,
+        user_config_root: Option<&std::path::Path>,
+    ) -> Self {
         let binary = opi_binary_path();
-        let mut child = Command::new(&binary)
+        let mut command = Command::new(&binary);
+        command
             .arg("--rpc")
             .arg("--model")
             .arg("anthropic:claude-sonnet-4-5-20250514")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .env("ANTHROPIC_API_KEY", "test-key-for-rpc-tests")
+            .env("ANTHROPIC_API_KEY", "test-key-for-rpc-tests");
+        if let Some(workspace) = workspace {
+            command.current_dir(workspace);
+        }
+        if let Some(user_config_root) = user_config_root {
+            if cfg!(windows) {
+                command.env("APPDATA", user_config_root);
+            } else {
+                command.env("HOME", user_config_root);
+            }
+        }
+        let mut child = command
             .spawn()
             .unwrap_or_else(|e| panic!("failed to spawn {:?}: {e}", binary));
 
@@ -411,6 +500,94 @@ fn rpc_subprocess_session_info_command() {
     assert!(resp["data"]["model"].is_string());
 
     // Quit.
+    proc.send(&serde_json::json!({"type": "quit"}));
+    let _resp = proc.read_line();
+    let status = proc.wait();
+    assert_eq!(status.code(), Some(0));
+}
+
+#[test]
+fn rpc_subprocess_session_info_includes_installed_project_package() {
+    let binary = opi_binary_path();
+    if !binary.exists() {
+        eprintln!(
+            "skipping rpc subprocess test: binary not found at {:?}",
+            binary
+        );
+        return;
+    }
+
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let user_config = tempfile::tempdir().expect("user config tempdir");
+    let package_dir = workspace.path().join("vendor").join("rpc-suite");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("package.toml"),
+        "name = \"rpc-suite\"\n\
+         description = \"RPC installed package.\"\n\
+         version = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let store = PackageStore::project(workspace.path().to_path_buf());
+    store
+        .write_declarations(&[PackageDeclaration {
+            source: "./vendor/rpc-suite".into(),
+            filters: Default::default(),
+        }])
+        .unwrap();
+    store
+        .write_lock(&[local_lock_entry("./vendor/rpc-suite".into(), &package_dir).unwrap()])
+        .unwrap();
+
+    let mut proc = RpcProcess::spawn_in(Some(workspace.path()), Some(user_config.path()));
+    let _header = proc.read_line();
+
+    proc.send(&serde_json::json!({"type": "session_info", "id": "si-installed"}));
+    let resp = proc.read_until_response("session_info");
+    assert_eq!(resp["success"], true);
+    let packages = resp["data"]["resources"]["packages"]
+        .as_array()
+        .expect("packages array");
+    assert!(
+        packages.iter().any(|name| name == "rpc-suite"),
+        "installed package should be exposed in session_info: {resp}"
+    );
+
+    proc.send(&serde_json::json!({"type": "quit"}));
+    let _resp = proc.read_line();
+    let status = proc.wait();
+    assert_eq!(status.code(), Some(0));
+}
+
+#[test]
+fn rpc_subprocess_extension_command_dispatches_to_installed_adapter_package() {
+    let binary = opi_binary_path();
+    if !binary.exists() {
+        eprintln!(
+            "skipping rpc subprocess test: binary not found at {:?}",
+            binary
+        );
+        return;
+    }
+
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let user_config = tempfile::tempdir().expect("user config tempdir");
+    install_rpc_adapter_package(workspace.path(), "rpc-adapter-suite");
+
+    let mut proc = RpcProcess::spawn_in(Some(workspace.path()), Some(user_config.path()));
+    let _header = proc.read_line();
+
+    proc.send(&serde_json::json!({
+        "type": "extension_command",
+        "id": "installed-ext-1",
+        "name": "test/status",
+        "args": {}
+    }));
+    let resp = proc.read_until_response("extension_command");
+    assert_eq!(resp["success"], true);
+    assert_eq!(resp["id"], "installed-ext-1");
+    assert_eq!(resp["data"]["status"], "ok");
+
     proc.send(&serde_json::json!({"type": "quit"}));
     let _resp = proc.read_line();
     let status = proc.wait();

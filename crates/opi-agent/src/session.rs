@@ -69,6 +69,15 @@ pub struct LeafEntry {
     pub entry_id: String,
 }
 
+/// Serialized extension state attached to the current content branch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtensionStateEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub timestamp: String,
+    pub state: serde_json::Value,
+}
+
 /// All tree entry types (S9.3).
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +86,7 @@ pub enum SessionEntry {
     Message(MessageEntry),
     Compaction(CompactionEntry),
     Leaf(LeafEntry),
+    ExtensionState(ExtensionStateEntry),
 }
 
 impl SessionEntry {
@@ -86,6 +96,7 @@ impl SessionEntry {
             SessionEntry::Message(m) => &m.id,
             SessionEntry::Compaction(c) => &c.id,
             SessionEntry::Leaf(l) => &l.id,
+            SessionEntry::ExtensionState(s) => &s.id,
         }
     }
 }

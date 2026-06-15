@@ -206,8 +206,14 @@ async fn run_non_interactive(
         .as_ref()
         .map(|info| info.original_cwd.clone())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let user_config_dir = opi_coding_agent::config::user_config_dir();
+    let runtime_startup = opi_coding_agent::runtime_packages::start_installed_package_runtime(
+        &workspace_root,
+        &user_config_dir,
+    )
+    .await;
 
-    let mut runner = match NonInteractiveRunner::new_with_resume(
+    let mut runner = match NonInteractiveRunner::new_with_resume_and_runtime_packages(
         provider,
         config.defaults.model.clone(),
         config.clone(),
@@ -217,6 +223,7 @@ async fn run_non_interactive(
         resumed_messages.unwrap_or_default(),
         resume_info,
         tool_selection,
+        Some(runtime_startup),
     ) {
         Ok(runner) => runner,
         Err(e) => {
@@ -309,8 +316,14 @@ async fn run_rpc(
             });
 
     let workspace_root = std::env::current_dir().unwrap_or_default();
+    let user_config_dir = opi_coding_agent::config::user_config_dir();
+    let runtime_startup = opi_coding_agent::runtime_packages::start_installed_package_runtime(
+        &workspace_root,
+        &user_config_dir,
+    )
+    .await;
 
-    let mut runner = match RpcRunner::new(
+    let mut runner = match RpcRunner::new_with_runtime_packages(
         provider,
         config.defaults.model.clone(),
         config.clone(),
@@ -319,6 +332,7 @@ async fn run_rpc(
         tool_selection,
         user_system_prompt,
         resumed_messages.unwrap_or_default(),
+        runtime_startup,
     ) {
         Ok(runner) => runner,
         Err(e) => {
@@ -367,20 +381,36 @@ async fn run_interactive(
         .as_ref()
         .map(|info| info.original_cwd.clone())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let user_config_dir = opi_coding_agent::config::user_config_dir();
+    let runtime_startup = opi_coding_agent::runtime_packages::start_installed_package_runtime(
+        &workspace_root,
+        &user_config_dir,
+    )
+    .await;
 
-    let tool_config = ToolRuntimeConfig::resolve(RunMode::Interactive, true, tool_selection)
-        .expect("interactive tool config should be valid");
-    let harness = CodingHarness::new_with_hooks_and_resume_tool_config(
+    let tool_config =
+        ToolRuntimeConfig::resolve(RunMode::Interactive, true, tool_selection.clone())
+            .expect("interactive tool config should be valid");
+    let mut builder = CodingHarness::builder(
         provider,
         config.defaults.model.clone(),
         config.clone(),
         workspace_root,
-        hooks,
-        user_system_prompt,
-        initial_messages,
-        resume_info,
-        tool_config,
-    );
+    )
+    .hooks(hooks)
+    .initial_messages(initial_messages)
+    .tool_selection(tool_selection)
+    .tool_config(tool_config)
+    .extension_registry(runtime_startup.extension_registry)
+    .installed_packages(runtime_startup.installed_packages)
+    .startup_diagnostics(runtime_startup.diagnostics);
+    if let Some(prompt) = user_system_prompt {
+        builder = builder.user_system_prompt(prompt);
+    }
+    if let Some(resume_info) = resume_info {
+        builder = builder.resume(resume_info);
+    }
+    let harness = builder.build();
 
     let mut harness = harness;
 

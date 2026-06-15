@@ -251,6 +251,134 @@ fn spec_mentions_package_cli() {
     );
 }
 
+#[test]
+fn docs_warn_packages_are_trusted_code() {
+    let readme = read_repo_file("README.md");
+    let readme_zh = read_repo_file("README.zh.md");
+    let spec = read_repo_file("docs/opi-spec.md");
+    let spec_zh = read_repo_file("docs/opi-spec.zh.md");
+
+    assert!(
+        readme.contains("Packages are trusted code"),
+        "README must warn that packages are trusted code"
+    );
+    assert!(
+        readme.contains("not sandboxed"),
+        "README must warn that package code is not sandboxed"
+    );
+    assert!(
+        readme_zh.contains("Package 是受信任代码"),
+        "README.zh must warn that packages are trusted code"
+    );
+    assert!(
+        readme_zh.contains("不会被 sandbox"),
+        "README.zh must warn that package code is not sandboxed"
+    );
+    assert!(
+        spec.contains("Packages are trusted code"),
+        "opi-spec must warn that packages are trusted code"
+    );
+    assert!(
+        spec.contains("not sandboxed"),
+        "opi-spec must warn that package code is not sandboxed"
+    );
+    assert!(
+        spec_zh.contains("Package 是受信任代码"),
+        "opi-spec.zh must warn that packages are trusted code"
+    );
+    assert!(
+        spec_zh.contains("不会被 sandbox"),
+        "opi-spec.zh must warn that package code is not sandboxed"
+    );
+}
+
+#[test]
+fn changelog_mentions_phase_five_package_loop() {
+    let changelog = read_repo_file("CHANGELOG.md");
+
+    assert!(
+        changelog.contains("opi package add/remove/list/doctor"),
+        "CHANGELOG must mention package CLI lifecycle coverage"
+    );
+    assert!(
+        changelog.contains("opi-extension-jsonl-v1"),
+        "CHANGELOG must mention the adapter JSONL protocol"
+    );
+    assert!(
+        changelog.contains("Adapter state snapshots"),
+        "CHANGELOG must mention adapter state persistence"
+    );
+}
+
+#[test]
+fn docs_guard_package_lifecycle_claims() {
+    let readme = read_repo_file("README.md");
+    let readme_zh = read_repo_file("README.zh.md");
+    let spec = read_repo_file("docs/opi-spec.md");
+    let spec_zh = read_repo_file("docs/opi-spec.zh.md");
+
+    for (name, content) in [("README", readme.as_str()), ("opi-spec", spec.as_str())] {
+        assert!(
+            content.contains("validates the manifest")
+                || content.contains("validates the package manifest"),
+            "{name} must say package add validates manifests"
+        );
+        assert!(
+            content.contains("writes a lock entry"),
+            "{name} must say package add writes lock entries"
+        );
+        assert!(
+            content.contains("reads installed declarations and lock state"),
+            "{name} must say runtime startup reads installed declarations and lock state"
+        );
+    }
+
+    for (name, content) in [
+        ("README.zh", readme_zh.as_str()),
+        ("opi-spec.zh", spec_zh.as_str()),
+    ] {
+        assert!(
+            content.contains("验证 manifest") || content.contains("验证 package manifest"),
+            "{name} must say package add validates manifests"
+        );
+        assert!(
+            content.contains("写入 lock 条目"),
+            "{name} must say package add writes lock entries"
+        );
+        assert!(
+            content.contains("读取已安装声明和 lock 状态"),
+            "{name} must say runtime startup reads installed declarations and lock state"
+        );
+    }
+
+    for phrase in [
+        "source availability",
+        "lock consistency",
+        "manifest V2",
+        "resource containment",
+        "opi version constraints",
+        "adapter command resolution",
+    ] {
+        assert!(
+            spec.contains(phrase),
+            "opi-spec must say doctor validates {phrase}"
+        );
+    }
+    for phrase in [
+        "来源可用性",
+        "lock 一致性",
+        "manifest V2",
+        "资源路径包含关系",
+        "opi 版本约束",
+        "adapter 命令解析",
+    ] {
+        assert!(
+            spec_zh.contains(phrase),
+            "opi-spec.zh must say doctor validates {phrase}"
+        );
+    }
+}
+
 // ===========================================================================
 // Synchronization guards: EN/ZH must be in sync on key claims
 // ===========================================================================

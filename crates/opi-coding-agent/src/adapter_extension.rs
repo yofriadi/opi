@@ -18,8 +18,10 @@
 //! | `AdapterModelOverride` | `Extension::model_overrides()` |
 //! | `Hook "before_tool_call"` | `Extension::on_before_tool_call()` |
 //! | `Hook "after_tool_call"` | `Extension::on_after_tool_call()` |
+//! | `Hook "transform_context"` | `Extension::transform_context()` |
+//! | `Hook "prepare_next_turn"` | `Extension::prepare_next_turn()` |
 //! | Hook `"event"` | `Extension::on_event()` |
-//! | `StateSerialize`/`StateRestore` | `Extension::serialize_state()`/`restore_state()` |
+//! | `StateSerialize`/`StateRestore` | `Extension::serialize_state_async()`/`restore_state_async()` |
 //! | Tool call cancellation | `Tool::execute()` → `tokio::select!` with cancel signal |
 //!
 //! # Hook Filtering
@@ -35,7 +37,7 @@
 //! - Hook timeout on `before_tool_call` → `ExtensionHookResult::Block`
 //!   (fail closed)
 //! - Hook timeout on `after_tool_call` → continue (fail open)
-//! - Event delivery under backpressure → dropped silently
+//! - Event delivery under backpressure → dropped and recorded as an adapter diagnostic
 //! - State serialization failure → `ExtensionError::StateSerialization`
 //!
 //! # Unstable
@@ -52,6 +54,9 @@ use opi_agent::event::AgentEvent;
 use opi_agent::extension::{
     Extension, ExtensionCommand, ExtensionError, ExtensionHookResult, ExtensionRegistry,
 };
+use opi_agent::hooks::PrepareNextTurnContext;
+use opi_agent::loop_types::AgentLoopTurnUpdate;
+use opi_agent::message::AgentMessage;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_ai::message::{OutputContent, ToolDef};
 use opi_ai::provider::ModelInfo;
@@ -59,7 +64,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapter_host::{AdapterCapabilities, AdapterHost, AdapterProcessConfig};
-use crate::adapter_protocol::AdapterHostMessage;
+use crate::adapter_protocol::{AdapterHostMessage, AdapterProcessMessage};
 
 /// Default timeout for adapter tool calls and command dispatch.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -391,6 +396,102 @@ impl Extension for ProcessAdapter {
         })
     }
 
+    fn transform_context(
+        &self,
+        messages: Vec<AgentMessage>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<AgentMessage>, ExtensionError>> + Send>,
+    > {
+        if !self.hooks.contains("transform_context") {
+            return Box::pin(async move { Ok(messages) });
+        }
+
+        let id = self.host.next_id();
+        let host = self.host.clone();
+        let adapter_name = self.name.clone();
+
+        Box::pin(async move {
+            let request = AdapterHostMessage::Hook {
+                id,
+                hook: "transform_context".to_string(),
+                payload: serde_json::json!({
+                    "messages": messages,
+                }),
+            };
+
+            match host.send_request(request, REQUEST_TIMEOUT).await {
+                Ok(AdapterProcessMessage::HookResult { data, .. }) => {
+                    let Some(data) = data else {
+                        return Err(ExtensionError::HookError {
+                            name: adapter_name,
+                            reason: "missing transform_context data".to_string(),
+                        });
+                    };
+                    serde_json::from_value(data["messages"].clone()).map_err(|e| {
+                        ExtensionError::HookError {
+                            name: adapter_name,
+                            reason: format!("invalid transform_context messages: {e}"),
+                        }
+                    })
+                }
+                Ok(AdapterProcessMessage::Error { message, .. }) => {
+                    Err(ExtensionError::HookError {
+                        name: adapter_name,
+                        reason: message,
+                    })
+                }
+                Ok(other) => Err(ExtensionError::HookError {
+                    name: adapter_name,
+                    reason: format!(
+                        "unexpected transform_context response: {:?}",
+                        other_type(&other)
+                    ),
+                }),
+                Err(e) => Err(ExtensionError::HookError {
+                    name: adapter_name,
+                    reason: e.to_string(),
+                }),
+            }
+        })
+    }
+
+    fn prepare_next_turn(
+        &self,
+        ctx: &PrepareNextTurnContext,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<AgentLoopTurnUpdate>> + Send>>
+    {
+        if !self.hooks.contains("prepare_next_turn") {
+            return Box::pin(async { None });
+        }
+
+        let id = self.host.next_id();
+        let host = self.host.clone();
+        let turn = ctx.turn;
+        let messages = ctx.messages.clone();
+
+        Box::pin(async move {
+            let request = AdapterHostMessage::Hook {
+                id,
+                hook: "prepare_next_turn".to_string(),
+                payload: serde_json::json!({
+                    "turn": turn,
+                    "messages": messages,
+                }),
+            };
+
+            match host.send_request(request, REQUEST_TIMEOUT).await.ok()? {
+                AdapterProcessMessage::HookResult { data, .. } => {
+                    let extra_messages = data
+                        .and_then(|d| d.get("extra_messages").cloned())
+                        .and_then(|value| serde_json::from_value(value).ok())
+                        .unwrap_or_default();
+                    Some(AgentLoopTurnUpdate { extra_messages })
+                }
+                _ => None,
+            }
+        })
+    }
+
     fn on_event(&self, event: &AgentEvent) {
         if !self.hooks.contains("event") {
             return;
@@ -451,10 +552,11 @@ impl Extension for ProcessAdapter {
 
     /// Serialize adapter state for session persistence.
     ///
-    /// **Runtime requirement:** This method uses `tokio::task::block_in_place`
-    /// internally and requires a multi-threaded Tokio runtime. Calling from a
-    /// current-thread runtime will panic. The opi binary uses a multi-threaded
-    /// runtime by default.
+    /// **Runtime requirement:** This synchronous bridge uses
+    /// `tokio::task::block_in_place` internally and requires a multi-threaded
+    /// Tokio runtime. Runtime code should prefer
+    /// [`Extension::serialize_state_async`] so current-thread runtimes can
+    /// await the adapter host directly.
     fn serialize_state(&self) -> Result<Option<Value>, ExtensionError> {
         // State serialization needs to be synchronous but the host is async.
         // Use tokio::runtime::Handle to block_on.
@@ -491,10 +593,47 @@ impl Extension for ProcessAdapter {
         }
     }
 
+    fn serialize_state_async(
+        &self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<Value>, ExtensionError>> + Send + '_>,
+    > {
+        let id = self.host.next_id();
+        let host = self.host.clone();
+        let name = self.name.clone();
+        Box::pin(async move {
+            match host
+                .send_request(AdapterHostMessage::StateSerialize { id }, REQUEST_TIMEOUT)
+                .await
+            {
+                Ok(msg) => match msg {
+                    crate::adapter_protocol::AdapterProcessMessage::StateResult {
+                        state, ..
+                    } => Ok(Some(state)),
+                    crate::adapter_protocol::AdapterProcessMessage::Error { message, .. } => {
+                        Err(ExtensionError::StateSerialization {
+                            name,
+                            reason: message,
+                        })
+                    }
+                    other => Err(ExtensionError::StateSerialization {
+                        name,
+                        reason: format!("unexpected state response: {:?}", other_type(&other)),
+                    }),
+                },
+                Err(e) => Err(ExtensionError::StateSerialization {
+                    name,
+                    reason: e.to_string(),
+                }),
+            }
+        })
+    }
+
     /// Restore adapter state from session persistence.
     ///
     /// **Runtime requirement:** Same as [`serialize_state`](Self::serialize_state) —
-    /// requires a multi-threaded Tokio runtime.
+    /// requires a multi-threaded Tokio runtime. Runtime code should prefer
+    /// [`Extension::restore_state_async`].
     fn restore_state(&self, state: Value) -> Result<(), ExtensionError> {
         let id = self.host.next_id();
         let host = self.host.clone();
@@ -528,6 +667,43 @@ impl Extension for ProcessAdapter {
                 reason: e.to_string(),
             }),
         }
+    }
+
+    fn restore_state_async(
+        &self,
+        state: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ExtensionError>> + Send + '_>>
+    {
+        let id = self.host.next_id();
+        let host = self.host.clone();
+        let name = self.name.clone();
+        Box::pin(async move {
+            match host
+                .send_request(
+                    AdapterHostMessage::StateRestore { id, state },
+                    REQUEST_TIMEOUT,
+                )
+                .await
+            {
+                Ok(msg) => match msg {
+                    crate::adapter_protocol::AdapterProcessMessage::StateResult { .. } => Ok(()),
+                    crate::adapter_protocol::AdapterProcessMessage::Error { message, .. } => {
+                        Err(ExtensionError::StateRestoration {
+                            name,
+                            reason: message,
+                        })
+                    }
+                    other => Err(ExtensionError::StateRestoration {
+                        name,
+                        reason: format!("unexpected state response: {:?}", other_type(&other)),
+                    }),
+                },
+                Err(e) => Err(ExtensionError::StateRestoration {
+                    name,
+                    reason: e.to_string(),
+                }),
+            }
+        })
     }
 }
 
@@ -620,7 +796,18 @@ pub async fn start_adapters_from_packages(
         }
 
         // Resolve command path
-        let command = crate::package_discovery::resolve_adapter_command(adapter, &package.path);
+        let command =
+            match crate::package_discovery::resolve_adapter_command_checked(adapter, &package.path)
+            {
+                Ok(command) => command,
+                Err(e) => {
+                    diagnostics.push(format!(
+                        "package '{}': adapter command invalid: {e}",
+                        package.manifest.name
+                    ));
+                    continue;
+                }
+            };
 
         let config = AdapterProcessConfig {
             command,
@@ -637,6 +824,9 @@ pub async fn start_adapters_from_packages(
         match AdapterHost::start(&package.manifest.name, config, timeout).await {
             Ok(host) => {
                 let caps = host.capabilities().clone();
+                for diagnostic in host.take_diagnostics() {
+                    diagnostics.push(format!("package '{}': {diagnostic}", package.manifest.name));
+                }
                 let host = Arc::new(host);
                 let process_adapter = ProcessAdapter::from_host(&package.manifest.name, host, caps);
                 if let Err(e) = registry.register(Box::new(process_adapter)) {

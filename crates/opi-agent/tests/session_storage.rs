@@ -9,8 +9,8 @@ use std::io::Write;
 use opi_agent::AgentEvent;
 use opi_agent::message::AgentMessage;
 use opi_agent::session::{
-    CompactionEntry, CrashRecovery, LeafEntry, MessageEntry, SessionEntry, SessionHeader,
-    SessionReader, SessionWriter,
+    CompactionEntry, CrashRecovery, ExtensionStateEntry, LeafEntry, MessageEntry, SessionEntry,
+    SessionHeader, SessionReader, SessionWriter,
 };
 use opi_agent::session_event::{
     AgentSessionEvent, CompactionReason, CompactionResult, ThinkingLevel,
@@ -360,6 +360,56 @@ fn leaf_entry_round_trip() {
         assert_eq!(l.entry_id, "entry-5");
     } else {
         panic!("expected Leaf entry");
+    }
+}
+
+#[test]
+fn extension_state_entry_round_trip() {
+    let entry = SessionEntry::ExtensionState(ExtensionStateEntry {
+        id: "state-1".into(),
+        parent_id: Some("msg-1".into()),
+        timestamp: "2026-05-22T14:00:01Z".into(),
+        state: serde_json::json!({"todo": {"items": []}}),
+    });
+    let json = serde_json::to_string(&entry).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(val["type"], "extension_state");
+
+    let back: SessionEntry = serde_json::from_str(&json).unwrap();
+    match &back {
+        SessionEntry::ExtensionState(state) => {
+            assert_eq!(state.parent_id.as_deref(), Some("msg-1"));
+            assert_eq!(state.state["todo"]["items"], serde_json::json!([]));
+        }
+        other => panic!("expected extension state entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn session_jsonl_round_trips_extension_state_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.jsonl");
+    let header = make_header("sess-state");
+
+    let mut writer = SessionWriter::create(&path, header).unwrap();
+    writer
+        .append(&SessionEntry::ExtensionState(ExtensionStateEntry {
+            id: "state-1".to_string(),
+            parent_id: Some("msg-1".to_string()),
+            timestamp: "2026-05-22T14:00:01Z".to_string(),
+            state: serde_json::json!({"todo": {"items": []}}),
+        }))
+        .unwrap();
+    drop(writer);
+
+    let (_header, entries) = SessionReader::read_all(&path).unwrap();
+    assert_eq!(entries.len(), 1);
+    match &entries[0] {
+        SessionEntry::ExtensionState(entry) => {
+            assert_eq!(entry.parent_id.as_deref(), Some("msg-1"));
+            assert_eq!(entry.state["todo"]["items"], serde_json::json!([]));
+        }
+        other => panic!("expected extension state entry, got {other:?}"),
     }
 }
 

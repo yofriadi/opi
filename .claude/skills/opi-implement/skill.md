@@ -30,6 +30,22 @@ When a Phase 5 ledger is initialized or reconciled, both files MUST be included
 in `spec_files` and hashed in `spec_files_sha256` alongside `docs/opi-spec.md`.
 Do not auto-parse arbitrary specs from `docs/superpowers/specs/`.
 
+**Product-loop integrity rule:** A phase is not complete merely because every
+component task is green. When a source spec contains goals, success criteria,
+exit criteria, or user workflows, init/reinit MUST map them into executable
+`acceptance_scenarios`. Every scenario needs an owning task, verification
+command/test, and production call-site trace when it claims runtime behavior.
+If a task proves only a helper, parser, protocol type, or bridge object without
+showing that production startup/CLI/runtime calls it, mark it as substrate
+coverage only; do not let it close a product acceptance scenario.
+
+**DoD precision rule:** Vague verbs in a DoD (`works`, `supports`, `loads`,
+`integrates`, `bridges`, `productizes`, `handles`) MUST be expanded during
+init/reinit or task-graph review into concrete observable assertions:
+command/API entry point, persisted artifact, production call site, runtime
+effect, diagnostics, and negative/error behavior where relevant. A vague DoD is
+not executable until expanded or explicitly accepted as a substrate-only task.
+
 ## Invocation
 
 ```text
@@ -91,7 +107,8 @@ E is the only phase that mutates git **during normal task execution**.
    - A.4 Select target task (auto-pick or validate override)
 
 2. **Phase B: Plan-the-task**
-   - B.1 Print task DoD + verification tier + parallelize plan
+   - B.1 Print task DoD + verification tier + parallelize plan + owned
+     acceptance scenarios + required production call-site traces
    - B.2 User gate: "proceed with task `<id>` and create the one task commit if verification passes?"
    - B.3 If confirmed: mark `in_progress`, record `start_commit`, write ledger
 
@@ -108,6 +125,13 @@ E is the only phase that mutates git **during normal task execution**.
    - C.3 Total cap 5 → failure decision gate
 
 4. **Phase D: Verify**
+   - D.0 Product acceptance checks:
+     - Run every `acceptance_scenarios` verification owned by the task.
+     - For runtime/startup/CLI claims, prove the production call site exists and
+       is exercised by the scenario. A direct helper/unit test is not enough.
+     - If the scenario cannot be exercised yet, the task may pass only as
+       substrate coverage and must leave the scenario open on a later vertical
+       slice task.
    - D.1 Tier-specific mechanical gates
    - D.2 Task-level risk evaluator (when `evaluator_required = true`)
    - D.3 Cross-cutting gates: fmt, clippy, doc, smoke
@@ -121,6 +145,13 @@ E is the only phase that mutates git **during normal task execution**.
 
 6. **Phase F: Phase-Exit Check**
    - F.1 If all phase tasks passing → run phase-exit evaluator
+   - F.1a Phase-exit evaluator MUST rebuild the source spec's success/exit
+     criteria from the current spec files, inspect code/tests independently of
+     ledger claims, and produce a criteria trace with one of:
+     `met`, `deferred-by-updated-design`, or `not-met`.
+   - F.1b REFUSE phase archive when any criterion is `not-met`, or when
+     `deferred-by-updated-design` lacks an exact source citation from the
+     current spec/plan.
    - F.2 Print phase-complete report; no auto-release
    - F.3 Else → print "next unblocked: X.Y" hint
    - F.4 If F.1 passed, run the archive gate:
@@ -199,6 +230,12 @@ Opi-Verification: <tier>; <short command/result summary>
 Opi-Evaluator: <not-required | passed>
 ```
 
+If the task owns any `acceptance_scenarios`, also include:
+
+```text
+Opi-Acceptance: <scenario ids>; <command/test/call-site evidence summary>
+```
+
 Commit type is derived from the ledger `commit_type` field (feat/fix/docs/etc).
 Commit scope is the crate name. Example: `feat(opi-agent): implement agent_loop`
 
@@ -241,6 +278,16 @@ in `references/anti-patterns.md`.
 8. **Never commit ledger files.** They are gitignored runtime state.
 9. **Never skip `[workspace.dependencies]` for internal deps.** Lockstep versioning.
 10. **Never run live provider tests.** They belong in `#[ignore]`-gated tests.
+11. **Never close a product scenario with component-only tests.** Helper,
+    parser, protocol, and bridge tests are substrate evidence until an
+    end-to-end production path exercises them.
+12. **Never mark an unused runtime integration as passing.** If a function such
+    as startup registration, resolver loading, or state persistence has no
+    production call site, the task remains open or substrate-only.
+13. **Never archive a phase from ledger status alone.** Phase exit must trace
+    current source-spec criteria to code and tests independently.
+14. **Never let vague DoD verbs stand.** Expand them before execution or stop
+    for task-graph review.
 
 The skill refuses to act if any rule would be violated, even if the user
 requests it during a failure-decision gate.

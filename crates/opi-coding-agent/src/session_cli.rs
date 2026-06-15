@@ -148,10 +148,16 @@ pub fn resume_session(dir: &Path, session_id: &str) -> Result<ResumedSession, Se
 /// source session ID in `parent_session`.
 pub fn fork_session(dir: &Path, session_id: &str) -> Result<ResumedSession, SessionCliError> {
     let source = resume_session(dir, session_id)?;
-    let entries: Vec<opi_agent::session::SessionEntry> = select_ordered_entries(&source.entries)
-        .into_iter()
-        .cloned()
-        .collect();
+    let mut entries: Vec<opi_agent::session::SessionEntry> =
+        select_ordered_entries(&source.entries)
+            .into_iter()
+            .cloned()
+            .collect();
+    if let Some(state) = latest_extension_state_entry_for_active_branch(&source.entries) {
+        entries.push(opi_agent::session::SessionEntry::ExtensionState(
+            state.clone(),
+        ));
+    }
     let (header, path) = new_fork_session_target(dir, &source.header)?;
 
     std::fs::create_dir_all(dir)?;
@@ -415,8 +421,8 @@ pub fn reconstruct_context(
 /// When the session contains `Leaf` pointer entries, the last Leaf's
 /// `entry_id` is used as the branch tip and the parent chain is walked
 /// backward to collect only the active-branch entries (root to tip).
-/// Without Leaves, all non-Leaf entries are returned in file order (legacy
-/// linear sessions). This is the shared ordering logic used by both
+/// Without Leaves, all Message/Compaction entries are returned in file order
+/// (legacy linear sessions). This is the shared ordering logic used by both
 /// `reconstruct_context` (Agent message buffer) and
 /// `SessionCoordinator::open_existing` (compaction buffer).
 pub(crate) fn select_ordered_entries(
@@ -433,8 +439,56 @@ pub(crate) fn select_ordered_entries(
         Some(tip) => walk_active_branch(entries, tip),
         None => entries
             .iter()
-            .filter(|e| !matches!(e, SessionEntry::Leaf(_)))
+            .filter(|e| content_entry_id(e).is_some())
             .collect(),
+    }
+}
+
+pub(crate) fn active_content_entry_ids(
+    entries: &[opi_agent::session::SessionEntry],
+) -> Vec<String> {
+    select_ordered_entries(entries)
+        .into_iter()
+        .filter_map(content_entry_id)
+        .map(str::to_owned)
+        .collect()
+}
+
+pub(crate) fn latest_extension_state_entry_for_active_branch(
+    entries: &[opi_agent::session::SessionEntry],
+) -> Option<&opi_agent::session::ExtensionStateEntry> {
+    use std::collections::HashSet;
+
+    use opi_agent::session::SessionEntry;
+
+    let active_ids: HashSet<String> = active_content_entry_ids(entries).into_iter().collect();
+    if active_ids.is_empty() {
+        return entries.iter().rev().find_map(|entry| match entry {
+            SessionEntry::ExtensionState(state) => Some(state),
+            _ => None,
+        });
+    }
+
+    entries.iter().rev().find_map(|entry| match entry {
+        SessionEntry::ExtensionState(state)
+            if state
+                .parent_id
+                .as_deref()
+                .is_some_and(|id| active_ids.contains(id)) =>
+        {
+            Some(state)
+        }
+        _ => None,
+    })
+}
+
+fn content_entry_id(entry: &opi_agent::session::SessionEntry) -> Option<&str> {
+    use opi_agent::session::SessionEntry;
+
+    match entry {
+        SessionEntry::Message(m) => Some(m.id.as_str()),
+        SessionEntry::Compaction(c) => Some(c.id.as_str()),
+        _ => None,
     }
 }
 

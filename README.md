@@ -326,6 +326,10 @@ opi package doctor                     # diagnose package issues
 opi package remove todo                # uninstall a package
 ```
 
+`opi package add` validates the manifest and writes a lock entry. Later runtime startup reads installed declarations and lock state, then starts valid adapter packages without requiring `config.packages.paths`.
+
+Packages are trusted code. Installing a package can run adapter child processes with the same OS privileges as `opi`; Phase 5 package code is not sandboxed, and package permission declarations are not enforced by the package manager.
+
 Packages with `[adapter]` declarations run as child process adapters using the `opi-extension-jsonl-v1` protocol. The adapter process communicates over JSONL stdin/stdout and can expose custom tools, commands, hooks, event observers, session-scoped state, and cancellation through the existing extension API — without Node, npm, or live providers. The `process-jsonl` adapter kind is the only supported adapter type in the Phase 5 MVP.
 
 Skills and prompt fragments use progressive disclosure: metadata is discovered up front, while bodies are loaded only when needed. Themes can be discovered from `theme.toml` resources and are resolved before falling back to built-in `default` and `monokai`. Duplicate resource names within the same discovery layer are errors; higher-precedence layers override lower-precedence layers.

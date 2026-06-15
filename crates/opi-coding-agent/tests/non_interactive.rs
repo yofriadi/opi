@@ -5,11 +5,85 @@
 //! Tests exercise: NonInteractiveRunner with MockProvider,
 //! verifying stdout output, stderr diagnostics, and exit code mapping.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use opi_ai::test_support::{self, MockProvider};
 use opi_coding_agent::config::OpiConfig;
+use opi_coding_agent::package_resolver::local_lock_entry;
+use opi_coding_agent::package_store::{PackageDeclaration, PackageStore};
 use opi_coding_agent::runner::{ExitCode, NonInteractiveRunner};
+use opi_coding_agent::runtime_packages::start_installed_package_runtime;
+
+fn test_binary(name: &str) -> PathBuf {
+    let current = std::env::current_exe().expect("current exe path");
+    let deps_dir = current.parent().expect("deps directory");
+    let exact_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    let exact_path = deps_dir.join(exact_name);
+    if exact_path.exists() {
+        return exact_path;
+    }
+
+    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+    let prefix = format!("{name}-");
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    if let Ok(entries) = std::fs::read_dir(deps_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with(&prefix)
+                && name_str.ends_with(exe_suffix)
+                && let Ok(meta) = entry.metadata()
+                && let Ok(modified) = meta.modified()
+                && best.as_ref().is_none_or(|(t, _)| modified > *t)
+            {
+                best = Some((modified, entry.path()));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+        .unwrap_or_else(|| panic!("Could not find {name} binary in deps directory"))
+}
+
+fn install_adapter_package(workspace: &Path, name: &str, command: &Path, args: &[&str]) {
+    let package_dir = workspace.join("vendor").join(name);
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("package.toml"),
+        format!(
+            "name = \"{name}\"\n\
+             description = \"Installed adapter package.\"\n\
+             version = \"0.1.0\"\n\
+             [adapter]\n\
+             kind = \"process-jsonl\"\n\
+             command = \"{}\"\n\
+             args = [{}]\n\
+             protocol = \"opi-extension-jsonl-v1\"\n",
+            command.display().to_string().replace('\\', "\\\\"),
+            args.iter()
+                .map(|arg| format!("\"{arg}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    )
+    .unwrap();
+
+    let store = PackageStore::project(workspace.to_path_buf());
+    let source = format!("./vendor/{name}");
+    store
+        .write_declarations(&[PackageDeclaration {
+            source: source.clone(),
+            filters: Default::default(),
+        }])
+        .unwrap();
+    store
+        .write_lock(&[local_lock_entry(source, &package_dir).unwrap()])
+        .unwrap();
+}
 
 // ---------------------------------------------------------------------------
 // Test 1: text prompt produces stdout output with exit code 0
@@ -72,6 +146,111 @@ async fn runner_readonly_tool_succeeds() {
         result.stdout.contains("workspace config"),
         "stdout should contain tool result text, got: {:?}",
         result.stdout
+    );
+}
+
+#[tokio::test]
+async fn runner_installed_adapter_tool_succeeds() {
+    let workspace = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    install_adapter_package(
+        workspace.path(),
+        "installed-tool",
+        &test_binary("adapter_host_mock"),
+        &[],
+    );
+    let runtime_startup = start_installed_package_runtime(workspace.path(), user.path()).await;
+
+    let first = test_support::tool_call_response("adapter-1", "test_tool", r#"{"input":"hello"}"#);
+    let second = test_support::text_response("adapter tool finished.");
+    let provider = MockProvider::new("mock", vec![first, second]);
+
+    let mut runner = NonInteractiveRunner::new_with_resume_and_runtime_packages(
+        Box::new(provider),
+        "mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        false,
+        None,
+        Vec::new(),
+        None,
+        opi_coding_agent::policy::ToolSelection::Default,
+        Some(runtime_startup),
+    )
+    .unwrap();
+
+    let result = runner.run("Use installed adapter tool").await;
+
+    assert_eq!(result.exit_code, ExitCode::Success as i32);
+    assert!(
+        result.stdout.contains("adapter tool finished."),
+        "stdout should contain final provider text, got: {:?}",
+        result.stdout
+    );
+}
+
+#[tokio::test]
+async fn runner_installed_adapter_hook_blocks_mutating_tool() {
+    let workspace = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    install_adapter_package(
+        workspace.path(),
+        "permission-gate",
+        &test_binary("package_adapter_example"),
+        &["permission-gate"],
+    );
+    let runtime_startup = start_installed_package_runtime(workspace.path(), user.path()).await;
+
+    let first = test_support::tool_call_response(
+        "blocked-1",
+        "bash",
+        r#"{"command":"echo should not run"}"#,
+    );
+    let second = test_support::text_response("blocked result observed.");
+    let provider = MockProvider::new("mock", vec![first, second]);
+    let call_log = provider.call_log_handle();
+
+    let mut runner = NonInteractiveRunner::new_with_resume_and_runtime_packages(
+        Box::new(provider),
+        "mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        true,
+        None,
+        Vec::new(),
+        None,
+        opi_coding_agent::policy::ToolSelection::Default,
+        Some(runtime_startup),
+    )
+    .unwrap();
+
+    let result = runner.run("Try a mutating command").await;
+
+    assert_eq!(result.exit_code, ExitCode::Success as i32);
+    assert!(
+        result.stdout.contains("blocked result observed."),
+        "stdout should contain second provider response, got: {:?}",
+        result.stdout
+    );
+    let log = call_log.lock().unwrap();
+    let second_request = log.get(1).expect("tool result should trigger second turn");
+    let saw_blocked_tool_result = second_request.messages.iter().any(|message| {
+        matches!(
+            message,
+            opi_ai::message::Message::ToolResult(result)
+                if result.is_error
+                    && result.tool_name == "bash"
+                    && result.content.iter().any(|content| matches!(
+                        content,
+                        opi_ai::message::OutputContent::Text { text }
+                            if text.contains("blocked by example permission-gate adapter")
+                    ))
+        )
+    });
+    assert!(
+        saw_blocked_tool_result,
+        "second provider request should contain blocked tool result: {:?}",
+        second_request.messages
     );
 }
 

@@ -17,6 +17,7 @@ use opi_ai::provider::{EventStream, ModelInfo, Provider, ThinkingConfig};
 
 use crate::config::OpiConfig;
 use crate::context_files;
+use crate::package_discovery::PackageResource;
 use crate::policy::{RunMode, ToolRuntimeConfig, ToolSelection};
 use crate::prompt::SystemPromptBuilder;
 use crate::resource::{ExplicitResourcePaths, ResourceDiscoveryLayers, standard_discovery_layers};
@@ -47,6 +48,9 @@ pub struct CodingHarness {
     turn_offset: usize,
     /// Images queued from --image CLI flag, injected into the first prompt.
     pending_images: Vec<opi_ai::message::InputContent>,
+    /// Extension state loaded from a resumed session and restored before the
+    /// next async agent operation.
+    pending_extension_state: Option<serde_json::Value>,
 }
 
 pub struct RuntimeThinkingState {
@@ -224,6 +228,8 @@ pub struct CodingHarnessBuilder {
     extension_registry: Option<ExtensionRegistry>,
     resource_layers: Option<ResourceDiscoveryLayers>,
     resource_metadata: Option<DiscoveredResourceMetadata>,
+    installed_packages: Option<Vec<PackageResource>>,
+    startup_diagnostics: Vec<String>,
 }
 
 impl CodingHarnessBuilder {
@@ -248,6 +254,8 @@ impl CodingHarnessBuilder {
             extension_registry: None,
             resource_layers: None,
             resource_metadata: None,
+            installed_packages: None,
+            startup_diagnostics: Vec::new(),
         }
     }
 
@@ -301,6 +309,16 @@ impl CodingHarnessBuilder {
         self
     }
 
+    pub fn installed_packages(mut self, packages: Vec<PackageResource>) -> Self {
+        self.installed_packages = Some(packages);
+        self
+    }
+
+    pub fn startup_diagnostics(mut self, diagnostics: Vec<String>) -> Self {
+        self.startup_diagnostics = diagnostics;
+        self
+    }
+
     pub fn build(self) -> CodingHarness {
         let tool_selection = self.tool_selection;
         let tool_config = self.tool_config.unwrap_or_else(|| {
@@ -322,6 +340,8 @@ impl CodingHarnessBuilder {
                 extension_registry: self.extension_registry,
                 resource_layers: self.resource_layers,
                 resource_metadata: self.resource_metadata,
+                installed_packages: self.installed_packages,
+                startup_diagnostics: self.startup_diagnostics,
                 tool_selection,
             },
         )
@@ -332,6 +352,8 @@ struct HarnessBuildOptions {
     extension_registry: Option<ExtensionRegistry>,
     resource_layers: Option<ResourceDiscoveryLayers>,
     resource_metadata: Option<DiscoveredResourceMetadata>,
+    installed_packages: Option<Vec<PackageResource>>,
+    startup_diagnostics: Vec<String>,
     tool_selection: ToolSelection,
 }
 
@@ -341,6 +363,8 @@ impl Default for HarnessBuildOptions {
             extension_registry: None,
             resource_layers: None,
             resource_metadata: None,
+            installed_packages: None,
+            startup_diagnostics: Vec::new(),
             tool_selection: ToolSelection::Default,
         }
     }
@@ -582,6 +606,9 @@ impl CodingHarness {
         let mut extension_event_registry = None;
         let extension_registry = build_options.extension_registry;
         let active_extension_registry = extension_registry.clone();
+        let resume_extension_state = resume
+            .as_ref()
+            .and_then(|info| crate::session_coordinator::latest_extension_state(&info.entries));
         let (model_registry, model_registry_diagnostics) =
             Self::build_model_registry(provider.as_ref(), extension_registry.as_ref());
         if let Some(registry) = extension_registry.as_ref() {
@@ -614,12 +641,17 @@ impl CodingHarness {
                 &config,
                 Some(resolved_global_dir.as_path()),
                 build_options.resource_layers,
+                build_options.installed_packages,
             ),
         };
         resources
             .metadata
             .diagnostics
             .extend(model_registry_diagnostics);
+        resources
+            .metadata
+            .diagnostics
+            .extend(build_options.startup_diagnostics);
         for name in injected_extension_names {
             resources.metadata.add_extension_name(name);
         }
@@ -709,6 +741,7 @@ impl CodingHarness {
             session,
             turn_offset: initial_len,
             pending_images: Vec::new(),
+            pending_extension_state: resume_extension_state,
         }
     }
 
@@ -838,6 +871,7 @@ impl CodingHarness {
         let messages = crate::session_cli::reconstruct_context(&session.entries);
         let message_count = messages.len();
         self.agent.replace_messages(messages);
+        self.defer_extension_state_from_entries(&session.entries);
 
         let compaction_config = opi_agent::compaction::CompactionConfig {
             enabled: self.config.compaction.enabled,
@@ -876,6 +910,7 @@ impl CodingHarness {
         let messages = crate::session_cli::reconstruct_context(&forked.entries);
         let message_count = messages.len();
         self.agent.replace_messages(messages);
+        self.defer_extension_state_from_entries(&forked.entries);
 
         let compaction_config = opi_agent::compaction::CompactionConfig {
             enabled: self.config.compaction.enabled,
@@ -934,6 +969,7 @@ impl CodingHarness {
         let messages = crate::session_cli::reconstruct_context(&entries);
         let message_count = messages.len();
         self.agent.replace_messages(messages);
+        self.defer_extension_state_from_entries(&entries);
 
         let compaction_config = opi_agent::compaction::CompactionConfig {
             enabled: self.config.compaction.enabled,
@@ -956,10 +992,11 @@ impl CodingHarness {
 
     /// Send a user prompt and run the agent loop.
     pub async fn prompt(&mut self, text: &str) -> Result<Vec<AgentMessage>, AgentError> {
+        self.restore_pending_extension_state().await;
         let offset = self.turn_offset;
         let messages = self.agent.prompt(text).await?;
         let new = &messages[offset..];
-        self.persist_turn(new, offset);
+        self.persist_turn(new, offset).await;
         let final_messages = self.current_messages();
         self.turn_offset = final_messages.len();
         Ok(final_messages)
@@ -971,10 +1008,11 @@ impl CodingHarness {
         &mut self,
         content: Vec<opi_ai::message::InputContent>,
     ) -> Result<Vec<AgentMessage>, AgentError> {
+        self.restore_pending_extension_state().await;
         let offset = self.turn_offset;
         let messages = self.agent.prompt_with_content(content).await?;
         let new = &messages[offset..];
-        self.persist_turn(new, offset);
+        self.persist_turn(new, offset).await;
         let final_messages = self.current_messages();
         self.turn_offset = final_messages.len();
         Ok(final_messages)
@@ -982,10 +1020,11 @@ impl CodingHarness {
 
     /// Continue the conversation with an additional message.
     pub async fn continue_(&mut self, text: &str) -> Result<Vec<AgentMessage>, AgentError> {
+        self.restore_pending_extension_state().await;
         let offset = self.turn_offset;
         let messages = self.agent.continue_(text).await?;
         let new = &messages[offset..];
-        self.persist_turn(new, offset);
+        self.persist_turn(new, offset).await;
         let final_messages = self.current_messages();
         self.turn_offset = final_messages.len();
         Ok(final_messages)
@@ -1020,7 +1059,7 @@ impl CodingHarness {
     /// the Agent's message buffer to `[summary, ...kept]` so subsequent
     /// provider calls no longer carry the compacted history. Emits
     /// `CompactionStart`/`CompactionEnd` events for subscribers.
-    fn persist_turn(&mut self, messages: &[AgentMessage], turn_start_agent_index: usize) {
+    async fn persist_turn(&mut self, messages: &[AgentMessage], turn_start_agent_index: usize) {
         if let Some(session) = &mut self.session {
             let usage = Self::aggregate_turn_usage(messages);
             let compaction_reason =
@@ -1072,6 +1111,38 @@ impl CodingHarness {
                     }
                 }
             }
+        }
+        self.persist_extension_state().await;
+    }
+
+    async fn persist_extension_state(&mut self) {
+        if self.session.is_none() {
+            return;
+        }
+        let Some(registry) = self.extension_registry.clone() else {
+            return;
+        };
+
+        let state = match registry.serialize_states_async().await {
+            Ok(state) if state.as_object().is_some_and(|map| !map.is_empty()) => state,
+            Ok(_) => return,
+            Err(e) => {
+                self.agent.emit_event(AgentEvent::SessionPersistError {
+                    message: format!("extension state serialize failed: {e}"),
+                });
+                return;
+            }
+        };
+
+        let result = self
+            .session
+            .as_mut()
+            .expect("checked session is present")
+            .append_extension_state(state);
+        if let Err(e) = result {
+            self.agent.emit_event(AgentEvent::SessionPersistError {
+                message: format!("extension state write failed: {e}"),
+            });
         }
     }
 
@@ -1137,6 +1208,24 @@ impl CodingHarness {
             .dispatch_command(&command)
             .await
             .map_err(|e| e.to_string())
+    }
+
+    fn defer_extension_state_from_entries(&mut self, entries: &[opi_agent::session::SessionEntry]) {
+        self.pending_extension_state = crate::session_coordinator::latest_extension_state(entries);
+    }
+
+    async fn restore_pending_extension_state(&mut self) {
+        let Some(state) = self.pending_extension_state.take() else {
+            return;
+        };
+        let Some(registry) = self.extension_registry.clone() else {
+            return;
+        };
+        if let Err(e) = registry.restore_states_async(state).await {
+            self.agent.emit_event(AgentEvent::SessionPersistError {
+                message: format!("extension state restore failed: {e}"),
+            });
+        }
     }
 
     /// Resolve a theme using discovered themes first, then built-ins.
@@ -1258,6 +1347,7 @@ impl CodingHarness {
         config: &OpiConfig,
         user_config_dir: Option<&Path>,
         resource_layers: Option<ResourceDiscoveryLayers>,
+        installed_packages: Option<Vec<PackageResource>>,
     ) -> HarnessResources {
         let explicit = ExplicitResourcePaths {
             extensions: config.extensions.paths.clone(),
@@ -1278,6 +1368,38 @@ impl CodingHarness {
                 Vec::new()
             }
         };
+        let mut packages = packages;
+        match installed_packages {
+            Some(installed_packages) => merge_package_resources(&mut packages, installed_packages),
+            None if user_config_dir.is_some() => {
+                let user_config_dir = user_config_dir.expect("checked Some");
+                match crate::package_resolver::resolve_installed_packages(
+                    workspace_root,
+                    user_config_dir,
+                ) {
+                    Ok(resolution) => {
+                        metadata.diagnostics.extend(
+                            resolution
+                                .diagnostics
+                                .iter()
+                                .map(format_installed_package_diagnostic),
+                        );
+                        merge_package_resources(
+                            &mut packages,
+                            resolution
+                                .packages
+                                .into_iter()
+                                .map(|package| package.package)
+                                .collect(),
+                        );
+                    }
+                    Err(e) => metadata
+                        .diagnostics
+                        .push(format!("installed package resolution failed: {e}")),
+                }
+            }
+            None => {}
+        }
         metadata.packages = packages
             .iter()
             .map(|package| ResourceMetadataEntry {
@@ -1399,6 +1521,38 @@ impl CodingHarness {
 
         (registry, diagnostics)
     }
+}
+
+fn format_installed_package_diagnostic(
+    diagnostic: &crate::package_resolver::PackageDiagnostic,
+) -> String {
+    format!(
+        "installed package {:?} {}: {} ({})",
+        diagnostic.scope, diagnostic.source, diagnostic.code, diagnostic.message
+    )
+}
+
+fn merge_package_resources(
+    packages: &mut Vec<crate::package_discovery::PackageResource>,
+    installed: Vec<crate::package_discovery::PackageResource>,
+) {
+    for package in installed {
+        if let Some(existing) = packages
+            .iter_mut()
+            .find(|existing| existing.manifest.name == package.manifest.name)
+        {
+            if package.layer_precedence >= existing.layer_precedence {
+                *existing = package;
+            }
+        } else {
+            packages.push(package);
+        }
+    }
+    packages.sort_by(|a, b| {
+        a.layer_precedence
+            .cmp(&b.layer_precedence)
+            .then_with(|| a.manifest.name.cmp(&b.manifest.name))
+    });
 }
 
 fn parse_model_spec(spec: &str) -> Result<(&str, &str), String> {

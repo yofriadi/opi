@@ -26,6 +26,10 @@ fn main() {
         "crash" => run_crash(&mut reader),
         "hang_request" => run_hang_request(&mut reader, &mut writer),
         "gate" => run_gate(&mut reader, &mut writer),
+        "prepare" => run_prepare(&mut reader, &mut writer),
+        "transform" => run_transform(&mut reader, &mut writer),
+        "event_backpressure" => run_event_backpressure(&mut reader, &mut writer),
+        "shutdown_marker" => run_shutdown_marker(&mut reader, &mut writer),
         _ => std::process::exit(1),
     }
 }
@@ -195,6 +199,152 @@ fn run_hang_request(reader: &mut impl BufRead, writer: &mut impl Write) {
     // Never respond to subsequent requests
     loop {
         std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+fn run_prepare(reader: &mut impl BufRead, writer: &mut impl Write) {
+    run_hook_mode(reader, writer, "prepare_next_turn");
+}
+
+fn run_transform(reader: &mut impl BufRead, writer: &mut impl Write) {
+    run_hook_mode(reader, writer, "transform_context");
+}
+
+fn run_hook_mode(reader: &mut impl BufRead, writer: &mut impl Write, hook_name: &str) {
+    if let Some(line) = read_line(reader) {
+        let msg: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        if msg["type"].as_str() != Some("initialize") {
+            return;
+        }
+        let id = msg["id"].as_str().unwrap_or("1");
+        write_msg(
+            writer,
+            &serde_json::json!({
+                "type": "capabilities",
+                "id": id,
+                "tools": [],
+                "commands": [],
+                "hooks": [hook_name],
+                "model_overrides": []
+            }),
+        );
+    }
+
+    while let Some(line) = read_line(reader) {
+        let msg: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let msg_type = msg["type"].as_str().unwrap_or("");
+        let id = msg["id"].as_str().unwrap_or("").to_string();
+
+        match (msg_type, msg["hook"].as_str().unwrap_or("")) {
+            ("hook", "prepare_next_turn") => {
+                write_msg(
+                    writer,
+                    &serde_json::json!({
+                        "type": "hook_result",
+                        "id": id,
+                        "action": "continue",
+                        "data": {
+                            "extra_messages": [{
+                                "type": "Custom",
+                                "kind": "adapter_note",
+                                "data": {"text": "next turn"},
+                                "include_in_llm_context": false
+                            }]
+                        }
+                    }),
+                );
+            }
+            ("hook", "transform_context") => {
+                let mut messages = msg["payload"]["messages"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                messages.push(serde_json::json!({
+                    "type": "Custom",
+                    "kind": "adapter_transform",
+                    "data": {"text": "transformed"},
+                    "include_in_llm_context": false
+                }));
+                write_msg(
+                    writer,
+                    &serde_json::json!({
+                        "type": "hook_result",
+                        "id": id,
+                        "action": "continue",
+                        "data": {"messages": messages}
+                    }),
+                );
+            }
+            ("event", _) | ("cancel", _) => {}
+            ("shutdown", _) => return,
+            _ => {}
+        }
+    }
+}
+
+fn run_event_backpressure(reader: &mut impl BufRead, writer: &mut impl Write) {
+    if let Some(line) = read_line(reader) {
+        let msg: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let id = msg["id"].as_str().unwrap_or("1");
+        write_msg(
+            writer,
+            &serde_json::json!({
+                "type": "capabilities",
+                "id": id,
+                "tools": [],
+                "commands": [],
+                "hooks": ["event"],
+                "model_overrides": []
+            }),
+        );
+    }
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+fn run_shutdown_marker(reader: &mut impl BufRead, writer: &mut impl Write) {
+    if let Some(line) = read_line(reader) {
+        let msg: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let id = msg["id"].as_str().unwrap_or("1");
+        write_msg(
+            writer,
+            &serde_json::json!({
+                "type": "capabilities",
+                "id": id,
+                "tools": [],
+                "commands": [],
+                "hooks": [],
+                "model_overrides": []
+            }),
+        );
+    }
+
+    while let Some(line) = read_line(reader) {
+        let msg: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if msg["type"].as_str() == Some("shutdown") {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if let Ok(path) = std::env::var("OPI_ADAPTER_SHUTDOWN_MARKER") {
+                let _ = std::fs::write(path, "shutdown observed");
+            }
+            return;
+        }
     }
 }
 

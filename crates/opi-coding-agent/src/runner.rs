@@ -22,6 +22,7 @@ use opi_ai::stream::AssistantStreamEvent;
 use crate::config::OpiConfig;
 use crate::harness::{CodingHarness, ResumeInfo};
 use crate::policy::{RunMode, ToolPolicyError, ToolRuntimeConfig, ToolSelection, is_mutating_tool};
+use crate::runtime_packages::RuntimePackageStartup;
 
 /// NDJSON output schema version.
 pub const NDJSON_SCHEMA_VERSION: u32 = 1;
@@ -103,20 +104,59 @@ impl NonInteractiveRunner {
         resume_info: Option<ResumeInfo>,
         tool_selection: ToolSelection,
     ) -> Result<Self, ToolPolicyError> {
-        let tool_config =
-            ToolRuntimeConfig::resolve(RunMode::NonInteractive, allow_mutating, tool_selection)?;
-        let hooks = Box::new(NonInteractiveHooks { allow_mutating });
-        let harness = CodingHarness::new_with_hooks_and_resume_tool_config(
+        Self::new_with_resume_and_runtime_packages(
             provider,
             model,
             config,
             workspace_root,
-            hooks,
+            allow_mutating,
             user_system_prompt,
             initial_messages,
             resume_info,
-            tool_config,
-        );
+            tool_selection,
+            None,
+        )
+    }
+
+    /// Create a non-interactive runner with installed package adapters already
+    /// started by runtime startup.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_resume_and_runtime_packages(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        allow_mutating: bool,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        resume_info: Option<ResumeInfo>,
+        tool_selection: ToolSelection,
+        runtime_startup: Option<RuntimePackageStartup>,
+    ) -> Result<Self, ToolPolicyError> {
+        let tool_config = ToolRuntimeConfig::resolve(
+            RunMode::NonInteractive,
+            allow_mutating,
+            tool_selection.clone(),
+        )?;
+        let hooks = Box::new(NonInteractiveHooks { allow_mutating });
+        let mut builder = CodingHarness::builder(provider, model, config, workspace_root)
+            .hooks(hooks)
+            .initial_messages(initial_messages)
+            .tool_selection(tool_selection)
+            .tool_config(tool_config);
+        if let Some(prompt) = user_system_prompt {
+            builder = builder.user_system_prompt(prompt);
+        }
+        if let Some(resume_info) = resume_info {
+            builder = builder.resume(resume_info);
+        }
+        if let Some(runtime_startup) = runtime_startup {
+            builder = builder
+                .extension_registry(runtime_startup.extension_registry)
+                .installed_packages(runtime_startup.installed_packages)
+                .startup_diagnostics(runtime_startup.diagnostics);
+        }
+        let harness = builder.build();
         Ok(Self { harness })
     }
 
