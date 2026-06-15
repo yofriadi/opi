@@ -46,6 +46,22 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
         "snapshot_tests": [],
         "smoke_addendum": null
       },
+      "acceptance_scenarios": [
+        {
+          "id": "phase1-agent-loop-tool-use",
+          "source": "docs/opi-spec.md §15 Phase 1 exit criteria",
+          "scenario": "Mock provider requests a tool, the production agent loop validates and executes it, and the next provider turn receives the result.",
+          "verification": [
+            "cargo test -p opi-agent --test agent_loop_mock tool_use_turn"
+          ],
+          "production_call_sites": [
+            "opi_agent::agent_loop"
+          ],
+          "status": "open"
+        }
+      ],
+      "production_call_sites": ["opi_agent::agent_loop"],
+      "substrate_only": false,
       "iteration_count": 0,
       "max_iterations": 5,
       "start_commit": null,
@@ -64,6 +80,14 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
       "exit_criteria_met": true,
       "evaluator_summary": "all Phase 1 exit criteria met; see commit 4d9c64...",
       "snapshot_path": "docs/snapshots/phase1/opi-impl-state.json",
+      "criteria_trace": [
+        {
+          "source": "docs/opi-spec.md §15 Phase 1 exit criteria",
+          "criterion": "Agent loop can execute tool-use turns with a mock provider.",
+          "status": "met",
+          "evidence": "cargo test -p opi-agent --test agent_loop_mock"
+        }
+      ],
       "task_summary": [
         { "id": "1.0", "title": "introduce Phase 1 dependencies", "status": "passing", "verified_at_commit": "4d9c64..." }
       ]
@@ -77,7 +101,7 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | Field | Type | Mutability | Notes |
 |---|---|---|---|
 | `schema_version` | int | reinit-only | Current value `2`. v2 adds `task_owned_paths`, `definition_source`, `replaces`, `baseline_dirty_files`, `spec_files`, `spec_files_sha256`, `phase_exit[N].snapshot_path`, `phase_exit[N].task_summary`, dotted sub-task IDs, and open-string `crate` values. Reading a v1 ledger requires explicit reinit-time migration; refuse unknown versions. |
-| `spec_files` | array | const-on-init, reinit-editable | Normative spec file paths whose drift triggers reinit refusal. Default `["docs/opi-spec.md"]`. Adding or removing a path requires `--reinit`. |
+| `spec_files` | array | const-on-init, reinit-editable | Normative spec file paths whose drift triggers reinit refusal. Default `["docs/opi-spec.md"]`. Supplemental phases MUST include only the reviewed source files registered in `skill.md` for the active phase, plus `docs/opi-spec.md`. Adding or removing a path requires `--reinit`. |
 | `spec_files_sha256` | object | reinit-only | Map of file path → SHA-256 hash at last init/reinit. Each entry is checked independently; any mismatch triggers the spec-alignment guard. |
 | `task_graph_confirmed_at` | string/null | init/reinit | ISO-8601 confirmation time |
 | `current_phase` | int | auto | Lowest phase with non-`passing` task |
@@ -91,12 +115,15 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | `tasks[].replaces` | string/null | const | Prior task title/meaning superseded during reinit, when the same task ID was repurposed by spec changes |
 | `tasks[].status` | enum | runtime | `failing`/`in_progress`/`passing`/`blocked`/`archived` |
 | `tasks[].depends_on` | array | const | Task IDs that must be `passing` |
-| `tasks[].inference_notes` | array | const | Reasons for inferred fields |
+| `tasks[].inference_notes` | array | const | Reasons for inferred fields. Phase non-goal guards are recorded with `field = "forbidden_scope"` and an exact source heading. |
 | `tasks[].tier` | enum | const | `workspace`/`library`/`cli-tool`/`cli-runtime`/`tui` |
 | `tasks[].commit_type` | enum | const | `feat`/`fix`/`docs`/`refactor`/`test`/`chore`/`perf` |
 | `tasks[].parallelize` | array | const | Sub-unit names for parallel dispatch |
 | `tasks[].evaluator_required` | bool | const | Static risk flag |
 | `tasks[].verification` | object | const | Tier-specific gate spec |
+| `tasks[].acceptance_scenarios` | array | const-on-init, reinit-editable | Product/user-path scenarios owned by this task. Required when the task closes a source-spec goal, success criterion, exit criterion, or workflow. Each scenario has `id`, `source`, `scenario`, `verification`, `production_call_sites`, and runtime `status` (`open`, `met`, or `deferred-by-updated-design`). Component/substrate tasks may use `[]`, but then they cannot close a product acceptance criterion. |
+| `tasks[].production_call_sites` | array | const-on-init, append-only during Phase C | Production entry points that must call or exercise this task's implementation before the task can close runtime acceptance. Examples: CLI subcommand handler, harness startup, agent loop hook wrapper, session persistence path. Tests-only helpers do not count. |
+| `tasks[].substrate_only` | bool | const-on-init, reinit-editable | `true` means the task intentionally implements a helper/parser/protocol/bridge slice and cannot by itself close product acceptance scenarios. A later vertical-slice task must consume it through a production call site. |
 | `tasks[].iteration_count` | int | runtime | Attempts since `in_progress` |
 | `tasks[].max_iterations` | int | const | Default 5 |
 | `tasks[].start_commit` | string/null | runtime | HEAD when Phase B confirms |
@@ -109,6 +136,7 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | `tasks[].session_notes` | array | runtime | Append-only `{timestamp, attempt, summary, gate_results}` |
 | `phase_exit[N]` | object | runtime | `completed_at` + `exit_criteria_met` + evaluator summary |
 | `phase_exit[N].snapshot_path` | string/null | runtime | Path to a committed full-ledger snapshot at the moment phase `N` exited. `null` while the phase is incomplete. Written under `docs/snapshots/phase<N>/`. |
+| `phase_exit[N].criteria_trace` | array | runtime | Phase-exit evaluator's independent trace from current source-spec success/exit criteria to evidence. Every item uses `status = met`, `deferred-by-updated-design`, or `not-met`. Phase archive is refused if any item is `not-met` or if a deferral lacks an exact current-spec citation. |
 | `phase_exit[N].task_summary` | array | runtime | `[{id, title, status, verified_at_commit}]` for every task that belonged to phase `N` at exit time. Lets `--status` report completed phases without reading the snapshot file. |
 
 Validation rule: every path listed in `tasks[].verification.behavioral_tests` MUST be matched by at least one `task_owned_paths` glob before the task graph is confirmed. This prevents Phase C from needing an immediate ownership expansion just to create the task's declared tests.
@@ -116,6 +144,34 @@ Validation rule: every path listed in `tasks[].verification.behavioral_tests` MU
 Validation rule: when `behavioral_tests` references more than one crate, either `tier` MUST be `workspace` or `verification.library_gates` MUST include mechanical gates for every referenced crate. Snapshot-bearing tests also require `snapshot_tests` and explicit snapshot approval under the `tui` rules.
 
 Validation rule: `task_owned_paths` MUST NOT include broad documentation globs such as `docs/**` when a narrower subtree can satisfy the task. Use a purpose-specific path such as `docs/extension-examples/**` for example packages. `docs/opi-spec.md` is normative input and MUST NOT be task-owned.
+
+Validation rule: every source-spec success criterion, exit criterion, goal, or
+named user workflow for the active phase MUST be represented by at least one
+`acceptance_scenarios` entry before the task graph is confirmed. If the
+criterion is intentionally deferred, the scenario must be assigned to a
+documentation/alignment task that updates the source spec or records an exact
+current-spec citation for the deferral.
+
+Validation rule: for phases 5-12, `spec_files` MUST include the registered
+supplemental source file(s) for the active phase as listed in `skill.md`.
+Unregistered design docs, snapshot files, skill source files, `AGENTS.md`, and
+`CLAUDE.md` MUST NOT be added to `spec_files`.
+
+Validation rule: every Non-Goal in the registered active phase source MUST be
+represented either by a `forbidden_scope` inference note on the relevant task
+family or by a phase-specific verification addendum. A task that implements a
+phase non-goal cannot be marked passing unless the source spec was updated and
+the ledger was reconciled through `--reinit`.
+
+Validation rule: a task with non-empty `acceptance_scenarios` MUST include at
+least one behavioral, subprocess, harness, or integration verification command
+for each scenario. Pure parser/helper/unit tests may supplement but cannot be
+the only evidence for a user-facing runtime workflow.
+
+Validation rule: a runtime, startup, CLI, session, adapter, provider, or
+extension claim MUST list `production_call_sites`. If the implementation has no
+production call site yet, set `substrate_only = true`, keep acceptance scenarios
+open, and create or retain a later vertical-slice task.
 
 ## Durable Evidence Contract
 
@@ -131,6 +187,12 @@ Opi-Evaluator: <not-required | passed>
 
 These values are also copied into `tasks[].evidence`. A fresh clone without the
 ledger can reconstruct completion status via `git log --grep "Opi-Task:"`.
+
+Tasks with non-empty `acceptance_scenarios` also include:
+
+```text
+Opi-Acceptance: <scenario ids>; <command/test/call-site evidence summary>
+```
 
 ## Atomic Write Protocol
 
@@ -169,6 +231,15 @@ Per-task rules:
   next Phase B.
 - `task_owned_paths`: derive from `tasks[].crate` per the rules in the field
   definition (e.g. `crate = "opi-agent"` → `["crates/opi-agent/**", "Cargo.toml"]`).
+- `acceptance_scenarios`: set to `[]` for legacy tasks, then require reinit
+  task-graph review to populate scenarios for any current source-spec criteria
+  the task claims to close.
+- `production_call_sites`: set to `[]` for legacy tasks; task-graph review must
+  populate it before runtime/startup/CLI/session/adapter/provider claims can be
+  executable.
+- `substrate_only`: set to `false` by default; review may set `true` for
+  helper/parser/protocol/bridge tasks that intentionally do not close a product
+  acceptance scenario.
 
 Top-level field rules:
 

@@ -101,7 +101,7 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | Field | Type | Mutability | Notes |
 |---|---|---|---|
 | `schema_version` | int | reinit-only | Current value `2`. v2 adds `task_owned_paths`, `definition_source`, `replaces`, `baseline_dirty_files`, `spec_files`, `spec_files_sha256`, `phase_exit[N].snapshot_path`, `phase_exit[N].task_summary`, dotted sub-task IDs, and open-string `crate` values. Reading a v1 ledger requires explicit reinit-time migration; refuse unknown versions. |
-| `spec_files` | array | const-on-init, reinit-editable | Normative spec file paths whose drift triggers reinit refusal. Default `["docs/opi-spec.md"]`. Adding or removing a path requires `--reinit`. |
+| `spec_files` | array | const-on-init, reinit-editable | Normative spec file paths whose drift triggers reinit refusal. Default `["docs/opi-spec.md"]`. Supplemental phases MUST include only the reviewed source files registered in `skill.md` for the active phase, plus `docs/opi-spec.md`. Adding or removing a path requires `--reinit`. |
 | `spec_files_sha256` | object | reinit-only | Map of file path → SHA-256 hash at last init/reinit. Each entry is checked independently; any mismatch triggers the spec-alignment guard. |
 | `task_graph_confirmed_at` | string/null | init/reinit | ISO-8601 confirmation time |
 | `current_phase` | int | auto | Lowest phase with non-`passing` task |
@@ -115,7 +115,7 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | `tasks[].replaces` | string/null | const | Prior task title/meaning superseded during reinit, when the same task ID was repurposed by spec changes |
 | `tasks[].status` | enum | runtime | `failing`/`in_progress`/`passing`/`blocked`/`archived` |
 | `tasks[].depends_on` | array | const | Task IDs that must be `passing` |
-| `tasks[].inference_notes` | array | const | Reasons for inferred fields |
+| `tasks[].inference_notes` | array | const | Reasons for inferred fields. Phase non-goal guards are recorded with `field = "forbidden_scope"` and an exact source heading. |
 | `tasks[].tier` | enum | const | `workspace`/`library`/`cli-tool`/`cli-runtime`/`tui` |
 | `tasks[].commit_type` | enum | const | `feat`/`fix`/`docs`/`refactor`/`test`/`chore`/`perf` |
 | `tasks[].parallelize` | array | const | Sub-unit names for parallel dispatch |
@@ -151,6 +151,17 @@ named user workflow for the active phase MUST be represented by at least one
 criterion is intentionally deferred, the scenario must be assigned to a
 documentation/alignment task that updates the source spec or records an exact
 current-spec citation for the deferral.
+
+Validation rule: for phases 5-12, `spec_files` MUST include the registered
+supplemental source file(s) for the active phase as listed in `skill.md`.
+Unregistered design docs, snapshot files, skill source files, `AGENTS.md`, and
+`CLAUDE.md` MUST NOT be added to `spec_files`.
+
+Validation rule: every Non-Goal in the registered active phase source MUST be
+represented either by a `forbidden_scope` inference note on the relevant task
+family or by a phase-specific verification addendum. A task that implements a
+phase non-goal cannot be marked passing unless the source spec was updated and
+the ledger was reconciled through `--reinit`.
 
 Validation rule: a task with non-empty `acceptance_scenarios` MUST include at
 least one behavioral, subprocess, harness, or integration verification command

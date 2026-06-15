@@ -43,6 +43,36 @@ verification gates, and dependencies come from the reviewed implementation
 plan, not from inferred prose. If the plan and design spec contradict each
 other, stop and ask for a revised design/plan before writing the ledger.
 
+### A.init.2d Reviewed Phase 6-12 Task Sources
+
+After Phase 5 exits, phases 6-12 are sourced only from the reviewed design
+registry in `skill.md`. Do not scan arbitrary `docs/superpowers/specs/` files.
+
+| Phase | Registered source | Draft task extraction |
+|---:|---|---|
+| 6 | `docs/superpowers/specs/2026-06-15-phase6-alignment-hardening-design.md` | Workstreams, Testing Strategy, Documentation Updates, Success Criteria |
+| 7 | `docs/superpowers/specs/2026-06-15-phase7-reliability-observability-design.md` | Diagnostic Model, Trace Model, `opi doctor`, JSON/RPC Exposure, Testing Strategy, Success Criteria |
+| 8 | `docs/superpowers/specs/2026-06-15-phase8-agent-runtime-stabilization-design.md` | Runtime Contracts, API Surface Review, SDK and RPC Contract, Testing Strategy, Success Criteria |
+| 9 | `docs/superpowers/specs/2026-06-15-phase9-tooling-quality-design.md` | Tool Result Contract, per-tool sections, Filesystem Tool Policy, Documentation Updates, Success Criteria |
+| 10 | `docs/superpowers/specs/2026-06-15-phase10-provider-correctness-design.md` | Provider Contract Areas, Error Taxonomy, OpenAI-Compatible Profile Correctness, Testing Strategy, Success Criteria |
+| 11 | `docs/superpowers/specs/2026-06-15-phase11-session-long-term-memory-design.md` | Session Entry Model, Context Building, Export, Commands and UI Surface, Documentation Updates, Success Criteria |
+| 12 | `docs/superpowers/specs/2026-06-15-phase12-tui-product-polish-design.md` | Product Surfaces, Accessibility and Terminal Compatibility, Testing Strategy, Documentation Updates, Success Criteria |
+
+For each active phase:
+
+- Include `docs/opi-spec.md` and the phase's registered source in `spec_files`.
+- Hash both files in `spec_files_sha256`.
+- Derive task IDs as `<phase>.<N>` in source order unless the reviewed source
+  already names a stricter sequence.
+- Convert success criteria into `acceptance_scenarios` before graph review.
+- Convert Non-Goals into `forbidden_scope` review notes and phase-specific
+  verification addenda. A task cannot satisfy a criterion by implementing a
+  non-goal.
+- Preserve explicit handoff sections as dependency hints for the next phase,
+  not as executable work in the current phase.
+- If `docs/opi-spec.md` and the registered phase design conflict on phase
+  scope, stop for graph review instead of choosing silently.
+
 ### A.init.2c Design Acceptance Extraction
 
 For every active phase whose source files include goals, success criteria, exit
@@ -113,7 +143,9 @@ Phase 4 examples:
 Render complete draft as table with: id, title, tier, `task_owned_paths`
 (default derived from `crate`, editable), commit_type, depends_on,
 execution order, evaluator_required, acceptance scenario count,
-production call-site count, `substrate_only`, inference_notes.
+production call-site count, `substrate_only`, phase source files,
+forbidden-scope notes (stored as `inference_notes` entries with
+`field = "forbidden_scope"`), inference_notes.
 
 Also render an acceptance coverage table:
 
@@ -121,6 +153,7 @@ Also render an acceptance coverage table:
 - owning task;
 - verification command/test;
 - production call sites;
+- forbidden-scope guard when the criterion is near a phase non-goal;
 - status (`covered`, `substrate-only`, `missing`, `deferred`).
 
 REFUSE `confirm-all` while any source criterion/workflow is `missing`, or while
@@ -188,7 +221,7 @@ When `--reinit` runs against an existing ledger:
    - **Only in new:** add with `status: failing`
    - **DoD changed for passing task:** warn, ask preserve-as-passing (cosmetic)
      or demote-to-failing (substantive)
-   - **depends_on/tier/commit_type/evaluator_required/acceptance_scenarios/production_call_sites/substrate_only changed:** re-run
+   - **depends_on/tier/commit_type/evaluator_required/acceptance_scenarios/production_call_sites/substrate_only/forbidden-scope inference_notes changed:** re-run
      task-graph review gate with row-level diff, require confirmation
 4. Update every entry in `spec_files_sha256` to the freshly recomputed hash
    after confirmation.

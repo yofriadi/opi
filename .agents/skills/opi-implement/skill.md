@@ -1,13 +1,13 @@
 ---
 name: opi-implement
-description: Use when executing opi-spec.md tasks, checking implementation status, reinitializing the task ledger, resuming interrupted implementation, clearing task blockers, or auto-selecting the next unblocked task. Triggers on requests to implement, resume, verify, or query progress of spec tasks — not on merely reading or discussing opi-spec.md.
+description: Use when executing opi-spec.md tasks or reviewed supplemental opi phase tasks, checking implementation status, reinitializing the task ledger, resuming interrupted implementation, clearing task blockers, or auto-selecting the next unblocked task. Triggers on implement, resume, verify, or progress requests for spec tasks; not on merely reading or discussing specs.
 ---
 
 # opi-implement
 
 Long-running-agent harness that drives `docs/opi-spec.md` implementation, plus
-reviewed supplemental product-hardening specs listed in this skill, one task at
-a time with TDD, tiered verification, and JSON-ledger checkpointing.
+reviewed supplemental Phase 5-12 product-hardening specs listed in this skill,
+one task at a time with TDD, tiered verification, and JSON-ledger checkpointing.
 
 This is a **harness**, not a coding assistant. It encodes opinions about state,
 evidence, failure recovery, and escalation. It does NOT edit `opi-spec.md`,
@@ -22,13 +22,42 @@ are allowed because their `Opi-DoD-SHA256` commit footers are the authoritative
 contract for shipped work. Do not run stale ledger tasks whose title or DoD
 contradicts the current spec.
 
-**Supplemental Phase 5 sources:** Phase 5 productized extension/package tasks
-are sourced from `docs/superpowers/specs/2026-06-08-productized-extensions-package-ecosystem-design.md`
-and the reviewed implementation plan
-`docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md`.
-When a Phase 5 ledger is initialized or reconciled, both files MUST be included
-in `spec_files` and hashed in `spec_files_sha256` alongside `docs/opi-spec.md`.
-Do not auto-parse arbitrary specs from `docs/superpowers/specs/`.
+**Reviewed supplemental sources:** Supplemental tasks come only from this
+registry. Do not auto-parse arbitrary files from `docs/superpowers/specs/`.
+
+| Phase | Source files |
+|---:|---|
+| 5 | `docs/superpowers/specs/2026-06-08-productized-extensions-package-ecosystem-design.md`; `docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md` |
+| 6 | `docs/superpowers/specs/2026-06-15-phase6-alignment-hardening-design.md` |
+| 7 | `docs/superpowers/specs/2026-06-15-phase7-reliability-observability-design.md` |
+| 8 | `docs/superpowers/specs/2026-06-15-phase8-agent-runtime-stabilization-design.md` |
+| 9 | `docs/superpowers/specs/2026-06-15-phase9-tooling-quality-design.md` |
+| 10 | `docs/superpowers/specs/2026-06-15-phase10-provider-correctness-design.md` |
+| 11 | `docs/superpowers/specs/2026-06-15-phase11-session-long-term-memory-design.md` |
+| 12 | `docs/superpowers/specs/2026-06-15-phase12-tui-product-polish-design.md` |
+
+When a ledger is initialized or reconciled for a supplemental phase, the
+phase's registered source files MUST be included in `spec_files` and hashed in
+`spec_files_sha256` alongside `docs/opi-spec.md`. Phase 5 uses its reviewed
+implementation plan for task rows; phases 6-12 derive draft task rows from the
+registered design's workstreams, testing strategy, documentation updates, and
+success criteria, then require task-graph review before execution.
+
+**Product-loop integrity rule:** A phase is not complete merely because every
+component task is green. When a source spec contains goals, success criteria,
+exit criteria, or user workflows, init/reinit MUST map them into executable
+`acceptance_scenarios`. Every scenario needs an owning task, verification
+command/test, and production call-site trace when it claims runtime behavior.
+If a task proves only a helper, parser, protocol type, or bridge object without
+showing that production startup/CLI/runtime calls it, mark it as substrate
+coverage only; do not let it close a product acceptance scenario.
+
+**DoD precision rule:** Vague verbs in a DoD (`works`, `supports`, `loads`,
+`integrates`, `bridges`, `productizes`, `handles`) MUST be expanded during
+init/reinit or task-graph review into concrete observable assertions:
+command/API entry point, persisted artifact, production call site, runtime
+effect, diagnostics, and negative/error behavior where relevant. A vague DoD is
+not executable until expanded or explicitly accepted as a substrate-only task.
 
 ## Invocation
 
@@ -82,7 +111,7 @@ active tasks or archived phase summaries; print which dep is missing.
 
 Phases A, B, F are cheap and always execute. C and D are the work body.
 E is the only phase that mutates git **during normal task execution**.
-(Init and reinit also commit tracked harness files — see `references/initializer.md`.)
+(Init and reinit also commit tracked harness files - see `references/initializer.md`.)
 
 1. **Phase A: Bootstrap**
    - A.1 Detect mode (init / status / reinit / task / auto)
@@ -91,38 +120,55 @@ E is the only phase that mutates git **during normal task execution**.
    - A.4 Select target task (auto-pick or validate override)
 
 2. **Phase B: Plan-the-task**
-   - B.1 Print task DoD + verification tier + parallelize plan
+   - B.1 Print task DoD + verification tier + parallelize plan + owned
+     acceptance scenarios + required production call-site traces + phase
+     source files + phase-specific forbidden-scope guards
    - B.2 User gate: "proceed with task `<id>` and create the one task commit if verification passes?"
    - B.3 If confirmed: mark `in_progress`, record `start_commit`, write ledger
 
 3. **Phase C: Implement**
-   - C.1 Invoke `superpowers:test-driven-development` (red→green→refactor)
-     - If `parallelize` non-empty → `superpowers:dispatching-parallel-agents`
+   - C.1 Invoke `superpowers:test-driven-development` (red-green-refactor)
+     - If `parallelize` non-empty -> `superpowers:dispatching-parallel-agents`
    - C.1a If implementation requires modifying files outside
      `tasks[].task_owned_paths`, the harness MUST append the new glob to
      `task_owned_paths` and record an `inference_notes` entry
      (`field = "task_owned_paths"`, `reason = "<why>"`) via the atomic ledger
      write BEFORE the file is edited. Append is the only Phase C mutation of a
      const field; it never silently expands ownership.
-   - C.2 Iteration cap 3 → invoke `superpowers:systematic-debugging`
-   - C.3 Total cap 5 → failure decision gate
+   - C.2 Iteration cap 3 -> invoke `superpowers:systematic-debugging`
+   - C.3 Total cap 5 -> failure decision gate
 
 4. **Phase D: Verify**
-   - D.1 Tier-specific mechanical gates
+   - D.0 Product acceptance checks:
+     - Run every `acceptance_scenarios` verification owned by the task.
+     - For runtime/startup/CLI claims, prove the production call site exists and
+       is exercised by the scenario. A direct helper/unit test is not enough.
+     - If the scenario cannot be exercised yet, the task may pass only as
+       substrate coverage and must leave the scenario open on a later vertical
+       slice task.
+   - D.1 Tier-specific mechanical gates and phase-specific addenda
    - D.2 Task-level risk evaluator (when `evaluator_required = true`)
    - D.3 Cross-cutting gates: fmt, clippy, doc, smoke
-   - D.4 If any fail → back to Phase C
+   - D.4 If any fail -> back to Phase C
 
 5. **Phase E: Commit & Ledger Update**
    - E.1 Conventional commit with `Opi-*` evidence footers
-   - E.2 Capture HEAD SHA + evidence → ledger
+   - E.2 Capture HEAD SHA + evidence -> ledger
    - E.3 Flip status to `passing`; append session_note
    - E.4 No push (push is separate human action)
 
 6. **Phase F: Phase-Exit Check**
-   - F.1 If all phase tasks passing → run phase-exit evaluator
+   - F.1 If all phase tasks passing -> run phase-exit evaluator
+   - F.1a Phase-exit evaluator MUST rebuild the source spec's success/exit
+     criteria, goals, non-goals, and named workflows from the current spec
+     files, inspect code/tests independently of ledger claims, and produce a
+     criteria trace with one of:
+     `met`, `deferred-by-updated-design`, or `not-met`.
+   - F.1b REFUSE phase archive when any criterion is `not-met`, or when
+     `deferred-by-updated-design` lacks an exact source citation from the
+     current spec/plan.
    - F.2 Print phase-complete report; no auto-release
-   - F.3 Else → print "next unblocked: X.Y" hint
+   - F.3 Else -> print "next unblocked: X.Y" hint
    - F.4 If F.1 passed, run the archive gate:
      - F.4a User gate: "Archive phase `<N>` ledger to
        `docs/snapshots/phase<N>/opi-impl-state.json` and compact `tasks` array
@@ -170,7 +216,7 @@ digraph select {
 
 | Phase | Skill | Purpose |
 |---|---|---|
-| C.1 | `superpowers:test-driven-development` | red→green→refactor body |
+| C.1 | `superpowers:test-driven-development` | red-green-refactor body |
 | C.1 | `superpowers:dispatching-parallel-agents` | when `parallelize` non-empty |
 | C.2 | `superpowers:systematic-debugging` | attempt 3+ can't reach green |
 | D.2 | code-reviewer subagent OR `superpowers:requesting-code-review` | independent evaluator for risk-gated tasks |
@@ -186,7 +232,7 @@ When `parallelize` is non-empty:
 - Sub-agents work on disjoint files; MUST NOT create commits
 - Parent applies results in ledger order, runs full verification after each merge
 - Completion events may arrive out of order; persisted evidence uses `parallelize` array order
-- Conflict or overlapping edit → fail attempt → normal debug/failure path
+- Conflict or overlapping edit -> fail attempt -> normal debug/failure path
 
 ## Commit Evidence Format
 
@@ -197,6 +243,12 @@ Opi-Task: <id>
 Opi-DoD-SHA256: <sha256 of definition_of_done>
 Opi-Verification: <tier>; <short command/result summary>
 Opi-Evaluator: <not-required | passed>
+```
+
+If the task owns any `acceptance_scenarios`, also include:
+
+```text
+Opi-Acceptance: <scenario ids>; <command/test/call-site evidence summary>
 ```
 
 Commit type is derived from the ledger `commit_type` field (feat/fix/docs/etc).
@@ -222,10 +274,10 @@ Commit scope is the crate name. Example: `feat(opi-agent): implement agent_loop`
   forward-slash paths
 - SHA-256: use `sha256sum`, PowerShell `Get-FileHash`, Python, or Rust helper
 - JSON manipulation: `jq` when present; fallback to PowerShell/Python
-- Required: `cargo` (Rust ≥ 1.85), `git`
+- Required: `cargo` (Rust >= 1.85), `git`
 - NOT required: `gh` CLI (belongs to `opi-release`)
 
-## Red Flags — STOP Immediately
+## Red Flags - STOP Immediately
 
 These are the top violations this harness prevents. Full table with reasoning
 in `references/anti-patterns.md`.
@@ -241,6 +293,23 @@ in `references/anti-patterns.md`.
 8. **Never commit ledger files.** They are gitignored runtime state.
 9. **Never skip `[workspace.dependencies]` for internal deps.** Lockstep versioning.
 10. **Never run live provider tests.** They belong in `#[ignore]`-gated tests.
+11. **Never close a product scenario with component-only tests.** Helper,
+    parser, protocol, and bridge tests are substrate evidence until an
+    end-to-end production path exercises them.
+12. **Never mark an unused runtime integration as passing.** If a function such
+    as startup registration, resolver loading, or state persistence has no
+    production call site, the task remains open or substrate-only.
+13. **Never archive a phase from ledger status alone.** Phase exit must trace
+    current source-spec criteria to code and tests independently.
+14. **Never let vague DoD verbs stand.** Expand them before execution or stop
+    for task-graph review.
+15. **Never implement a phase non-goal to satisfy an adjacent criterion.**
+    If a criterion appears to require npm, marketplace, OAuth, telemetry,
+    sandboxing, web-ui parity, pi session compatibility, or workflow tools in
+    core, stop for graph review instead.
+16. **Never add unregistered supplemental docs to `spec_files`.** Only the
+    reviewed source registry in this skill can make design/plan files
+    normative for ledger drift checks.
 
 The skill refuses to act if any rule would be violated, even if the user
 requests it during a failure-decision gate.
@@ -250,6 +319,7 @@ requests it during a failure-decision gate.
 Print a summary table of all tasks:
 - id, title, status, tier, depends_on (with pass/fail indicators)
 - Current phase number
+- Current `spec_files` and any hash drift warning
 - Next unblocked task hint
 - Any blocked tasks with blocker text
 - Phase-exit status for completed phases
@@ -283,3 +353,12 @@ Full design rationale: `docs/superpowers/specs/2026-05-20-opi-implement-skill-de
 Supplemental Phase 5 design: `docs/superpowers/specs/2026-06-08-productized-extensions-package-ecosystem-design.md`
 
 Supplemental Phase 5 implementation plan: `docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md`
+
+Supplemental Phase 6-12 designs:
+- `docs/superpowers/specs/2026-06-15-phase6-alignment-hardening-design.md`
+- `docs/superpowers/specs/2026-06-15-phase7-reliability-observability-design.md`
+- `docs/superpowers/specs/2026-06-15-phase8-agent-runtime-stabilization-design.md`
+- `docs/superpowers/specs/2026-06-15-phase9-tooling-quality-design.md`
+- `docs/superpowers/specs/2026-06-15-phase10-provider-correctness-design.md`
+- `docs/superpowers/specs/2026-06-15-phase11-session-long-term-memory-design.md`
+- `docs/superpowers/specs/2026-06-15-phase12-tui-product-polish-design.md`
