@@ -9,9 +9,9 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.4.0`。
+当前 crate 版本：`0.5.0`。
 
-本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、RPC JSONL 模式、9 个 Provider 前缀、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话/分支选择器、shell 补全生成、上下文文件加载、会话持久化、会话 resume/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、packages/extensions/skills/fragments/themes 的渐进式资源发现、retry、token 用量统计，以及尽力而为的费用摘要。
+本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、RPC JSONL 模式、9 个内置 Provider 前缀加已配置的 OpenAI-compatible profile、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话/分支/会话树选择器、交互式会话 fork/clone、shell 补全生成、上下文文件加载、会话持久化、会话 resume/fork/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、packages/extensions/skills/fragments/themes 的渐进式资源发现、package add/remove/list/doctor 命令、process-jsonl package adapter、retry、token 用量统计，以及尽力而为的费用摘要。
 
 ## 安装
 
@@ -59,6 +59,7 @@ opi --allow-mutating "更新 README。"
 | `--json` | 输出 NDJSON 事件到 stdout；同时使用非交互模式 |
 | `--list-sessions` | 列出已保存会话并退出 |
 | `--resume <ID>` | 按 id 恢复会话 |
+| `--fork <ID>` | 按 id fork 已保存会话，生成新会话 |
 | `--delete-session <ID>` | 按 id 删除会话并退出 |
 | `--generate-completion <SHELL>` | 为 `bash`、`zsh`、`fish`、`powershell` 或 `elvish` 生成 shell 补全 |
 | `-v, --verbose` | 启用 debug tracing |
@@ -68,6 +69,7 @@ opi --allow-mutating "更新 README。"
 | `--image <IMAGE>` | 给初始提示词附加一张图片；可重复 |
 | `--list-models` | 列出已配置 Provider 可用模型并退出 |
 | `--rpc` | RPC JSONL 模式：通过 stdin/stdout 双向命令/事件协议 |
+| `package <COMMAND>` | 管理 extension package：`add`、`remove`、`list`、`doctor` |
 
 ## Provider
 
@@ -84,6 +86,7 @@ opi --allow-mutating "更新 README。"
 | `bedrock:` | `BedrockProvider` | AWS 环境变量或共享 AWS profile/config |
 | `azure:` | `AzureOpenAIProvider` | `AZURE_OPENAI_API_KEY`；endpoint/deployments 在配置中设置 |
 | `vertex:` | `VertexProvider` | `VERTEX_ACCESS_TOKEN`；project/location 在配置中设置 |
+| 已配置 profile | OpenAI-compatible profile | profile 自己的 `api_key_env`、`base_url` 和模型列表 |
 
 环境变量名、base URL、Provider 专用字段和代理都可以在配置中覆盖。
 
@@ -173,6 +176,23 @@ project = "my-gcp-project"
 location = "us-central1"
 models = ["gemini-2.5-flash", "gemini-2.5-pro"]
 
+[providers.openai_compatible.localai]
+api_key_env = "LOCALAI_API_KEY"
+base_url = "https://localai.example.com"
+system_role_override = "developer"
+max_tokens_field = "max_completion_tokens"
+tool_result_name_field = true
+usage_in_stream = true
+
+[[providers.openai_compatible.localai.models]]
+id = "local-model"
+display_name = "Local Model"
+context_window = 128000
+max_output_tokens = 4096
+supports_images = true
+supports_streaming = true
+supports_thinking = false
+
 [providers.openai.proxy]
 url = "http://proxy.example.com:8080"
 no_proxy = "localhost,127.0.0.1"
@@ -235,10 +255,11 @@ paths = ["vendor/my-package"]
 ```sh
 opi --list-sessions
 opi --resume <session-id> "继续这项工作。"
+opi --fork <session-id> "从 fork 继续。"
 opi --delete-session <session-id>
 ```
 
-Resume 会从 session JSONL 条目重建活跃分支。如果会话中包含 compaction marker，恢复后的上下文会包含压缩摘要和保留尾部。
+Resume 会从 session JSONL 条目重建活跃分支。Fork 会创建新的 JSONL 会话，并在 header 中通过 `parent_session` 指回源会话；源会话保持 append-only。如果会话中包含 compaction marker，恢复后的上下文会包含压缩摘要和保留尾部。
 
 ## 运行模式
 
@@ -253,6 +274,9 @@ Slash 命令：
 | `/model` | 打开当前 Provider 的模型选择器 |
 | `/session` | 打开会话选择器 |
 | `/branch` | 打开当前会话的分支选择器 |
+| `/tree` | 打开当前会话的会话树选择器 |
+| `/fork` | 把当前活跃分支 fork 成新的父子会话 |
+| `/clone` | 把当前活跃分支 clone 成新的父子会话 |
 | `/image <path>` | 为下一条提示词排队一张图片 |
 | `exit` 或 `quit` | 退出 |
 
@@ -289,7 +313,7 @@ opi --rpc
 启动时，`opi` 会输出 `rpc_ready` 头：
 
 ```json
-{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.4.0"}
+{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.0"}
 ```
 
 命令是以 JSON 对象形式发送到 stdin（每行一个）。响应和事件是以 JSON 对象形式输出到 stdout（每行一个）。诊断信息输出到 stderr。
@@ -328,6 +352,21 @@ Harness 会从用户、项目、显式和 package 层发现资源元数据，并
 - Themes：包含 `theme.toml` 的目录，会在回退到内置主题前解析。
 
 用户级资源位于用户配置目录下（Unix：`~/.config/opi/`；Windows：`%APPDATA%\opi\`）。项目级资源位于 workspace 根目录的 `.opi/` 下。显式 extension 和 package 路径来自配置。高优先级层会覆盖低优先级层；同一层内的重复项会作为 diagnostics 暴露。
+
+Package 命令可以在不构建 Provider 的情况下管理本地和 git package 声明：
+
+```sh
+opi package add ./vendor/todo
+opi package add --local ./vendor/todo
+opi package add git:github.com/user/pkg@v1
+opi package list
+opi package list --json
+opi package doctor
+opi package doctor --json
+opi package remove todo
+```
+
+`add` 和 `remove` 默认写入用户级 package store；传入 `--local` 时写入项目本地 `.opi/packages.toml`。运行时启动会解析已安装声明、校验 lock 状态，并启动有效的 `[adapter]` package；当前支持的 adapter kind 是 `process-jsonl`，协议是 `opi-extension-jsonl-v1`。
 
 ## 技能（Skills）
 

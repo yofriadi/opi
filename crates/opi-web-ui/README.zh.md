@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.4.0`。
+当前 crate 版本：`0.5.0`。
 
 `opi-web-ui` 为 `publish = false`，提供具体的组件层，消费 opi agent 工具包的 RPC/SDK JSON 事件值并将其渲染为类型化的 Rust 状态和 HTML 组件。它不是独立浏览器应用。后续发布决策可能改变其发布状态。
 

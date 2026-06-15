@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.4.0`。
+当前 crate 版本：`0.5.0`。
 
 `opi-ai` 暴露统一的 `Provider` trait，以及 Provider 无关的请求、消息、模型和流式事件类型。当前包含 Anthropic、OpenAI Chat Completions、OpenAI Responses、Gemini、AWS Bedrock Converse、Azure OpenAI、Google Vertex AI 的真实流式实现，并通过 OpenAI-compatible adapter 支持 OpenRouter 与 Mistral profile。`ProviderRegistry` 会解析 `provider:model` spec，支持注册自定义 Provider，并支持为 deployment 或 fine-tuned 模型叠加模型覆盖。
 

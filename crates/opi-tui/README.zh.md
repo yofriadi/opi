@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.4.0`。
+当前 crate 版本：`0.5.0`。
 
 `opi-tui` 是同步 widget library。事件循环和异步 runtime 由调用方持有。本 crate 提供 `opi-coding-agent` 使用的对话记录、编辑器、状态栏、Markdown、工具调用、diff、选择列表、分支选择器、终端图片、主题和按键绑定基础组件。
 

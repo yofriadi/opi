@@ -9,11 +9,11 @@
 
 ## 当前状态
 
-当前 workspace 版本：`0.5.0`。
+当前 workspace 版本：`0.5.1`。
 
-`opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、RPC JSONL 模式、8 个内置工具、图片附件、模型/会话/分支选择器、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、token 用量累计，以及尽力而为的费用摘要。
+`opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、RPC JSONL 模式、8 个内置工具、图片附件、模型/会话/分支/会话树选择器、会话 fork/clone 流程、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、package add/remove/list/doctor 命令、token 用量累计，以及尽力而为的费用摘要。
 
-可扩展性表面已经存在且仍是不稳定 0.x API：共享 SDK/RPC 命令类型、面向嵌入方的 extension hooks/tools/state、按层发现 extensions、packages、skills、prompt fragments 和 themes 资源、自定义 provider/model 注册，以及 streaming proxy。`opi-web-ui` 仍是 `publish = false`；它不是独立浏览器应用，但已经提供可复用的 RPC/SDK 事件解析、对话状态、组件模型和 HTML 渲染。
+可扩展性表面已经存在且仍是不稳定 0.x API：共享 SDK/RPC 命令类型、面向嵌入方的 extension hooks/tools/state、按层发现 extensions、packages、skills、prompt fragments 和 themes 资源、process-jsonl package adapter、自定义 provider/model 注册，以及 streaming proxy。`opi-web-ui` 仍是 `publish = false`；它不是独立浏览器应用，但已经提供可复用的 RPC/SDK 事件解析、对话状态、组件模型和 HTML 渲染。
 
 ## 与 pi 的关系
 
@@ -356,7 +356,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 `opi` 启动时会选择运行模式：
 
-- 会话、模型列表和补全生成命令会尽早处理并退出。
+- Package、会话、模型列表和补全生成命令会尽早处理并退出。
 - 非交互模式由提示词参数、`--non-interactive` 或 `--json` 触发；它构建 Provider 并运行 `NonInteractiveRunner`。
 - 交互模式是没有提示词参数时的默认模式；它构建带交互 hooks 的 `CodingHarness` 并启动 ratatui TUI。
 

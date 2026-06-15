@@ -9,9 +9,9 @@
 
 ## Status
 
-Current crate version: `0.4.0`.
+Current crate version: `0.5.0`.
 
-This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, RPC JSONL mode, nine provider prefixes, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session/branch pickers, shell completion generation, context file loading, session persistence, resume/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, progressive resource discovery for packages/extensions/skills/fragments/themes, retry, token usage totals, and best-effort cost summaries.
+This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, RPC JSONL mode, nine built-in provider prefixes plus configured OpenAI-compatible profiles, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session/branch/tree pickers, interactive session fork/clone, shell completion generation, context file loading, session persistence, resume/fork/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, progressive resource discovery for packages/extensions/skills/fragments/themes, package add/remove/list/doctor commands, process-jsonl package adapters, retry, token usage totals, and best-effort cost summaries.
 
 ## Install
 
@@ -59,6 +59,7 @@ opi --allow-mutating "Update the README."
 | `--json` | Output NDJSON events to stdout; also uses non-interactive mode |
 | `--list-sessions` | List stored sessions and exit |
 | `--resume <ID>` | Resume a stored session by id |
+| `--fork <ID>` | Fork a stored session by id into a new session |
 | `--delete-session <ID>` | Delete a stored session by id and exit |
 | `--generate-completion <SHELL>` | Generate shell completions for `bash`, `zsh`, `fish`, `powershell`, or `elvish` |
 | `-v, --verbose` | Enable debug tracing |
@@ -68,6 +69,7 @@ opi --allow-mutating "Update the README."
 | `--image <IMAGE>` | Attach one image file to the initial prompt; can be repeated |
 | `--list-models` | List available models from configured providers and exit |
 | `--rpc` | RPC JSONL mode: bidirectional command/event protocol over stdin/stdout |
+| `package <COMMAND>` | Manage extension packages: `add`, `remove`, `list`, `doctor` |
 
 ## Providers
 
@@ -84,6 +86,7 @@ opi --allow-mutating "Update the README."
 | `bedrock:` | `BedrockProvider` | AWS env vars or shared AWS profile/config |
 | `azure:` | `AzureOpenAIProvider` | `AZURE_OPENAI_API_KEY`; endpoint/deployments in config |
 | `vertex:` | `VertexProvider` | `VERTEX_ACCESS_TOKEN`; project/location in config |
+| configured profile | OpenAI-compatible profile | profile-specific `api_key_env`, `base_url`, and model list |
 
 Environment variable names, base URLs, provider-specific fields, and proxies can be overridden in config.
 
@@ -173,6 +176,23 @@ project = "my-gcp-project"
 location = "us-central1"
 models = ["gemini-2.5-flash", "gemini-2.5-pro"]
 
+[providers.openai_compatible.localai]
+api_key_env = "LOCALAI_API_KEY"
+base_url = "https://localai.example.com"
+system_role_override = "developer"
+max_tokens_field = "max_completion_tokens"
+tool_result_name_field = true
+usage_in_stream = true
+
+[[providers.openai_compatible.localai.models]]
+id = "local-model"
+display_name = "Local Model"
+context_window = 128000
+max_output_tokens = 4096
+supports_images = true
+supports_streaming = true
+supports_thinking = false
+
 [providers.openai.proxy]
 url = "http://proxy.example.com:8080"
 no_proxy = "localhost,127.0.0.1"
@@ -235,10 +255,11 @@ Override with `OPI_SESSIONS_DIR`.
 ```sh
 opi --list-sessions
 opi --resume <session-id> "Continue the work."
+opi --fork <session-id> "Continue from a fork."
 opi --delete-session <session-id>
 ```
 
-Resume reconstructs the active branch from session JSONL entries. If a session contains compaction markers, the resumed context includes the compaction summary and kept tail.
+Resume reconstructs the active branch from session JSONL entries. Fork creates a new JSONL session whose header points back to the source session through `parent_session`; the source remains append-only. If a session contains compaction markers, the resumed context includes the compaction summary and kept tail.
 
 ## Modes
 
@@ -253,6 +274,9 @@ Slash commands:
 | `/model` | Open the model picker for the active provider |
 | `/session` | Open the session picker |
 | `/branch` | Open the branch picker for the active session |
+| `/tree` | Open the session tree picker for the active session |
+| `/fork` | Fork the active branch into a new parented session |
+| `/clone` | Clone the active branch into a new parented session |
 | `/image <path>` | Queue an image for the next prompt |
 | `exit` or `quit` | Exit |
 
@@ -289,7 +313,7 @@ opi --rpc
 On startup, `opi` emits a `rpc_ready` header:
 
 ```json
-{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.4.0"}
+{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.0"}
 ```
 
 Commands are JSON objects sent to stdin, one per line. Responses and events are JSON objects emitted to stdout, one per line. Diagnostics go to stderr.
@@ -370,6 +394,21 @@ The harness discovers resource metadata from user, project, explicit, and packag
 - Themes: directories containing `theme.toml`, resolved before falling back to built-in themes.
 
 User-level resources live under the user config directory (`~/.config/opi/` on Unix, `%APPDATA%\opi\` on Windows). Project-level resources live under `.opi/` in the workspace root. Explicit extension and package paths come from config. Higher-precedence layers override lower-precedence layers; duplicates within the same layer are reported as diagnostics.
+
+Package commands manage local and git package declarations without constructing a provider:
+
+```sh
+opi package add ./vendor/todo
+opi package add --local ./vendor/todo
+opi package add git:github.com/user/pkg@v1
+opi package list
+opi package list --json
+opi package doctor
+opi package doctor --json
+opi package remove todo
+```
+
+`add` and `remove` write the user-level package store by default; pass `--local` to write project-local `.opi/packages.toml`. Runtime startup resolves installed declarations, validates lock state, and starts valid `[adapter]` packages that use the `process-jsonl` kind and `opi-extension-jsonl-v1` protocol.
 
 ## Skills
 

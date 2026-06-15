@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.4.0`。
+当前 crate 版本：`0.5.0`。
 
 `opi-agent` 提供 `opi` 二进制使用的 Provider 无关运行时。它负责 turn 主循环、工具参数 JSON Schema 校验、并行/串行工具执行、支持 retry 的 Provider streaming、图片能力校验、事件订阅、steering/follow-up 队列、JSONL 会话存储、基于 leaf 的会话分支重建、阈值/手动/溢出触发的上下文压缩基础能力、SDK/RPC 命令与响应类型、extension hooks/tools/state，以及传输无关的 streaming proxy。
 

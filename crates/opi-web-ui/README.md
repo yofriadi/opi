@@ -6,7 +6,7 @@
 
 ## Status
 
-Current crate version: `0.4.0`.
+Current crate version: `0.5.0`.
 
 `opi-web-ui` is `publish = false` and provides a concrete component layer that consumes RPC/SDK JSON event values from the opi agent toolkit and renders them as typed Rust state and HTML components. It is not a standalone browser app. A separate release decision may change the publish status in the future.
 
