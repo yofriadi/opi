@@ -1591,7 +1591,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opi-agent"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "futures-util",
  "jsonschema",
@@ -1612,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "opi-ai"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -1636,7 +1636,7 @@ dependencies = [
 
 [[package]]
 name = "opi-coding-agent"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1668,7 +1668,7 @@ dependencies = [
 
 [[package]]
 name = "opi-tui"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "base64",
  "crossterm",
@@ -1683,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "opi-web-ui"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "opi-agent",
  "serde",

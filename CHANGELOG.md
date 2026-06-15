@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+(No notable changes yet.)
+
+## [0.5.1] - 2026-06-15
+
 ### Added
 
 - `opi-coding-agent`: `--fork <session-id>` plus interactive `/tree`, `/fork`, and `/clone` session commands that copy the active branch into a new parented session without rewriting the source JSONL file.
@@ -29,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `opi-coding-agent`: `opi package doctor` now rejects invalid manifest V2 adapter declarations and reports lock/source/resource/adapter diagnostics.
 - `opi-coding-agent`: Adapter state snapshots are persisted in session JSONL and restored on resume.
 - `opi-coding-agent`: Adapter event drops are diagnostic-visible, shutdown allows a bounded graceful exit, local package identity is canonicalized, SSH git source parsing is URL-aware, and relative adapter commands cannot escape package roots.
+- `opi-coding-agent`: Linux build and test correctness — removed a dead Unix-only import that failed `clippy`/`test`/`doc` under `-D warnings`, and test-binary locators no longer match cargo `.d` dep-info siblings (which lack the execute bit and caused `EACCES` when spawning adapters).
 
 ## [0.5.0] - 2026-06-07
 
