@@ -170,9 +170,10 @@ impl AdapterHost {
 
         // Create a new process group so we can kill the tree on shutdown.
         // On Unix this is process_group(0); on Windows use CREATE_NEW_PROCESS_GROUP.
+        // tokio::process::Command provides `process_group` as an inherent method,
+        // so no std `CommandExt` trait import is needed.
         #[cfg(unix)]
         {
-            use std::os::unix::process::CommandExt;
             cmd.process_group(0);
         }
         #[cfg(windows)]
