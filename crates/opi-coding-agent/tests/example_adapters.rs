@@ -41,6 +41,7 @@ fn example_adapter_bin() -> PathBuf {
             let name_str = name.to_string_lossy();
             if name_str.starts_with(prefix)
                 && name_str.ends_with(exe_suffix)
+                && !name_str.ends_with(".d")
                 && let Ok(meta) = entry.metadata()
                 && let Ok(modified) = meta.modified()
                 && best.as_ref().is_none_or(|(t, _)| modified > *t)

@@ -39,7 +39,10 @@ fn mock_adapter_bin() -> PathBuf {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with(prefix) && name_str.ends_with(exe_suffix) {
+            if name_str.starts_with(prefix)
+                && name_str.ends_with(exe_suffix)
+                && !name_str.ends_with(".d")
+            {
                 return entry.path();
             }
         }
