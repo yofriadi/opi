@@ -305,7 +305,13 @@ fn windows_backslash_source_parses_as_local() {
 fn windows_absolute_source_parses() {
     let source = PackageSource::parse(r"D:\packages\my-tool").expect("parse windows abs");
     if let PackageSource::Local { path } = &source {
+        // `D:\` is only recognized as a drive-absolute root on Windows; on
+        // Unix the same bytes parse as a relative PathBuf, so assert the
+        // drive-absolute property on Windows and a plain round-trip elsewhere.
+        #[cfg(windows)]
         assert!(path.is_absolute());
+        #[cfg(not(windows))]
+        assert_eq!(path, std::path::Path::new(r"D:\packages\my-tool"));
     } else {
         panic!("expected local source");
     }
