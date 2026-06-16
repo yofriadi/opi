@@ -813,6 +813,13 @@ Windows SHOULD use `%APPDATA%\opi\` for config-like data and `%LOCALAPPDATA%\opi
 
 ### 9.3 Session Format
 
+The opi session format is a **Rust-native** append-only JSONL tree. It is an
+independent format rather than a copy of pi's session format: it represents a
+*selected subset* of pi's session concepts — append-only history, parent-linked
+branching, compaction summaries, model and thinking-level change markers, and
+persisted extension state — implemented against opi's Rust crates. It does
+**not** promise pi session v3 file read/write compatibility (see 9.4).
+
 Session persistence starts in Phase 2, not Phase 1. The target format is
 append-only, versioned JSONL. The first line is a header:
 
@@ -858,7 +865,7 @@ therefore creates a new sibling path without rewriting previous entries.
 
 ### 9.4 Why Not pi Session v3
 
-Opi keeps pi's branch and compaction ideas but not its file format because pi stores TypeScript-specific extension data, opi has independent config/plugin plans, and accidental partial compatibility would be misleading. A future migration command MAY translate pi v3 sessions into opi v1 sessions.
+The opi session JSONL is a Rust-native format that represents selected pi session concepts (append-only history, branching, compaction, model and thinking change markers, and extension state) **without** promising pi session v3 file compatibility. Opi keeps pi's branch and compaction ideas but not its file format because pi stores TypeScript-specific extension data, opi has independent config/plugin plans, and accidental partial compatibility would be misleading. Concepts opi intentionally does not carry over include pi's TypeScript-specific extension entries, its on-disk encoding, and any guarantee that a pi v3 session file can be opened, resumed, or appended to by opi. A future migration command MAY translate pi v3 sessions into opi v1 sessions, but until then the two formats are not interchangeable.
 
 ### 9.5 Compaction
 

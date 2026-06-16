@@ -2,8 +2,10 @@
 //!
 //! RPC mode enables headless operation of the coding agent via a strict JSONL
 //! protocol. Commands arrive on stdin (one JSON object per line), responses
-//! and events are emitted on stdout (one JSON object per line). Diagnostics
-//! go to stderr.
+//! and events are emitted on stdout (one JSON object per line). Startup
+//! diagnostics (package/adapter degraded-path diagnostics) are surfaced in the
+//! `rpc_ready` header's `startup_diagnostics` array and via the `session_info`
+//! command's `resources.diagnostics`.
 //!
 //! # Protocol version
 //!
@@ -289,11 +291,22 @@ impl RpcRunner {
         mut input_rx: tokio::sync::mpsc::UnboundedReceiver<RpcInput>,
         mut emit: impl FnMut(&serde_json::Value) -> bool,
     ) -> i32 {
+        // Surface startup diagnostics (package/adapter degraded-path
+        // diagnostics) proactively in the ready header so a headless client
+        // learns about disabled packages the instant the session is ready,
+        // without having to poll `session_info`. They are also available on
+        // demand via the `session_info` command's `resources.diagnostics`.
+        let startup_diagnostics = self
+            .harness
+            .as_ref()
+            .map(|harness| harness.resource_metadata().diagnostics.clone())
+            .unwrap_or_default();
         let header = serde_json::json!({
             "type": "rpc_ready",
             "schema_version": SDK_SCHEMA_VERSION,
             "mode": "rpc",
             "version": env!("CARGO_PKG_VERSION"),
+            "startup_diagnostics": startup_diagnostics,
         });
         if !emit(&header) {
             return ExitCode::RuntimeFailure as i32;

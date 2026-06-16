@@ -8,8 +8,11 @@ use opi_agent::session::{
     SessionWriter,
 };
 use opi_ai::message::{InputContent, Message, UserMessage};
+use opi_ai::test_support::{self, MockProvider};
 use opi_coding_agent::adapter_extension::ProcessAdapter;
 use opi_coding_agent::adapter_host::{AdapterHost, AdapterProcessConfig};
+use opi_coding_agent::config::OpiConfig;
+use opi_coding_agent::harness::{CodingHarness, ResumeInfo};
 
 fn make_header(id: &str, cwd: &str) -> SessionHeader {
     SessionHeader::new(id.into(), "2026-06-09T00:00:00Z".into(), cwd.into(), None)
@@ -168,6 +171,142 @@ async fn adapter_state_restores_from_latest_session_extension_state() {
         .expect("todo list result");
 
     let items = data["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["title"], "resume me");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 (task 6.5): extension-state lifecycle through the production harness.
+//
+// The DoD requires focused tests that extension state is restored before
+// adapter-backed runtime behavior and persisted after turns that mutate
+// adapter state. Both are exercised through the real CodingHarness resume +
+// prompt path. Each harness resumes from a temp JSONL file so appends land in
+// the temp dir (no OPI_SESSIONS_DIR mutation). The `todo` example adapter
+// advertises commands only (tools: []), so adapter state mutates via
+// dispatch_command (todo/add) and is captured by persist_extension_state after
+// the next turn.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn extension_state_persists_to_session_jsonl_after_mutating_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let header = make_header("sess-persist", &dir.path().display().to_string());
+
+    let user = user_entry("msg-1", None, "seed turn");
+    let mut writer = SessionWriter::create(&path, header).unwrap();
+    writer.append(&user).unwrap();
+    drop(writer);
+    let entries = vec![user];
+
+    let (_host, registry) = start_todo_registry().await;
+    let provider = MockProvider::new("mock", vec![test_support::text_response("ok")]);
+    let resume = ResumeInfo {
+        path: path.clone(),
+        session_id: "sess-persist".into(),
+        entries,
+        original_cwd: dir.path().to_path_buf(),
+    };
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        dir.path().to_path_buf(),
+    )
+    .resume(resume)
+    .extension_registry(registry)
+    .build();
+
+    // Mutate adapter state through the production command path, then run a
+    // turn. persist_turn -> persist_extension_state must serialize the mutated
+    // registry state and append an ExtensionState entry to the session JSONL.
+    harness
+        .dispatch_extension_command(
+            "todo/add",
+            None,
+            serde_json::json!({"title": "persisted me", "description": "state"}),
+        )
+        .await
+        .expect("todo/add dispatch");
+    harness.prompt("run the turn").await.expect("prompt turn");
+
+    let (_header, readback) = SessionReader::read_all(&path).unwrap();
+    let state_entry = readback
+        .iter()
+        .find(|entry| matches!(entry, SessionEntry::ExtensionState(_)))
+        .expect("session JSONL should gain an ExtensionState entry after a mutating turn");
+    let SessionEntry::ExtensionState(ext_state) = state_entry else {
+        unreachable!()
+    };
+    let items = ext_state.state["todo"]["items"]
+        .as_array()
+        .expect("serialized todo items");
+    assert!(
+        items.iter().any(|item| item["title"] == "persisted me"),
+        "persisted extension state must contain the mutated todo item: {items:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resumed_extension_state_is_restored_before_adapter_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let header = make_header("sess-restore", &dir.path().display().to_string());
+
+    let user = user_entry("msg-1", None, "seed turn");
+    let state = SessionEntry::ExtensionState(ExtensionStateEntry {
+        id: "state-1".to_string(),
+        parent_id: Some("msg-1".to_string()),
+        timestamp: "2026-06-09T00:00:01Z".to_string(),
+        state: serde_json::json!({
+            "todo": {
+                "items": [{
+                    "id": "todo-1",
+                    "title": "resume me",
+                    "description": "state",
+                    "status": "pending"
+                }],
+                "next_id": 2
+            }
+        }),
+    });
+    let mut writer = SessionWriter::create(&path, header).unwrap();
+    writer.append(&user).unwrap();
+    writer.append(&state).unwrap();
+    drop(writer);
+    let entries = vec![user, state];
+
+    // Fresh adapter registry (empty todo state). On the first prompt the
+    // harness restores the persisted extension state BEFORE the agent turn
+    // runs (restore_pending_extension_state precedes agent.prompt), so a
+    // subsequent adapter-backed command observes the restored state.
+    let (_host, registry) = start_todo_registry().await;
+    let provider = MockProvider::new("mock", vec![test_support::text_response("ok")]);
+    let resume = ResumeInfo {
+        path: path.clone(),
+        session_id: "sess-restore".into(),
+        entries,
+        original_cwd: dir.path().to_path_buf(),
+    };
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        dir.path().to_path_buf(),
+    )
+    .resume(resume)
+    .extension_registry(registry)
+    .build();
+
+    harness.prompt("trigger restore").await.expect("prompt");
+
+    let list = harness
+        .dispatch_extension_command("todo/list", None, serde_json::json!({}))
+        .await
+        .expect("todo/list dispatch")
+        .expect("todo list result");
+    let items = list["items"].as_array().expect("items array");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["title"], "resume me");
 }

@@ -243,7 +243,7 @@ Supported formats are PNG, JPEG, GIF, and WebP. The default file-size limit is 2
 
 ## Sessions
 
-Sessions are persisted automatically through `SessionCoordinator`.
+Sessions are persisted automatically through `SessionCoordinator`. The session JSONL is a Rust-native format that represents selected pi session concepts (branching, compaction, message history, extension state); it does not promise pi session v3 file compatibility.
 
 Default storage:
 

@@ -8,7 +8,7 @@
 //! - Prompt/continue/abort with mock provider
 //! - Session info, set_model, compact commands
 //! - stdout framing (one JSON object per line)
-//! - stderr diagnostics
+//! - startup diagnostics (rpc_ready header and session_info)
 //! - Exit behavior
 //! - Interleaved async events
 //! - Compatibility with existing JSON mode event semantics
@@ -28,11 +28,14 @@ use opi_agent::extension::{Extension, ExtensionCommand, ExtensionError, Extensio
 use opi_ai::provider::{EventStream, ModelInfo, Provider, Request};
 use opi_ai::stream::{AssistantStreamEvent, StopReason};
 use opi_ai::test_support::{MockProvider, base_assistant, text_response};
+use opi_coding_agent::adapter_extension::ProcessAdapter;
+use opi_coding_agent::adapter_host::{AdapterHost, AdapterProcessConfig};
 use opi_coding_agent::config::OpiConfig;
 use opi_coding_agent::package_resolver::local_lock_entry;
 use opi_coding_agent::package_store::{PackageDeclaration, PackageStore};
 use opi_coding_agent::policy::ToolSelection;
 use opi_coding_agent::rpc::{RPC_SCHEMA_VERSION, RpcCommand, RpcRunner};
+use opi_coding_agent::runtime_packages::RuntimePackageStartup;
 
 // ---------------------------------------------------------------------------
 // Command parsing
@@ -2885,4 +2888,185 @@ fn rpc_response_format_with_data() {
 fn rpc_schema_version_is_2() {
     // RPC mode uses schema version 2 (distinct from JSON mode's version 1).
     assert_eq!(RPC_SCHEMA_VERSION, 2);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 (task 6.5): startup diagnostics availability in RPC mode.
+//
+// The DoD requires startup diagnostics to be available in RPC mode. They are
+// surfaced two ways: proactively in the rpc_ready header's startup_diagnostics
+// array (so a headless client sees degraded-path diagnostics the instant the
+// session is ready, without polling), and on demand via the session_info
+// command's resources.diagnostics. Both flow from RuntimePackageStartup.
+// ---------------------------------------------------------------------------
+
+fn runner_with_runtime_packages<P>(
+    provider: P,
+    registry: ExtensionRegistry,
+    diagnostics: Vec<String>,
+) -> (
+    tokio::sync::mpsc::UnboundedSender<RpcCommand>,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    tokio::task::JoinHandle<i32>,
+)
+where
+    P: Provider + 'static,
+{
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let runtime_startup = RuntimePackageStartup {
+        extension_registry: registry,
+        installed_packages: Vec::new(),
+        diagnostics,
+    };
+    let runner = RpcRunner::new_with_runtime_packages(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        false,
+        ToolSelection::Disabled,
+        None,
+        Vec::new(),
+        runtime_startup,
+    )
+    .expect("rpc runner should construct");
+
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_tx, output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut runner = runner;
+        runner.run_with_channels(command_rx, output_tx).await
+    });
+    (command_tx, output_rx, task)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_ready_header_carries_startup_diagnostics() {
+    let diagnostic = "package disabled at runtime: rpc demo diagnostic".to_string();
+    let (command_tx, mut output_rx, task) = runner_with_runtime_packages(
+        MockProvider::new("mock", Vec::new()),
+        ExtensionRegistry::new(),
+        vec![diagnostic.clone()],
+    );
+
+    let header = recv_rpc_line(&mut output_rx).await;
+    assert_eq!(header["type"], "rpc_ready");
+    let diagnostics = header["startup_diagnostics"]
+        .as_array()
+        .expect("rpc_ready should carry a startup_diagnostics array");
+    assert!(
+        diagnostics.iter().any(|d| d.as_str() == Some(&diagnostic)),
+        "rpc_ready startup_diagnostics must include the injected diagnostic: {diagnostics:?}"
+    );
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_session_info_surfaces_startup_diagnostics() {
+    let diagnostic = "package disabled at runtime: rpc demo diagnostic".to_string();
+    let (command_tx, mut output_rx, task) = runner_with_runtime_packages(
+        MockProvider::new("mock", Vec::new()),
+        ExtensionRegistry::new(),
+        vec![diagnostic.clone()],
+    );
+
+    let _header = recv_rpc_line(&mut output_rx).await;
+    command_tx
+        .send(RpcCommand::session_info {
+            id: Some("diag-1".into()),
+        })
+        .unwrap();
+    let resp = recv_response(&mut output_rx, "session_info").await;
+    assert_eq!(resp["success"], true);
+    let diagnostics = resp["data"]["resources"]["diagnostics"]
+        .as_array()
+        .expect("session_info resources.diagnostics");
+    assert!(
+        diagnostics.iter().any(|d| d.as_str() == Some(&diagnostic)),
+        "session_info resources.diagnostics must include the injected diagnostic: {diagnostics:?}"
+    );
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 (task 6.5): adapter-backed command consistency through RPC.
+//
+// Adapter-backed commands route through the shared
+// CodingHarness::dispatch_extension_command abstraction (rpc.rs calls it for
+// every extension_command). A stateful add->list sequence against a real
+// process adapter proves the shared dispatch path maintains adapter state
+// consistently through the RPC command path. (NonInteractive/CLI have no
+// extension-command dispatch, so consistency is proven at the shared
+// abstraction the RPC path relies on.)
+// ---------------------------------------------------------------------------
+
+async fn start_todo_registry() -> (Arc<AdapterHost>, ExtensionRegistry) {
+    let config = AdapterProcessConfig {
+        command: test_binary_path("package_adapter_example"),
+        args: vec!["todo".to_string()],
+        working_dir: std::env::current_dir().expect("cwd"),
+        env: vec![],
+    };
+    let host = AdapterHost::start("todo", config, Duration::from_secs(10))
+        .await
+        .expect("start adapter");
+    let caps = host.capabilities().clone();
+    let host = Arc::new(host);
+    let adapter = ProcessAdapter::from_host("todo", host.clone(), caps);
+    let mut registry = ExtensionRegistry::new();
+    registry.register(Box::new(adapter)).expect("register");
+    (host, registry)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_adapter_backed_commands_dispatch_consistently_through_shared_abstraction() {
+    let (_host, registry) = start_todo_registry().await;
+    let (command_tx, mut output_rx, task) =
+        runner_with_runtime_packages(MockProvider::new("mock", Vec::new()), registry, Vec::new());
+    let _header = recv_rpc_line(&mut output_rx).await;
+
+    command_tx
+        .send(RpcCommand::extension_command {
+            id: Some("add-1".into()),
+            name: "todo/add".into(),
+            args: serde_json::json!({"title": "rpc todo", "description": "consistent"}),
+        })
+        .unwrap();
+    let add_resp = recv_response(&mut output_rx, "extension_command").await;
+    assert_eq!(
+        add_resp["success"], true,
+        "todo/add should succeed: {add_resp}"
+    );
+    assert_eq!(add_resp["id"], "add-1");
+
+    command_tx
+        .send(RpcCommand::extension_command {
+            id: Some("list-1".into()),
+            name: "todo/list".into(),
+            args: serde_json::json!({}),
+        })
+        .unwrap();
+    let list_resp = recv_response(&mut output_rx, "extension_command").await;
+    assert_eq!(
+        list_resp["success"], true,
+        "todo/list should succeed: {list_resp}"
+    );
+    assert_eq!(list_resp["id"], "list-1");
+    let items = list_resp["data"]["items"]
+        .as_array()
+        .expect("todo/list data.items");
+    assert!(
+        items.iter().any(|item| item["title"] == "rpc todo"),
+        "todo/list through the RPC dispatch abstraction must reflect the prior todo/add: {items:?}"
+    );
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
 }

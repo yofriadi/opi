@@ -243,7 +243,7 @@ paths = ["vendor/my-package"]
 
 ## 会话
 
-会话由 `SessionCoordinator` 自动持久化。
+会话由 `SessionCoordinator` 自动持久化。session JSONL 是一种 Rust 原生格式，表示 pi 会话概念的精选子集（分支、压缩、消息历史、扩展状态）；它不保证 pi session v3 的文件兼容性。
 
 默认存储位置：
 
