@@ -657,3 +657,364 @@ fn phase6_future_backlog_is_non_committal() {
         "Phase 6 baseline backlog must state it is not committed next-phase scope"
     );
 }
+
+// ===========================================================================
+// Phase 6 task 6.6: alignment guards and final Phase 6 gates.
+//
+// These guards implement the Phase 6 design Workstream 6 (Alignment Guards),
+// Success Criteria 7 (guards prevent overclaiming deferred pi ecosystem
+// features), Success Criteria 9 (no npm/marketplace/OAuth-parity/pi-web-ui
+// parity/permission-enforcement/TS-extension-compat/new-shared-type-crate is
+// added in Phase 6), and the DoD's expanded coverage of every Phase 6 non-goal.
+//
+// Negative doc guards reject current-phase claims for each non-goal. Because
+// the docs are already clean, these guards also serve as regression guards;
+// each is written so a hypothetical positive claim (e.g. "opi supports OAuth
+// parity") would fail while legitimate negations ("OAuth remains a separate
+// product decision") pass. Negative code guards assert that no non-goal
+// implementation exists in the workspace. A positive guard keeps the Phase 5
+// MVP adapter capability surface documented.
+// ===========================================================================
+
+/// Helper: the repository root (two levels up from the test crate).
+fn repo_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// Helper: assert that no file in `files` positively claims the forbidden
+/// `needle`. Uses [`no_positive_claim`] so legitimate negations pass.
+fn assert_docs_reject_claim(files: &[&str], needle: &str, what: &str) {
+    for path in files {
+        let content = read_repo_file(path);
+        assert!(
+            no_positive_claim(&content, needle),
+            "{path} must not positively claim {what}; forbidden phrase {needle:?} appeared outside a negation context"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Negative doc guards: deferred ecosystem features must not be claimed complete
+// ---------------------------------------------------------------------------
+
+#[test]
+fn docs_do_not_claim_package_update_enable_disable() {
+    // Phase 5 ships add/remove/list/doctor only. update/enable/disable are
+    // deferred ecosystem candidates and must not be claimed as commands.
+    let files = [
+        "README.md",
+        "README.zh.md",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+    ];
+    for needle in [
+        "opi package update",
+        "opi package enable",
+        "opi package disable",
+        "update a package",
+        "enable a package",
+        "disable a package",
+        "package 更新",
+        "package 启用",
+        "package 禁用",
+    ] {
+        assert_docs_reject_claim(&files, needle, "a package update/enable/disable command");
+    }
+}
+
+#[test]
+fn docs_do_not_claim_bundled_js_ts_runtime() {
+    // The core binary must not bundle a Node.js/TypeScript/jiti runtime.
+    let files = [
+        "README.md",
+        "README.zh.md",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+    ];
+    for needle in [
+        "bundled Node",
+        "bundled TypeScript",
+        "bundled JavaScript",
+        "bundled Node.js",
+        "bundles Node",
+        "bundles TypeScript",
+        "jiti runtime",
+        "Node.js runtime",
+        "TypeScript runtime",
+        "JavaScript runtime",
+        "ships Node",
+        "includes Node.js",
+        "embeds Node",
+        "内置 Node",
+        "内置 TypeScript",
+        "内置 JavaScript",
+    ] {
+        assert_docs_reject_claim(&files, needle, "a bundled Node.js/TypeScript/jiti runtime");
+    }
+}
+
+#[test]
+fn docs_do_not_claim_ts_extension_api_compat() {
+    // opi is not TypeScript-extension-API compatible with pi.
+    let files = [
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+    ];
+    // "TypeScript extension API" / "TypeScript-compatible" scope the claim to the
+    // extension surface; the bare "TypeScript API compatibility" phrase is
+    // intentionally avoided because docs legitimately disclaim it ("It is not a
+    // TypeScript API compatibility checklist").
+    for needle in [
+        "TypeScript extension API",
+        "TypeScript extension compatibility",
+        "TypeScript-compatible",
+    ] {
+        assert_docs_reject_claim(&files, needle, "TypeScript extension API compatibility");
+    }
+}
+
+#[test]
+fn docs_do_not_claim_pi_session_v3_compat() {
+    // opi session JSONL is Rust-native and does not promise pi session v3
+    // read/write file compatibility.
+    let files = [
+        "README.md",
+        "README.zh.md",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+    ];
+    for needle in [
+        "pi session v3 compatibility",
+        "session v3 read/write compatibility",
+        "supports pi session v3",
+        "reads pi session v3",
+        "writes pi session v3",
+        "兼容 pi session v3",
+    ] {
+        assert_docs_reject_claim(&files, needle, "pi session v3 file compatibility");
+    }
+}
+
+#[test]
+fn docs_do_not_claim_pi_web_ui_parity() {
+    // opi-web-ui is an unpublished Rust component crate, not pi-web-ui parity.
+    let files = [
+        "README.md",
+        "README.zh.md",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+    ];
+    for needle in [
+        "pi-web-ui parity",
+        "web-ui parity",
+        "pi web ui parity",
+        "parity with pi-web-ui",
+    ] {
+        assert_docs_reject_claim(&files, needle, "pi-web-ui parity");
+    }
+}
+
+#[test]
+fn docs_do_not_claim_broad_oauth_provider_parity() {
+    // OAuth and broad provider coverage are deferred/separate product decisions.
+    let files = [
+        "README.md",
+        "README.zh.md",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+    ];
+    for needle in [
+        "OAuth parity",
+        "provider parity",
+        "parity with OAuth",
+        "broad OAuth",
+        "provider coverage parity",
+        "OAuth 对等",
+        "provider 对等",
+    ] {
+        assert_docs_reject_claim(&files, needle, "broad OAuth or provider parity");
+    }
+}
+
+#[test]
+fn docs_do_not_claim_opi_types_or_protocol_migration() {
+    // Adapter protocol types must stay in opi-coding-agent. Needles are scoped
+    // to positive migration/creation claims so the legitimate "Why There Is No
+    // opi-types" section is not tripped.
+    let files = [
+        "README.md",
+        "README.zh.md",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+    ];
+    for needle in [
+        "moved to opi-types",
+        "migrated to opi-types",
+        "introduced opi-types",
+        "opi-types crate",
+        "extracted into opi-types",
+        "shared opi-types crate",
+        "adapter protocol types now live in opi-types",
+    ] {
+        assert_docs_reject_claim(
+            &files,
+            needle,
+            "migration of adapter protocol types to an opi-types crate",
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Negative code guards: no Phase 6 non-goal implementation exists (SC 9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workspace_has_no_opi_types_crate() {
+    // Phase 6 forbids a shared types crate.
+    let cargo = read_repo_file("Cargo.toml");
+    assert!(
+        !cargo.contains("opi-types") && !cargo.contains("opi_types"),
+        "root Cargo.toml must not declare an opi-types workspace member or dependency"
+    );
+    assert!(
+        !repo_root().join("crates/opi-types").exists(),
+        "no crates/opi-types directory may exist (Phase 6 forbids a shared types crate)"
+    );
+}
+
+#[test]
+fn workspace_has_no_bundled_js_ts_runtime() {
+    // A bundled JS/TS runtime would pull in one of these crates. Phase 6 forbids it.
+    let cargo = read_repo_file("Cargo.toml");
+    for forbidden in [
+        "jiti",
+        "deno_core",
+        "deno_runtime",
+        "boa_engine",
+        "rquickjs",
+        "rusty_v8",
+        "swc",
+        "oxc",
+        "neon",
+        "napi",
+    ] {
+        assert!(
+            !cargo.contains(forbidden),
+            "root Cargo.toml must not depend on a JS/TS runtime crate ({forbidden}); Phase 6 forbids a bundled Node.js/TypeScript/jiti runtime"
+        );
+    }
+}
+
+#[test]
+fn first_class_provider_set_is_unchanged() {
+    // First-class providers arrive only as the known nine. Any additional
+    // provider module under opi-ai/src would indicate core provider broadening
+    // (a Phase 6 non-goal); custom providers must use runtime registration.
+    let providers_dir = repo_root().join("crates/opi-ai/src");
+    let known_providers: std::collections::BTreeSet<&str> = [
+        "anthropic",
+        "azure_openai",
+        "bedrock",
+        "gemini",
+        "mistral",
+        "openai_chat",
+        "openai_responses",
+        "openrouter",
+        "vertex",
+    ]
+    .into_iter()
+    .collect();
+    let infra: std::collections::BTreeSet<&str> = [
+        "lib",
+        "config",
+        "http",
+        "message",
+        "model",
+        "provider",
+        "registry",
+        "retry",
+        "stream",
+        "test_support",
+    ]
+    .into_iter()
+    .collect();
+
+    let mut actual_providers = std::collections::BTreeSet::<String>::new();
+    let entries = std::fs::read_dir(&providers_dir)
+        .unwrap_or_else(|e| panic!("failed to read opi-ai/src: {e}"));
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let stem = name.strip_suffix(".rs").map(str::to_owned).unwrap_or(name);
+        if infra.contains(stem.as_str()) {
+            continue;
+        }
+        assert!(
+            known_providers.contains(stem.as_str()),
+            "opi-ai/src has an unexpected module '{stem}'; the first-class provider set must stay at the nine known providers (a new first-class provider is a Phase 6 non-goal)"
+        );
+        actual_providers.insert(stem);
+    }
+    for provider in known_providers {
+        assert!(
+            actual_providers.contains(provider),
+            "expected first-class provider module '{provider}' is missing from opi-ai/src"
+        );
+    }
+}
+
+#[test]
+fn adapter_protocol_types_stay_in_coding_agent() {
+    // The adapter protocol module remains a coding-agent product surface and
+    // must not migrate into opi-agent or a shared crate during Phase 6.
+    let root = repo_root();
+    assert!(
+        root.join("crates/opi-coding-agent/src/adapter_protocol.rs")
+            .exists(),
+        "adapter_protocol.rs must remain in opi-coding-agent"
+    );
+    assert!(
+        !root
+            .join("crates/opi-agent/src/adapter_protocol.rs")
+            .exists(),
+        "opi-agent must not host adapter_protocol.rs; protocol types stay in opi-coding-agent"
+    );
+    let agent_cargo = read_repo_file("crates/opi-agent/Cargo.toml");
+    assert!(
+        !agent_cargo.contains("adapter_protocol"),
+        "opi-agent Cargo.toml must not reference adapter_protocol"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Positive guard: Phase 5 MVP adapter capability surface stays documented
+// ---------------------------------------------------------------------------
+
+#[test]
+fn docs_describe_phase5_adapter_capability_surface() {
+    let spec = read_repo_file("docs/opi-spec.md");
+    // Phase 5 adapters bridge the full capability surface; docs must keep
+    // stating each capability so the MVP claim remains truthful.
+    for term in [
+        "tools",
+        "commands",
+        "hooks",
+        "events",
+        "state",
+        "cancellation",
+    ] {
+        assert!(
+            spec.to_lowercase().contains(term),
+            "opi-spec must describe the Phase 5 adapter capability surface (missing: {term})"
+        );
+    }
+}
