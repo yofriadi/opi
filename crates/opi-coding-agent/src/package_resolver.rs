@@ -85,11 +85,32 @@ pub fn resolve_installed_packages(
 ) -> Result<InstalledPackageResolution, PackageResolverError> {
     let all = resolve_declared_installed_packages(workspace_root, user_config_dir)?;
     let mut by_name: HashMap<String, ResolvedInstalledPackage> = HashMap::new();
+    let mut diagnostics = all.diagnostics;
     for package in all.packages {
         let name = package.package.manifest.name.clone();
         match by_name.get(&name) {
+            // An equal-or-higher precedence package already owns this name.
             Some(existing)
-                if scope_precedence(existing.scope) >= scope_precedence(package.scope) => {}
+                if scope_precedence(existing.scope) >= scope_precedence(package.scope) =>
+            {
+                // A same-precedence collision is a degraded path: the later
+                // package (by declaration source order) is dropped at runtime.
+                // A higher-precedence override (e.g. project over global) is a
+                // legitimate precedence change handled by the `_` arm below and
+                // is not reported as a duplicate.
+                if scope_precedence(existing.scope) == scope_precedence(package.scope) {
+                    diagnostics.push(diagnostic(
+                        package.scope,
+                        &package.declaration.source,
+                        "duplicate_name",
+                        format!(
+                            "duplicate manifest name '{}' in scope {:?} \
+                             (already provided by '{}'); package is disabled at runtime",
+                            name, package.scope, existing.declaration.source
+                        ),
+                    ));
+                }
+            }
             _ => {
                 by_name.insert(name, package);
             }
@@ -105,7 +126,7 @@ pub fn resolve_installed_packages(
 
     Ok(InstalledPackageResolution {
         packages,
-        diagnostics: all.diagnostics,
+        diagnostics,
     })
 }
 
@@ -317,7 +338,7 @@ fn resolve_declaration(
             scope,
             &declaration.source,
             "lock_missing",
-            "package lock entry is missing".to_string(),
+            "package lock entry is missing; package is disabled at runtime".to_string(),
         ));
         return None;
     };
@@ -327,7 +348,11 @@ fn resolve_declaration(
             scope,
             &declaration.source,
             "lock_drifted",
-            "package manifest hash does not match the lock file".to_string(),
+            format!(
+                "package manifest hash does not match the lock file (expected {}, actual {}); \
+                 package is disabled at runtime",
+                lock.manifest_sha256, actual_hash
+            ),
         ));
         return None;
     }
@@ -339,7 +364,7 @@ fn resolve_declaration(
                 scope,
                 &declaration.source,
                 "discovery_failed",
-                e.to_string(),
+                format!("{e}; package is disabled at runtime"),
             ));
             return None;
         }
@@ -389,7 +414,7 @@ fn resolve_git_declaration(
             scope,
             &declaration.source,
             "lock_missing",
-            "package lock entry is missing".to_string(),
+            "package lock entry is missing; package is disabled at runtime".to_string(),
         ));
         return None;
     };
@@ -439,7 +464,11 @@ fn resolve_git_declaration(
             scope,
             &declaration.source,
             "lock_drifted",
-            "package manifest hash does not match the lock file".to_string(),
+            format!(
+                "package manifest hash does not match the lock file (expected {}, actual {}); \
+                 package is disabled at runtime",
+                lock.manifest_sha256, actual_hash
+            ),
         ));
         return None;
     }
@@ -451,7 +480,7 @@ fn resolve_git_declaration(
                 scope,
                 &declaration.source,
                 "discovery_failed",
-                e.to_string(),
+                format!("{e}; package is disabled at runtime"),
             ));
             return None;
         }

@@ -899,3 +899,96 @@ async fn harness_metadata_includes_adapter_extensions() {
         "adapter name should appear in extensions: {ext_names:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 14/15. Phase 6 (task 6.4) startup diagnostic contract.
+//
+// The design Error Handling section requires startup diagnostics to identify
+// the package name, adapter command when relevant, the expected/actual
+// protocol/kind, the timeout surface / exit code (carried by the wrapped
+// AdapterHostError Display, variant-tested in adapter_host.rs), and whether the
+// package is disabled at runtime. These tests pin the start_adapters_from_packages
+// diagnostic FORMATTING for the protocol gate and the shared startup-failure arm
+// through the production path. The InitializeTimeout / AdapterExited error
+// variants themselves (timeout value, exit code) are produced by AdapterHost::start
+// and ride through `{e}` unchanged; their content is covered by adapter_host.rs.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn adapter_unsupported_protocol_diagnostic_includes_command_and_disabled_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mock_bin = mock_adapter_bin();
+    let cmd_str = mock_bin.to_string_lossy().to_string();
+    let mut package = make_adapter_package("proto-cmd-pkg", mock_bin, 0, dir.path().to_path_buf());
+    package.manifest.adapter.as_mut().unwrap().protocol = "unknown-protocol".to_string();
+
+    let registry = ExtensionRegistry::new();
+    let (registry, diagnostics) =
+        start_adapters_from_packages(&[package], dir.path(), registry).await;
+
+    assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
+    let d = &diagnostics[0];
+    assert!(
+        d.contains("unsupported adapter protocol"),
+        "must keep the gate reason: {d}"
+    );
+    assert!(
+        d.contains("unknown-protocol"),
+        "must name the actual protocol: {d}"
+    );
+    assert!(
+        d.contains("adapter command"),
+        "must reference the adapter command: {d}"
+    );
+    assert!(
+        d.contains(&cmd_str),
+        "must name the resolved adapter command value: {d}"
+    );
+    assert!(
+        d.contains("disabled at runtime"),
+        "must declare disabled-at-runtime state: {d}"
+    );
+    assert!(
+        registry.collect_tools().is_empty(),
+        "unsupported-protocol package must not register an adapter"
+    );
+}
+
+#[tokio::test]
+async fn adapter_startup_failure_diagnostic_includes_command_and_disabled_state() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bad_bin = dir.path().join("nonexistent_adapter_binary_67890");
+    let cmd_str = bad_bin.to_string_lossy().to_string();
+    // SpawnFailed is one variant of the shared startup-failure arm; the same
+    // formatting wraps InitializeTimeout (timeout surface) and AdapterExited
+    // (exit code), whose variant content is variant-tested in adapter_host.rs.
+    let package = make_adapter_package("bad-cmd-pkg", bad_bin, 0, dir.path().to_path_buf());
+
+    let registry = ExtensionRegistry::new();
+    let (registry, diagnostics) =
+        start_adapters_from_packages(&[package], dir.path(), registry).await;
+
+    assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
+    let d = &diagnostics[0];
+    assert!(d.contains("bad-cmd-pkg"), "must name the package: {d}");
+    assert!(
+        d.contains("adapter startup failed"),
+        "must keep the startup-failure reason prefix: {d}"
+    );
+    assert!(
+        d.contains("adapter command"),
+        "must reference the adapter command: {d}"
+    );
+    assert!(
+        d.contains(&cmd_str),
+        "must name the resolved adapter command value: {d}"
+    );
+    assert!(
+        d.contains("disabled at runtime"),
+        "must declare disabled-at-runtime state: {d}"
+    );
+    assert!(
+        registry.collect_tools().is_empty(),
+        "failed-startup package must not register an adapter"
+    );
+}
