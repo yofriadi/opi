@@ -12,9 +12,10 @@ use std::time::Duration;
 use opi_agent::extension::{Extension, ExtensionCommand, ExtensionHookResult, ExtensionRegistry};
 use opi_agent::hooks::{AgentHooks, BeforeToolCallContext, PrepareNextTurnContext};
 use opi_agent::message::AgentMessage;
-use opi_coding_agent::adapter_extension::ProcessAdapter;
+use opi_coding_agent::adapter_extension::{ProcessAdapter, start_adapters_from_packages};
 use opi_coding_agent::adapter_host::{AdapterHost, AdapterProcessConfig};
 use opi_coding_agent::adapter_protocol::AdapterHostMessage;
+use opi_coding_agent::package_discovery::{AdapterManifest, PackageManifest, PackageResource};
 
 // ---------------------------------------------------------------------------
 // Noop hooks for composite hook testing
@@ -538,4 +539,136 @@ async fn adapter_transform_context_can_rewrite_messages() {
         }
         other => panic!("expected custom message, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Protocol gate diagnostics (task 6.3).
+//
+// `start_adapters_from_packages` validates the adapter protocol and kind from
+// the manifest BEFORE spawning any child process. The protocol/kind gate is
+// the honest 0.x "version negotiation": a package whose manifest declares a
+// protocol other than `opi-extension-jsonl-v1` (or a kind other than
+// `process-jsonl`) is skipped and produces a diagnostic. The diagnostic must
+// name the expected and actual values so a package author can see what the
+// host accepts, not just what was rejected.
+//
+// These tests exercise the production `start_adapters_from_packages` path
+// directly (no mock binary needed: the gate runs before spawn).
+// ---------------------------------------------------------------------------
+
+/// Build a `PackageResource` whose `[adapter]` manifest has the given protocol
+/// and kind. The command is a never-reached placeholder because the protocol
+/// and kind gates run before command resolution and process spawn.
+fn make_gated_package(
+    name: &str,
+    protocol: &str,
+    kind: &str,
+    package_dir: PathBuf,
+) -> PackageResource {
+    let toml_path = package_dir.join("package.toml");
+    PackageResource {
+        manifest: PackageManifest {
+            name: name.to_string(),
+            description: format!("Gated package {name}"),
+            version: None,
+            opi_version: None,
+            adapter: Some(AdapterManifest {
+                kind: kind.to_string(),
+                command: "never-reached-placeholder".to_string(),
+                args: vec![],
+                protocol: protocol.to_string(),
+                timeout_ms: None,
+            }),
+            extensions: None,
+            skills: None,
+            fragments: None,
+            themes: None,
+            disabled: vec![],
+        },
+        path: package_dir,
+        package_toml_path: toml_path,
+        layer_precedence: 0,
+    }
+}
+
+#[tokio::test]
+async fn start_adapters_unsupported_protocol_diagnostic_names_expected_and_actual() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = make_gated_package(
+        "proto-pkg",
+        "unknown-protocol",
+        "process-jsonl",
+        dir.path().to_path_buf(),
+    );
+
+    let registry = ExtensionRegistry::new();
+    let (registry, diagnostics) =
+        start_adapters_from_packages(&[package], dir.path(), registry).await;
+
+    assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
+    let diag = &diagnostics[0];
+
+    // The diagnostic must name the rejected package.
+    assert!(
+        diag.contains("proto-pkg"),
+        "diagnostic must name the package: {diag:?}"
+    );
+
+    // It must name the expected protocol so authors know what the host accepts.
+    assert!(
+        diag.contains("opi-extension-jsonl-v1"),
+        "diagnostic must name the expected protocol `opi-extension-jsonl-v1`: {diag:?}"
+    );
+
+    // It must name the actual (rejected) protocol.
+    assert!(
+        diag.contains("unknown-protocol"),
+        "diagnostic must name the actual protocol `unknown-protocol`: {diag:?}"
+    );
+
+    // The package is skipped at the gate, so no adapter is registered.
+    assert!(
+        registry.collect_tools().is_empty(),
+        "unsupported-protocol package must not register an adapter"
+    );
+}
+
+#[tokio::test]
+async fn start_adapters_unsupported_kind_diagnostic_names_expected_and_actual() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = make_gated_package(
+        "kind-pkg",
+        "opi-extension-jsonl-v1",
+        "websocket",
+        dir.path().to_path_buf(),
+    );
+
+    let registry = ExtensionRegistry::new();
+    let (registry, diagnostics) =
+        start_adapters_from_packages(&[package], dir.path(), registry).await;
+
+    assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
+    let diag = &diagnostics[0];
+
+    assert!(
+        diag.contains("kind-pkg"),
+        "diagnostic must name the package: {diag:?}"
+    );
+
+    // The diagnostic must name the expected kind.
+    assert!(
+        diag.contains("process-jsonl"),
+        "diagnostic must name the expected kind `process-jsonl`: {diag:?}"
+    );
+
+    // It must name the actual (rejected) kind.
+    assert!(
+        diag.contains("websocket"),
+        "diagnostic must name the actual kind `websocket`: {diag:?}"
+    );
+
+    assert!(
+        registry.collect_tools().is_empty(),
+        "unsupported-kind package must not register an adapter"
+    );
 }

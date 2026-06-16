@@ -37,11 +37,19 @@
 //!
 //! # Version Negotiation
 //!
-//! The host sends its protocol version in the `initialize` message. The adapter
-//! responds with `capabilities` only if it supports the same version. If the
-//! version does not match, the host disables the runtime adapter and static
-//! package resources still load. Version negotiation is **exact-match** in the
-//! Phase 5 MVP.
+//! There is no runtime version handshake over the wire. Protocol selection is a
+//! startup-time gate: `start_adapters_from_packages` reads the `[adapter]`
+//! `protocol` string from the package manifest and only starts adapters whose
+//! `protocol` equals [`PROTOCOL_VERSION`] (`opi-extension-jsonl-v1`) and whose
+//! `kind` is `process-jsonl`. A package declaring any other protocol or kind is
+//! skipped with a diagnostic that names the expected and actual values; its
+//! static package resources still load.
+//!
+//! The `initialize` message carries the host's [`PROTOCOL_VERSION`] for
+//! information, but [`AdapterProcessMessage::Capabilities`] has no version
+//! field, so the host does not compare a version echoed by the adapter. This is
+//! the honest 0.x behavior: a single exact manifest-string match, not a
+//! negotiated range.
 //!
 //! # Failure Semantics
 //!
@@ -67,7 +75,9 @@ use serde::{Deserialize, Serialize};
 /// Protocol version string for the JSONL adapter protocol.
 ///
 /// Must match the `protocol` field in the package manifest `[adapter]` table
-/// exactly. The host validates this during initialization handshake.
+/// exactly. The host validates the manifest `[adapter].protocol` string against
+/// this value at adapter startup, before spawning the process handshake; the
+/// capabilities response carries no version field.
 pub const PROTOCOL_VERSION: &str = "opi-extension-jsonl-v1";
 
 // ---------------------------------------------------------------------------

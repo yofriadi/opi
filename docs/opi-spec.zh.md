@@ -850,17 +850,29 @@ Package 是受信任代码。安装 package 后，其 adapter 子进程会以与
 
 ### 10.2 进程 Adapter
 
-带有 `[adapter]` 声明的 package 以子进程 adapter 方式运行。第五阶段 MVP 支持 `process-jsonl` adapter 类型和 `opi-extension-jsonl-v1` 协议。
+带有 `[adapter]` 声明的 package 以子进程 adapter 方式运行。第五阶段 MVP 支持 `process-jsonl` adapter 类型和 `opi-extension-jsonl-v1` 协议。此处记录的行为是**诚实的 0.x 协议**：它记录的是当前实现实际观察到的行为，而非稳定的 1.0 契约，次版本之间可能变更。
+
+协议与类型的校验是**启动期的 manifest 门控**，而非线路握手。运行时启动时，`start_adapters_from_packages` 只启动 manifest 中声明 `protocol = "opi-extension-jsonl-v1"` 且 `kind = "process-jsonl"` 的 adapter。声明其他值的 package 会被跳过，并产生一条同时指明期望值与实际值（协议或类型）的诊断；该 package 的静态资源仍会加载。`initialize` 消息携带 host 协议字符串仅作信息用途，但 `capabilities` 响应不携带版本字段，因此 host 不会在线路上进行版本比较。
+
+Adapter 按确定性的顺序启动：按 `(layer_precedence, package 名称)` 升序，使工具与 hook 的组合在不同会话间可复现。
 
 Adapter 生命周期：
 
 1. harness 使用配置的命令和参数启动 adapter 子进程。
-2. harness 发送 `initialize` 消息；adapter 回复 `capabilities`（工具、命令、hooks）。
-3. 运行时，harness 将 adapter 能力桥接到现有 `Extension` trait 方法：`on_command`、`on_before_tool_call`、`on_after_tool_call`、`on_event`、`serialize_state`、`restore_state`。
+2. harness 发送 `initialize` 消息；adapter 回复 `capabilities`（工具、命令、hooks、model overrides）。
+3. 运行时，harness 将 adapter 能力桥接到现有 `Extension` trait 方法：`on_command`、`on_before_tool_call`、`on_after_tool_call`、`on_event`、`serialize_state`、`restore_state`。只有 adapter 在 `capabilities.hooks` 中声明过的 hook 才会被分发。
 4. adapter 工具合并到工具集中；adapter hooks 通过 `ExtensionRegistry::wrap_hooks` 与 `CodingAgentHooks` 组合。
 5. 关闭时，harness 发送 `shutdown` 消息并回收子进程。
 
-Adapter 协议消息：`initialize`、`capabilities`、`tool`、`command`、`hook`、`event`、`state_serialize`、`state_restore`、`cancel`、`shutdown`。所有消息都是通过 stdin/stdout 的单行 JSON，带有相关联的 `id` 字段。
+请求/响应关联：请求 id 由 host 生成。每个请求携带一个 `id`；adapter 在响应中返回同一个 `id`。响应按 `id` 匹配到在途请求，无主消息（例如不带 `id` 的 `error`）会被忽略。
+
+超时与取消：initialize 握手有启动超时，每个请求有独立的请求超时。若握手超时或 adapter 在启动期间退出，该 adapter 不会被注册并产生诊断。若单个请求超时，该请求以超时错误失败，host 仍可继续使用。`cancel` 是尽力而为且不要求响应；host 仍会强制执行本地超时。`before_tool_call` hook 超时时失败关闭（阻止该工具）；`after_tool_call` hook 超时时失败放行（结果保留）。
+
+事件与状态：`event` 是即发即弃；若 adapter 的 stdin 被背压，事件会被丢弃并记录诊断。`state_serialize` 与 `state_restore` 往返 adapter 状态用于会话持久化。
+
+关闭与崩溃：`shutdown` 是尽力而为；host 在宽限超时后回收子进程，若子进程未退出则强制终止。若 adapter 进程在成功握手后退出，在途请求以不可用失败，运行时 adapter 进入降级状态。
+
+Adapter 协议消息：`initialize`、`capabilities`、`tool_call`、`command`、`hook`、`event`、`state_serialize`、`state_restore`、`cancel`、`shutdown`。所有消息都是通过 stdin/stdout 的单行 JSON，带有相关联的 `id` 字段。
 
 未被路由到已注册 extension 的 adapter 命令可通过 RPC `extension_command` 分发使用。
 

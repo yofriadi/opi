@@ -410,6 +410,8 @@ opi package remove todo
 
 `add` and `remove` write the user-level package store by default; pass `--local` to write project-local `.opi/packages.toml`. Runtime startup resolves installed declarations, validates lock state, and starts valid `[adapter]` packages that use the `process-jsonl` kind and `opi-extension-jsonl-v1` protocol.
 
+The `process-jsonl` adapter protocol is an **unstable 0.x contract**. `docs/opi-spec.md` §10.2 documents the observed lifecycle, deterministic startup order, request-id correlation, timeouts, best-effort cancellation, fire-and-forget events, state serialize/restore, shutdown, and crash behavior. Protocol and kind are validated as a startup-time manifest gate: a package whose `[adapter]` declares any other protocol or kind is skipped with a diagnostic naming the expected and actual values, while its static resources still load.
+
 ## Skills
 
 Skills are progressively discovered from project, user, explicit, and package resources. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter.

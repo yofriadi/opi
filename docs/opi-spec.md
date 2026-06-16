@@ -915,17 +915,29 @@ Packages are trusted code. Installing a package can run adapter child processes 
 
 ### 10.2 Process Adapters
 
-Packages with an `[adapter]` section in their manifest run as child process adapters. The Phase 5 MVP supports the `process-jsonl` adapter kind with the `opi-extension-jsonl-v1` protocol.
+Packages with an `[adapter]` section in their manifest run as child process adapters. The Phase 5 MVP supports the `process-jsonl` adapter kind with the `opi-extension-jsonl-v1` protocol. The behavior documented here is the **honest 0.x protocol**: it records what the implementation observes today, not a stable 1.0 contract, and may change between minor versions.
+
+Protocol and kind are validated as a **startup-time manifest gate**, not a wire handshake. At runtime startup, `start_adapters_from_packages` only starts adapters whose manifest declares `protocol = "opi-extension-jsonl-v1"` and `kind = "process-jsonl"`. A package declaring any other value is skipped with a diagnostic that names the expected and actual protocol or kind; its static package resources still load. The `initialize` message carries the host protocol string for information, but the `capabilities` response carries no version field, so the host performs no version comparison over the wire.
+
+Adapters are started in a **deterministic order**: ascending by `(layer_precedence, package name)`, which makes tool and hook composition reproducible across sessions.
 
 Adapter lifecycle:
 
 1. The harness starts the adapter child process with the configured command and args.
-2. The harness sends an `initialize` message; the adapter responds with `capabilities` (tools, commands, hooks).
-3. At runtime, the harness bridges adapter capabilities into existing `Extension` trait methods: `on_command`, `on_before_tool_call`, `on_after_tool_call`, `on_event`, `serialize_state`, `restore_state`.
+2. The harness sends an `initialize` message; the adapter responds with `capabilities` (tools, commands, hooks, model overrides).
+3. At runtime, the harness bridges adapter capabilities into existing `Extension` trait methods: `on_command`, `on_before_tool_call`, `on_after_tool_call`, `on_event`, `serialize_state`, `restore_state`. Hooks are only dispatched to adapters that declared them in `capabilities.hooks`.
 4. Adapter tools are merged into the tool set; adapter hooks are composed with `CodingAgentHooks` via `ExtensionRegistry::wrap_hooks`.
 5. On shutdown, the harness sends a `shutdown` message and reaps the child process.
 
-Adapter protocol messages: `initialize`, `capabilities`, `tool`, `command`, `hook`, `event`, `state_serialize`, `state_restore`, `cancel`, `shutdown`. All messages are single-line JSON over stdin/stdout with correlated `id` fields.
+Request/response correlation: the host owns request id generation. Each request carries an `id`; the adapter returns the same `id` on its response. Responses are matched to in-flight requests by `id`, and unsolicited messages (for example an `error` with no `id`) are ignored.
+
+Timeouts and cancellation: the initialize handshake has a startup timeout, and each request has a per-request timeout. If the handshake times out or the adapter exits during startup, the adapter is not registered and a diagnostic is produced. If an individual request times out, it fails with a timeout error and the host remains usable. `cancel` is best-effort and carries no response; the host still enforces the local timeout. A `before_tool_call` hook that times out fails closed (the tool is blocked); an `after_tool_call` hook that times out fails open (the result stands).
+
+Events and state: `event` is fire-and-forget; if the adapter's stdin is backpressured, the event is dropped and a diagnostic is recorded. `state_serialize` and `state_restore` round-trip adapter state for session persistence.
+
+Shutdown and crashes: `shutdown` is best-effort; the host reaps the child process after a grace timeout, killing it if it has not exited. If the adapter process exits after a successful handshake, pending requests fail as unavailable and the runtime adapter becomes degraded.
+
+Adapter protocol messages: `initialize`, `capabilities`, `tool_call`, `command`, `hook`, `event`, `state_serialize`, `state_restore`, `cancel`, `shutdown`. All messages are single-line JSON over stdin/stdout with correlated `id` fields.
 
 Adapter commands that are not routed to a registered extension are available through the RPC `extension_command` dispatch.
 

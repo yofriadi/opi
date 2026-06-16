@@ -780,7 +780,7 @@ pub async fn start_adapters_from_packages(
         // Validate protocol
         if adapter.protocol != "opi-extension-jsonl-v1" {
             diagnostics.push(format!(
-                "package '{}': unsupported adapter protocol '{}'",
+                "package '{}': unsupported adapter protocol '{}' (expected 'opi-extension-jsonl-v1')",
                 package.manifest.name, adapter.protocol
             ));
             continue;
@@ -789,7 +789,7 @@ pub async fn start_adapters_from_packages(
         // Validate kind
         if adapter.kind != "process-jsonl" {
             diagnostics.push(format!(
-                "package '{}': unsupported adapter kind '{}'",
+                "package '{}': unsupported adapter kind '{}' (expected 'process-jsonl')",
                 package.manifest.name, adapter.kind
             ));
             continue;

@@ -368,6 +368,8 @@ opi package remove todo
 
 `add` 和 `remove` 默认写入用户级 package store；传入 `--local` 时写入项目本地 `.opi/packages.toml`。运行时启动会解析已安装声明、校验 lock 状态，并启动有效的 `[adapter]` package；当前支持的 adapter kind 是 `process-jsonl`，协议是 `opi-extension-jsonl-v1`。
 
+`process-jsonl` adapter 协议是**不稳定的 0.x 契约**。`docs/opi-spec.md` 第 10.2 节记录了实际观察到的生命周期、确定性启动顺序、请求 id 关联、超时、尽力而为的取消、即发即弃事件、状态序列化/恢复、关闭以及崩溃行为。协议与类型作为启动期的 manifest 门控进行校验：若某 package 的 `[adapter]` 声明了其他协议或类型，会被跳过并产生一条同时指明期望值与实际值的诊断，而其静态资源仍会加载。
+
 ## 技能（Skills）
 
 技能通过渐进式发现从项目、用户、显式和包资源中加载。每个技能是一个包含 `SKILL.md` 文件的目录，`SKILL.md` 使用 YAML frontmatter。
