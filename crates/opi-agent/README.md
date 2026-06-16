@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.5.0`.
+Current crate version: `0.5.1`.
 
 `opi-agent` provides the provider-independent runtime used by the `opi` binary. It handles the turn loop, JSON Schema validation for tools, parallel/sequential tool execution, retry-aware provider streaming, image-capability checks, event subscriptions, steering/follow-up queues, JSONL session storage, branch reconstruction from session leaves, threshold/manual/overflow compaction primitives, SDK/RPC command and response types, extension hooks/tools/state, and transport-agnostic streaming proxy support.
 

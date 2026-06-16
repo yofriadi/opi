@@ -1,7 +1,13 @@
-//! Documentation guard tests for the Phase 5 productized extension/package ecosystem.
+//! Documentation guard tests for the productized extension/package ecosystem
+//! and the Phase 6 documentation-truth and version-synchronization workstreams.
 //!
-//! These tests verify that user-facing documentation describes the Phase 5 MVP
-//! truthfully and does NOT claim features that are not implemented.
+//! The Phase 5 tests verify that user-facing documentation describes the Phase 5
+//! MVP truthfully and does NOT claim features that are not implemented. The
+//! Phase 6 tests verify that current-state documentation identifies the
+//! workspace/crate state at the current released version (matching the
+//! workspace version) while historical release rows stay historical, and that
+//! English and Chinese counterparts carry the same current-version and
+//! opi-web-ui scope claims.
 
 use std::path::Path;
 
@@ -413,5 +419,140 @@ fn spec_en_zh_both_have_phase_five() {
     assert_eq!(
         en_has, zh_has,
         "EN and ZH opi-specs must both include Phase 5"
+    );
+}
+
+// ===========================================================================
+// Phase 6 guards: documentation truth and version synchronization
+//
+// Phase 6 Success Criteria 1 and 2 require current-state documentation to
+// identify the workspace/crate state at the current released version (matching
+// the workspace version) while historical release rows stay historical, and
+// require English and Chinese counterparts to carry the same current-version
+// and opi-web-ui scope claims. Lockstep versioning makes the compiled crate
+// version the single source of truth, so both tests read it from
+// `env!("CARGO_PKG_VERSION")` rather than hardcoding a number.
+// ===========================================================================
+
+#[test]
+fn phase6_current_docs_match_workspace_version() {
+    // Lockstep versioning: every crate shares the workspace version, so the
+    // compiled crate version is the authoritative current version the docs that
+    // describe the *current* implementation must match. Historical release
+    // records (CHANGELOG sections, roadmap rows) are exempt and stay historical.
+    let version = env!("CARGO_PKG_VERSION");
+
+    // Root README names the current workspace version.
+    let readme = read_repo_file("README.md");
+    assert!(
+        readme.contains(&format!("Current workspace version: `{version}`")),
+        "README must name the current workspace version `{version}`"
+    );
+
+    // Each publishable crate README names its current crate version.
+    for crate_name in [
+        "opi-ai",
+        "opi-agent",
+        "opi-tui",
+        "opi-coding-agent",
+        "opi-web-ui",
+    ] {
+        let crate_readme = read_repo_file(&format!("crates/{crate_name}/README.md"));
+        assert!(
+            crate_readme.contains(&format!("Current crate version: `{version}`")),
+            "{crate_name} README must name the current crate version `{version}`"
+        );
+    }
+
+    // opi-spec describes the current workspace, not a historical release, in its
+    // Document Control "Current implementation" row, its Current Baseline
+    // versioning row, and its Phase 4/5 status lines.
+    let spec = read_repo_file("docs/opi-spec.md");
+    let current_impl = spec
+        .lines()
+        .find(|line| line.contains("Current implementation"))
+        .expect("opi-spec must have a Current implementation row");
+    assert!(
+        current_impl.contains(&format!("{version} workspace")),
+        "opi-spec Current implementation row must describe the {version} workspace, got: {current_impl}"
+    );
+    assert!(
+        spec.contains(&format!("| Versioning | lockstep `{version}` |")),
+        "opi-spec Current Baseline versioning must be lockstep `{version}`"
+    );
+    assert!(
+        spec.contains(&format!("current `{version}` workspace")),
+        "opi-spec Phase 4/5 status lines must reference the current `{version}` workspace"
+    );
+
+    // The alignment matrix P0 row advances the current version.
+    assert!(
+        read_repo_file("docs/pi-alignment-matrix.md")
+            .contains(&format!("Current docs describe the `{version}` workspace")),
+        "pi-alignment-matrix P0 row must describe the current `{version}` workspace"
+    );
+
+    // Historical 0.5.0 release row is preserved, not rewritten to the current version.
+    assert!(
+        read_repo_file("CHANGELOG.md").contains("## [0.5.0]"),
+        "CHANGELOG must preserve the historical 0.5.0 release section"
+    );
+}
+
+#[test]
+fn phase6_localized_docs_stay_in_sync() {
+    // Every Phase 6 current-version / opi-web-ui-scope claim made in English
+    // documentation must be carried by its Chinese counterpart in the same form.
+    // Assertions are per-language and positive, so a stale-but-matched pair
+    // (both EN and ZH wrong) cannot satisfy the sync requirement.
+    let version = env!("CARGO_PKG_VERSION");
+
+    // Root README.
+    assert!(
+        read_repo_file("README.zh.md").contains(&format!("当前 workspace 版本：`{version}`")),
+        "README.zh must name the current workspace version `{version}`"
+    );
+
+    // Publishable crate READMEs.
+    for crate_name in [
+        "opi-ai",
+        "opi-agent",
+        "opi-tui",
+        "opi-coding-agent",
+        "opi-web-ui",
+    ] {
+        let crate_readme_zh = read_repo_file(&format!("crates/{crate_name}/README.zh.md"));
+        assert!(
+            crate_readme_zh.contains(&format!("当前 crate 版本：`{version}`")),
+            "{crate_name} README.zh must name the current crate version `{version}`"
+        );
+    }
+
+    // opi-spec Document Control "Current implementation" row.
+    let spec_zh = read_repo_file("docs/opi-spec.zh.md");
+    assert!(
+        spec_zh
+            .lines()
+            .any(|line| line.contains("当前实现") && line.contains(&format!("{version} workspace"))),
+        "opi-spec.zh Current implementation row must reference the {version} workspace"
+    );
+
+    // Alignment matrix P0 row.
+    assert!(
+        read_repo_file("docs/pi-alignment-matrix.zh.md")
+            .contains(&format!("当前文档描述 `{version}` workspace")),
+        "pi-alignment-matrix.zh P0 row must describe the current `{version}` workspace"
+    );
+
+    // opi-web-ui scope: English and Chinese both describe it only as an
+    // unpublished reusable Rust component/state/rendering crate, never a
+    // standalone browser app or pi-web-ui parity surface.
+    assert!(
+        read_repo_file("crates/opi-web-ui/README.md").contains("not a standalone browser app"),
+        "opi-web-ui README must deny it is a standalone browser app"
+    );
+    assert!(
+        read_repo_file("crates/opi-web-ui/README.zh.md").contains("不是独立浏览器应用"),
+        "opi-web-ui README.zh must deny it is a standalone browser app"
     );
 }

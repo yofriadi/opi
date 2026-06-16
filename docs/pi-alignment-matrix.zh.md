@@ -70,7 +70,7 @@
 
 | 优先级 | 领域 | 原因 | 目标结果 |
 |---:|---|---|---|
-| P0 | 文档事实 | 版本和阶段状态必须匹配 `Cargo.toml` 与 `CHANGELOG.md`。 | 当前文档描述 `0.5.0` workspace，历史 `0.4.0` 行保持历史含义。 |
+| P0 | 文档事实 | 版本和阶段状态必须匹配 `Cargo.toml` 与 `CHANGELOG.md`。 | 当前文档描述 `0.5.1` workspace，历史 `0.5.0` 行保持历史含义。 |
 | P1 | Session tree | 同文件 branch continuation 现在已有运行时 `parent_id` 和 `leaf` 覆盖，但 `pi` 仍有更完整的 tree 产品工作流。 | 改善 branch metadata display 和更高层 package/workflow integration。 |
 | P1 | Extension/package execution | Packages 能组合资源，已注册 extensions 能通过 RPC/SDK 路由 commands，但被发现的 packages 仍不会自动变成可执行 workflow。 | 外部 packages 能通过 process/RPC adapters 暴露执行能力，而不修补核心。 |
 | P1 | Provider profiles | OpenAI-compatible profiles 和 model metadata 已走 config + registry。 | 保持 profile expansion policy 文档化；OAuth providers 单独跟踪。 |

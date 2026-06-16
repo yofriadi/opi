@@ -11,7 +11,7 @@
 | Last updated | 2026-06-08 |
 | Repository | `https://github.com/OdradekAI/opi` |
 | Upstream studied | `pi` 0.75.3 at `.repo/pi-0.75.3/` |
-| Current implementation | `opi` 0.5.0 workspace, Phase 5 productized extension/package ecosystem implemented |
+| Current implementation | `opi` 0.5.1 workspace, Phase 5 productized extension/package ecosystem implemented |
 | Next milestone | API stabilization and broader adapter protocol support |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
@@ -132,12 +132,12 @@ The maintained package/phase drift ledger lives in
 
 ## 4. Current Baseline
 
-### 4.1 Version 0.5.0
+### 4.1 Version 0.5.1
 
 | Area | Current state |
 |---|---|
 | Workspace | five crates under one Cargo workspace |
-| Versioning | lockstep `0.5.0` |
+| Versioning | lockstep `0.5.1` |
 | Edition | Rust 2024 |
 | Internal dependencies | `opi-agent -> opi-ai`, `opi-web-ui` has no internal dependencies, `opi-coding-agent -> opi-ai + opi-agent + opi-tui` |
 | External dependencies | Rust-native async, HTTP/SSE, schema, config, TUI, search, tracing, and test stacks from workspace dependencies |
@@ -1053,6 +1053,7 @@ All crates share one workspace version.
 | 0.3.0 | Phase 2 persistence/providers | GitHub + crates.io |
 | 0.4.0 | Phase 3 production hardening | GitHub + crates.io |
 | 0.5.0 workspace | Phase 4 extensibility substrate | GitHub + crates.io for publishable crates; `opi-web-ui` remains unpublished |
+| 0.5.1 workspace | Phase 5 productized extension/package ecosystem | GitHub + crates.io for publishable crates; `opi-web-ui` remains unpublished |
 
 The first crates.io publish is gated by quality, not by the version number alone.
 It MAY happen at 0.2.0 if all published crates expose real, documented behavior
@@ -1183,7 +1184,7 @@ Exit criteria: enterprise providers work, image and terminal-image flows work, p
 
 ### Phase 4 - Extensibility Substrate
 
-Status: substrate implemented in the current `0.5.0` workspace.
+Status: substrate implemented in the current `0.5.1` workspace.
 
 Phase 4 is ordered so the reusable substrate lands before workflow-heavy
 features. Later tasks may depend on earlier tasks, but examples must not become
@@ -1207,7 +1208,7 @@ Exit criteria: third parties can compose and extend opi through RPC, SDK, extens
 
 ### Phase 5 - Productized Extension/Package Ecosystem
 
-Status: implemented in the current `0.5.0` workspace.
+Status: implemented in the current `0.5.1` workspace.
 
 Phase 5 adds package management and executable adapter hosting so that external packages can provide tools, commands, hooks, and events through child process adapters without patching core crates.
 

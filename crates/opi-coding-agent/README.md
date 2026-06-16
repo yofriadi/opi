@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.5.0`.
+Current crate version: `0.5.1`.
 
 This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, RPC JSONL mode, nine built-in provider prefixes plus configured OpenAI-compatible profiles, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session/branch/tree pickers, interactive session fork/clone, shell completion generation, context file loading, session persistence, resume/fork/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, progressive resource discovery for packages/extensions/skills/fragments/themes, package add/remove/list/doctor commands, process-jsonl package adapters, retry, token usage totals, and best-effort cost summaries.
 
@@ -313,7 +313,7 @@ opi --rpc
 On startup, `opi` emits a `rpc_ready` header:
 
 ```json
-{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.0"}
+{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.1"}
 ```
 
 Commands are JSON objects sent to stdin, one per line. Responses and events are JSON objects emitted to stdout, one per line. Diagnostics go to stderr.
