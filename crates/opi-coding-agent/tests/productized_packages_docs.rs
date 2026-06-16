@@ -556,3 +556,104 @@ fn phase6_localized_docs_stay_in_sync() {
         "opi-web-ui README.zh must deny it is a standalone browser app"
     );
 }
+
+// ===========================================================================
+// Phase 6 task 6.2: Phase 6 baseline audit and future ecosystem backlog
+//
+// The Phase 6 baseline (docs/snapshots/phase6/audit-baseline.md) is a
+// maintainer-facing, point-in-time audit record that classifies every Phase 5
+// audit finding against the 0.5.1 codebase. It names the audited release
+// (0.5.1) and baseline commit (693c2e7) literally, treats the three Phase 5
+// audit files as immutable read-only inputs, reconciles the disagreement
+// between the audits, and must NOT claim the contested product-loop findings
+// are closed -- they remain open Phase 6 tasks. Its Future Ecosystem backlog
+// must be explicitly non-committal. EN-only, matching the Phase 5 audit
+// convention (the task owns no localized paths).
+// ===========================================================================
+
+#[test]
+fn phase6_baseline_audit_is_complete() {
+    let baseline = read_repo_file("docs/snapshots/phase6/audit-baseline.md");
+
+    // Point-in-time audit record: names the audited release and commit literally.
+    assert!(
+        baseline.contains("0.5.1"),
+        "Phase 6 baseline must name the audited 0.5.1 release"
+    );
+    assert!(
+        baseline.contains("693c2e7"),
+        "Phase 6 baseline must name the audit baseline commit 693c2e7"
+    );
+
+    // The three Phase 5 audits are immutable read-only inputs.
+    for input in ["audit.codex.md", "audit.glm5.1.md", "audit.opus4.6.md"] {
+        assert!(
+            baseline.contains(input),
+            "Phase 6 baseline must reference the immutable Phase 5 audit input {input}"
+        );
+    }
+    assert!(
+        baseline.contains("immutable"),
+        "Phase 6 baseline must state the Phase 5 audit inputs are immutable"
+    );
+
+    // Every finding is classified into exactly one of four buckets.
+    for bucket in [
+        "Closed by 0.5.1",
+        "Accepted design difference",
+        "Phase 6 task",
+        "Future ecosystem candidate",
+    ] {
+        assert!(
+            baseline.contains(bucket),
+            "Phase 6 baseline must define the classification bucket: {bucket}"
+        );
+    }
+
+    // The contested product-loop findings map to OPEN Phase 6 tasks, never
+    // claimed closed (product-loop integrity: substrate findings do not close
+    // runtime acceptance scenarios).
+    for task in ["6.3", "6.4", "6.5"] {
+        assert!(
+            baseline.contains(task),
+            "Phase 6 baseline must classify the contested Phase 5 findings under open Phase 6 task {task}"
+        );
+    }
+}
+
+#[test]
+fn phase6_future_backlog_is_non_committal() {
+    let baseline = read_repo_file("docs/snapshots/phase6/audit-baseline.md");
+
+    // The backlog section exists.
+    assert!(
+        baseline.to_lowercase().contains("future ecosystem"),
+        "Phase 6 baseline must include a Future Ecosystem candidate backlog section"
+    );
+
+    // The backlog lists representative deferred ecosystem candidates (all are
+    // Phase 6 non-goals, framed here as non-committal future candidates).
+    for candidate in [
+        "enable/disable",
+        "update",
+        "npm",
+        "OAuth",
+        "sandbox",
+        "web-ui",
+    ] {
+        assert!(
+            baseline.contains(candidate),
+            "Phase 6 baseline future backlog must list candidate: {candidate}"
+        );
+    }
+
+    // The backlog is explicitly non-committal, never a next-phase promise.
+    assert!(
+        baseline.contains("non-committal"),
+        "Phase 6 baseline backlog must be explicitly non-committal"
+    );
+    assert!(
+        baseline.contains("not committed next-phase scope"),
+        "Phase 6 baseline backlog must state it is not committed next-phase scope"
+    );
+}
