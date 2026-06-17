@@ -5,7 +5,7 @@
     "docs/superpowers/specs/2026-06-15-phase6-alignment-hardening-design.md"
   ],
   "spec_files_sha256": {
-    "docs/opi-spec.md": "9a34e8707d75d376eb67f0d2db4a4df983d1d02eec93f471d54e9a17cf6def8c",
+    "docs/opi-spec.md": "0ebb6a55a8e87dd5416b7dc797ef2dcda71c457bc5178a22ea995bca2cac8fac",
     "docs/superpowers/specs/2026-06-15-phase6-alignment-hardening-design.md": "a3e818f8dcbc465e8ae8e77eb36ac824823c623b24df8a42af6c0d02a7c0dde5"
   },
   "task_graph_confirmed_at": "2026-06-16T02:37:57Z",
@@ -1497,7 +1497,10 @@
           "verified_at_commit": "d78c28fc1a627c658437ff299d675191005919dc"
         }
       ],
-      "audit_notes": []
+      "audit_notes": [
+        "Audit note (2026-06-17): Post-exit reconciliation. The 2026-06-16 exit evaluator_summary above predates independent Phase 6 audit fixes (see docs/snapshots/phase6/audit.{codex,glm5.2,opus4.6}.md and docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md) landed 2026-06-17: AGENTS.md/CLAUDE.md bumped to 0.5.1 (SC1); pi-alignment-matrix.zh.md backfilled the Phase 5 row plus process-JSONL adapter content (SC2); audit-baseline.md was rewritten as a Final Reconciliation that reclassifies the stale 'open' Phase 5 findings as closed by tasks 6.3-6.6 (SC3); and CodingHarness::dispatch_extension_command now restores and persists extension state so command-only RPC sessions survive restart (SC6/H8). The SC2 and SC3 deliverables are now substantively correct; the 2026-06-16 summary should be read in this reconciliation context.",
+        "Deferred (non-blocking, per the three Phase 6 audits): H4 init-timeout/process-exit variant content is still asserted via host-layer wildcards rather than driven through start_adapters_from_packages; M1 diagnostic rows still emit adapter_command: null; M4 the opi-spec 9.3 entry-type table still lists types the 4-variant SessionEntry enum does not persist (Phase 11); M9 the live ledger spec-hash has no commit-time gate; N1 was the missing CHANGELOG [0.5.1] link (fixed 2026-06-17). Graceful production teardown of installed adapter packages remains best-effort kill-on-drop by documented contract."
+      ]
     }
   }
 }

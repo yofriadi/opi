@@ -934,7 +934,7 @@ Adapter lifecycle:
 2. The harness sends an `initialize` message; the adapter responds with `capabilities` (tools, commands, hooks, model overrides).
 3. At runtime, the harness bridges adapter capabilities into existing `Extension` trait methods: `on_command`, `on_before_tool_call`, `on_after_tool_call`, `on_event`, `serialize_state`, `restore_state`. Hooks are only dispatched to adapters that declared them in `capabilities.hooks`.
 4. Adapter tools are merged into the tool set; adapter hooks are composed with `CodingAgentHooks` via `ExtensionRegistry::wrap_hooks`.
-5. On shutdown, the harness sends a `shutdown` message and reaps the child process.
+5. Ordinary registry teardown is best-effort kill-only and does not guarantee a protocol `shutdown` handshake; explicit `AdapterHost::shutdown` is the graceful protocol path.
 
 Request/response correlation: the host owns request id generation. Each request carries an `id`; the adapter returns the same `id` on its response. Responses are matched to in-flight requests by `id`, and unsolicited messages (for example an `error` with no `id`) are ignored.
 
@@ -942,7 +942,7 @@ Timeouts and cancellation: the initialize handshake has a startup timeout, and e
 
 Events and state: `event` is fire-and-forget; if the adapter's stdin is backpressured, the event is dropped and a diagnostic is recorded. `state_serialize` and `state_restore` round-trip adapter state for session persistence.
 
-Shutdown and crashes: `shutdown` is best-effort; the host reaps the child process after a grace timeout, killing it if it has not exited. If the adapter process exits after a successful handshake, pending requests fail as unavailable and the runtime adapter becomes degraded.
+Shutdown and crashes: Explicit `AdapterHost::shutdown` sends a best-effort `shutdown` message, waits through a grace timeout, and kills the child if it has not exited. Ordinary registry teardown is best-effort kill-only because process adapters are held through shared registry references. If the adapter process exits after a successful handshake, pending requests fail as unavailable and the runtime adapter becomes degraded.
 
 Adapter protocol messages: `initialize`, `capabilities`, `tool_call`, `command`, `hook`, `event`, `state_serialize`, `state_restore`, `cancel`, `shutdown`. All messages are single-line JSON over stdin/stdout with correlated `id` fields.
 

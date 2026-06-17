@@ -249,6 +249,121 @@ async fn extension_state_persists_to_session_jsonl_after_mutating_turn() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn command_only_extension_state_persists_to_session_jsonl() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let header = make_header("sess-command-persist", &dir.path().display().to_string());
+
+    let user = user_entry("msg-1", None, "seed turn");
+    let mut writer = SessionWriter::create(&path, header).unwrap();
+    writer.append(&user).unwrap();
+    drop(writer);
+    let entries = vec![user];
+
+    let (_host, registry) = start_todo_registry().await;
+    let provider = MockProvider::new("mock", vec![test_support::text_response("unused")]);
+    let resume = ResumeInfo {
+        path: path.clone(),
+        session_id: "sess-command-persist".into(),
+        entries,
+        original_cwd: dir.path().to_path_buf(),
+    };
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        dir.path().to_path_buf(),
+    )
+    .resume(resume)
+    .extension_registry(registry)
+    .build();
+
+    harness
+        .dispatch_extension_command(
+            "todo/add",
+            None,
+            serde_json::json!({"title": "command persisted", "description": "state"}),
+        )
+        .await
+        .expect("todo/add dispatch");
+
+    let (_header, readback) = SessionReader::read_all(&path).unwrap();
+    let state_entry = readback
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ExtensionState(ext_state) => Some(ext_state),
+            _ => None,
+        })
+        .expect("command-only mutation should persist an ExtensionState entry");
+    let items = state_entry.state["todo"]["items"]
+        .as_array()
+        .expect("serialized todo items");
+    assert!(
+        items
+            .iter()
+            .any(|item| item["title"] == "command persisted"),
+        "command-only persisted state must contain the mutated todo item: {items:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn command_only_extension_command_restores_pending_session_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let header = make_header("sess-command-restore", &dir.path().display().to_string());
+
+    let user = user_entry("msg-1", None, "seed turn");
+    let state = SessionEntry::ExtensionState(ExtensionStateEntry {
+        id: "state-1".to_string(),
+        parent_id: Some("msg-1".to_string()),
+        timestamp: "2026-06-09T00:00:01Z".to_string(),
+        state: serde_json::json!({
+            "todo": {
+                "items": [{
+                    "id": "todo-1",
+                    "title": "command restored",
+                    "description": "state",
+                    "status": "pending"
+                }],
+                "next_id": 2
+            }
+        }),
+    });
+    let mut writer = SessionWriter::create(&path, header).unwrap();
+    writer.append(&user).unwrap();
+    writer.append(&state).unwrap();
+    drop(writer);
+    let entries = vec![user, state];
+
+    let (_host, registry) = start_todo_registry().await;
+    let provider = MockProvider::new("mock", vec![test_support::text_response("unused")]);
+    let resume = ResumeInfo {
+        path,
+        session_id: "sess-command-restore".into(),
+        entries,
+        original_cwd: dir.path().to_path_buf(),
+    };
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        dir.path().to_path_buf(),
+    )
+    .resume(resume)
+    .extension_registry(registry)
+    .build();
+
+    let list = harness
+        .dispatch_extension_command("todo/list", None, serde_json::json!({}))
+        .await
+        .expect("todo/list dispatch")
+        .expect("todo list result");
+    let items = list["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["title"], "command restored");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn resumed_extension_state_is_restored_before_adapter_command() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session.jsonl");

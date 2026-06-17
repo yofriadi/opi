@@ -1192,22 +1192,27 @@ impl CodingHarness {
 
     /// Dispatch a custom command to registered extensions.
     pub async fn dispatch_extension_command(
-        &self,
+        &mut self,
         name: &str,
         id: Option<&str>,
         args: serde_json::Value,
     ) -> Result<Option<serde_json::Value>, String> {
-        let Some(registry) = self.extension_registry.as_ref() else {
+        let Some(registry) = self.extension_registry.clone() else {
             return Ok(None);
         };
+        self.restore_pending_extension_state().await;
         let mut command = opi_agent::extension::ExtensionCommand::new(name, args);
         if let Some(id) = id {
             command = command.with_id(id);
         }
-        registry
+        let result = registry
             .dispatch_command(&command)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        if result.is_some() {
+            self.persist_extension_state().await;
+        }
+        Ok(result)
     }
 
     fn defer_extension_state_from_entries(&mut self, entries: &[opi_agent::session::SessionEntry]) {

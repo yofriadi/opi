@@ -658,7 +658,7 @@ async fn harness_builder_dispatches_extension_commands() {
     registry.register(Box::new(CommandExtension)).unwrap();
     let workspace = tempfile::tempdir().unwrap();
 
-    let harness = CodingHarness::builder(
+    let mut harness = CodingHarness::builder(
         Box::new(MockProvider::new("mock", vec![text_response("Done")])),
         "mock:mock-model".into(),
         OpiConfig::default(),

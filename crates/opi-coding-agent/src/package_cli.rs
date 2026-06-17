@@ -16,7 +16,7 @@ use crate::package_discovery::{PackageManifest, resolve_adapter_command_checked}
 use crate::package_resolver::{
     InstalledPackageResolution, InstalledPackageScope, PackageDiagnostic,
     PackageDiagnosticSeverity, ResolvedInstalledPackage, git_lock_entry, local_lock_entry,
-    resolve_declared_installed_packages, resolve_local_source_path,
+    resolve_installed_packages, resolve_local_source_path,
 };
 use crate::package_store::{
     PackageDeclaration, PackageLockEntry, PackageSource, PackageStore, PackageStoreError,
@@ -247,7 +247,7 @@ fn cmd_list(
     user_config_dir: &Path,
     json: bool,
 ) -> Result<(), PackageStoreError> {
-    let resolution = resolve_declared_installed_packages(workspace_root, user_config_dir)
+    let resolution = resolve_installed_packages(workspace_root, user_config_dir)
         .map_err(|e| PackageStoreError::Package(e.to_string()))?;
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -293,7 +293,7 @@ fn cmd_doctor(
     user_config_dir: &Path,
     json: bool,
 ) -> Result<(), PackageStoreError> {
-    let resolution = resolve_declared_installed_packages(workspace_root, user_config_dir)
+    let resolution = resolve_installed_packages(workspace_root, user_config_dir)
         .map_err(|e| PackageStoreError::Package(e.to_string()))?;
     let has_errors = resolution
         .diagnostics

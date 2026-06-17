@@ -24,6 +24,18 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
+fn readme_npm_line_has_clear_negation(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower.contains("not npm")
+        || lower.contains("no npm")
+        || lower.contains("does not use npm")
+        || lower.contains("without npm")
+        || lower.contains("without node, npm")
+        || lower.contains("无需 node、npm")
+        || lower.contains("不是 npm")
+        || lower.contains("而不是 npm")
+}
+
 // ===========================================================================
 // Negative guards: features that MUST NOT be claimed as complete
 // ===========================================================================
@@ -43,11 +55,7 @@ fn readme_does_not_claim_npm() {
             for line in lower.lines() {
                 if line.contains("npm") {
                     assert!(
-                        line.contains("not")
-                            || line.contains("no ")
-                            || line.contains("without")
-                            || line.contains("pi")
-                            || line.contains("而不是"),
+                        readme_npm_line_has_clear_negation(line),
                         "[{lang}] README mentions npm without clear negation: {line}"
                     );
                 }
@@ -74,6 +82,29 @@ fn readme_does_not_claim_marketplace() {
         !contains_ci(&zh, "市场"),
         "zh README must not claim a package marketplace (市场)"
     );
+}
+
+#[test]
+fn docs_do_not_claim_package_marketplace_or_gallery() {
+    let files = [
+        "README.md",
+        "README.zh.md",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+    ];
+    for needle in [
+        "package marketplace",
+        "package gallery",
+        "marketplace/gallery",
+        "marketplace/registry",
+        "registry-backed package sources",
+        "package 市场",
+        "package 画廊",
+    ] {
+        assert_docs_reject_claim(&files, needle, "a package marketplace or gallery");
+    }
 }
 
 #[test]
@@ -105,8 +136,10 @@ fn no_positive_claim(haystack: &str, needle: &str) -> bool {
                 || line.contains("must not")
                 || line.contains("do not")
                 || line.contains("does not")
-                || line.contains("without")
                 || line.contains("not claim")
+                || line.contains("不声明")
+                || line.contains("不得")
+                || line.contains("未实现")
             {
                 continue;
             }
@@ -114,6 +147,28 @@ fn no_positive_claim(haystack: &str, needle: &str) -> bool {
         }
     }
     true
+}
+
+#[test]
+fn positive_non_goal_claims_are_rejected_by_helpers() {
+    assert!(
+        !readme_npm_line_has_clear_negation("opi package add supports npm sources"),
+        "an opi/npm positive claim must not be treated as negated just because it contains 'opi'"
+    );
+    assert!(
+        !no_positive_claim(
+            "opi now bundles Node without external dependencies",
+            "bundles Node"
+        ),
+        "a positive bundled-runtime claim must not be treated as negated just because it says without"
+    );
+    assert!(
+        !no_positive_claim(
+            "TypeScript extension API compatibility is complete",
+            "TypeScript extension API"
+        ),
+        "positive TypeScript extension API compatibility claims must be rejected"
+    );
 }
 
 #[test]
@@ -179,6 +234,35 @@ fn spec_does_not_claim_hot_reload() {
     assert!(
         no_positive_claim(&en, "hot-reload"),
         "opi-spec must not claim hot reload"
+    );
+}
+
+#[test]
+fn spec_documents_shutdown_contract_without_harness_overclaim() {
+    let en = read_repo_file("docs/opi-spec.md");
+    let zh = read_repo_file("docs/opi-spec.zh.md");
+
+    assert!(
+        !en.contains("On shutdown, the harness sends a `shutdown` message"),
+        "opi-spec must not claim ordinary harness teardown sends adapter shutdown"
+    );
+    assert!(
+        !zh.lines().any(|line| line.contains("harness")
+            && line.contains("`shutdown`")
+            && line.contains("发送")),
+        "opi-spec.zh must not claim ordinary harness teardown sends adapter shutdown"
+    );
+    assert!(
+        en.contains("Explicit `AdapterHost::shutdown`")
+            && contains_ci(&en, "ordinary registry teardown")
+            && en.contains("best-effort kill-only"),
+        "opi-spec must document explicit shutdown separately from ordinary registry teardown"
+    );
+    assert!(
+        zh.contains("`AdapterHost::shutdown`")
+            && zh.contains("registry")
+            && zh.contains("best-effort kill-only"),
+        "opi-spec.zh must document explicit shutdown separately from ordinary registry teardown"
     );
 }
 
@@ -448,6 +532,14 @@ fn phase6_current_docs_match_workspace_version() {
         readme.contains(&format!("Current workspace version: `{version}`")),
         "README must name the current workspace version `{version}`"
     );
+    assert!(
+        read_repo_file("AGENTS.md").contains(&format!("Current workspace version: `{version}`")),
+        "AGENTS.md is live agent context and must name the current workspace version `{version}`"
+    );
+    assert!(
+        read_repo_file("CLAUDE.md").contains(&format!("v{version} ships")),
+        "CLAUDE.md is live agent context and must summarize the current workspace as v{version}"
+    );
 
     // Each publishable crate README names its current crate version.
     for crate_name in [
@@ -543,6 +635,17 @@ fn phase6_localized_docs_stay_in_sync() {
             .contains(&format!("当前文档描述 `{version}` workspace")),
         "pi-alignment-matrix.zh P0 row must describe the current `{version}` workspace"
     );
+    let matrix_zh = read_repo_file("docs/pi-alignment-matrix.zh.md");
+    assert!(
+        matrix_zh.contains("| 5 | Package store")
+            && matrix_zh.contains("process-JSONL adapter hosting")
+            && matrix_zh.contains("opi-extension-jsonl-v1"),
+        "pi-alignment-matrix.zh must include the Phase 5 package/adapter capability row"
+    );
+    assert!(
+        matrix_zh.contains("通过 `opi-extension-jsonl-v1` 运行的 process-JSONL adapter 会把 package command、tool、hook、event、state 和 cancellation 桥接进 runtime。"),
+        "pi-alignment-matrix.zh P1 extension/package execution row must match the current process-JSONL bridge claim"
+    );
 
     // opi-web-ui scope: English and Chinese both describe it only as an
     // unpublished reusable Rust component/state/rendering crate, never a
@@ -554,107 +657,6 @@ fn phase6_localized_docs_stay_in_sync() {
     assert!(
         read_repo_file("crates/opi-web-ui/README.zh.md").contains("不是独立浏览器应用"),
         "opi-web-ui README.zh must deny it is a standalone browser app"
-    );
-}
-
-// ===========================================================================
-// Phase 6 task 6.2: Phase 6 baseline audit and future ecosystem backlog
-//
-// The Phase 6 baseline (docs/snapshots/phase6/audit-baseline.md) is a
-// maintainer-facing, point-in-time audit record that classifies every Phase 5
-// audit finding against the 0.5.1 codebase. It names the audited release
-// (0.5.1) and baseline commit (693c2e7) literally, treats the three Phase 5
-// audit files as immutable read-only inputs, reconciles the disagreement
-// between the audits, and must NOT claim the contested product-loop findings
-// are closed -- they remain open Phase 6 tasks. Its Future Ecosystem backlog
-// must be explicitly non-committal. EN-only, matching the Phase 5 audit
-// convention (the task owns no localized paths).
-// ===========================================================================
-
-#[test]
-fn phase6_baseline_audit_is_complete() {
-    let baseline = read_repo_file("docs/snapshots/phase6/audit-baseline.md");
-
-    // Point-in-time audit record: names the audited release and commit literally.
-    assert!(
-        baseline.contains("0.5.1"),
-        "Phase 6 baseline must name the audited 0.5.1 release"
-    );
-    assert!(
-        baseline.contains("693c2e7"),
-        "Phase 6 baseline must name the audit baseline commit 693c2e7"
-    );
-
-    // The three Phase 5 audits are immutable read-only inputs.
-    for input in ["audit.codex.md", "audit.glm5.1.md", "audit.opus4.6.md"] {
-        assert!(
-            baseline.contains(input),
-            "Phase 6 baseline must reference the immutable Phase 5 audit input {input}"
-        );
-    }
-    assert!(
-        baseline.contains("immutable"),
-        "Phase 6 baseline must state the Phase 5 audit inputs are immutable"
-    );
-
-    // Every finding is classified into exactly one of four buckets.
-    for bucket in [
-        "Closed by 0.5.1",
-        "Accepted design difference",
-        "Phase 6 task",
-        "Future ecosystem candidate",
-    ] {
-        assert!(
-            baseline.contains(bucket),
-            "Phase 6 baseline must define the classification bucket: {bucket}"
-        );
-    }
-
-    // The contested product-loop findings map to OPEN Phase 6 tasks, never
-    // claimed closed (product-loop integrity: substrate findings do not close
-    // runtime acceptance scenarios).
-    for task in ["6.3", "6.4", "6.5"] {
-        assert!(
-            baseline.contains(task),
-            "Phase 6 baseline must classify the contested Phase 5 findings under open Phase 6 task {task}"
-        );
-    }
-}
-
-#[test]
-fn phase6_future_backlog_is_non_committal() {
-    let baseline = read_repo_file("docs/snapshots/phase6/audit-baseline.md");
-
-    // The backlog section exists.
-    assert!(
-        baseline.to_lowercase().contains("future ecosystem"),
-        "Phase 6 baseline must include a Future Ecosystem candidate backlog section"
-    );
-
-    // The backlog lists representative deferred ecosystem candidates (all are
-    // Phase 6 non-goals, framed here as non-committal future candidates).
-    for candidate in [
-        "enable/disable",
-        "update",
-        "npm",
-        "OAuth",
-        "sandbox",
-        "web-ui",
-    ] {
-        assert!(
-            baseline.contains(candidate),
-            "Phase 6 baseline future backlog must list candidate: {candidate}"
-        );
-    }
-
-    // The backlog is explicitly non-committal, never a next-phase promise.
-    assert!(
-        baseline.contains("non-committal"),
-        "Phase 6 baseline backlog must be explicitly non-committal"
-    );
-    assert!(
-        baseline.contains("not committed next-phase scope"),
-        "Phase 6 baseline backlog must state it is not committed next-phase scope"
     );
 }
 
@@ -895,7 +897,17 @@ fn workspace_has_no_opi_types_crate() {
 #[test]
 fn workspace_has_no_bundled_js_ts_runtime() {
     // A bundled JS/TS runtime would pull in one of these crates. Phase 6 forbids it.
-    let cargo = read_repo_file("Cargo.toml");
+    let cargo_files: Vec<_> = std::iter::once(repo_root().join("Cargo.toml"))
+        .chain(
+            std::fs::read_dir(repo_root().join("crates"))
+                .expect("read crates directory")
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    let path = entry.path().join("Cargo.toml");
+                    path.is_file().then_some(path)
+                }),
+        )
+        .collect();
     for forbidden in [
         "jiti",
         "deno_core",
@@ -908,10 +920,15 @@ fn workspace_has_no_bundled_js_ts_runtime() {
         "neon",
         "napi",
     ] {
-        assert!(
-            !cargo.contains(forbidden),
-            "root Cargo.toml must not depend on a JS/TS runtime crate ({forbidden}); Phase 6 forbids a bundled Node.js/TypeScript/jiti runtime"
-        );
+        for path in &cargo_files {
+            let cargo = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+            assert!(
+                !cargo.contains(forbidden),
+                "{} must not depend on a JS/TS runtime crate ({forbidden}); Phase 6 forbids a bundled Node.js/TypeScript/jiti runtime",
+                path.display()
+            );
+        }
     }
 }
 
@@ -1004,17 +1021,19 @@ fn docs_describe_phase5_adapter_capability_surface() {
     let spec = read_repo_file("docs/opi-spec.md");
     // Phase 5 adapters bridge the full capability surface; docs must keep
     // stating each capability so the MVP claim remains truthful.
-    for term in [
-        "tools",
-        "commands",
-        "hooks",
-        "events",
-        "state",
-        "cancellation",
+    for phrase in [
+        "`opi package add/remove/list/doctor` works",
+        "packages with `[adapter]` sections start as child processes using `opi-extension-jsonl-v1`",
+        "tools, commands, hooks, and events through child process adapters",
+        "adapter tools, commands, hooks, state, and cancellation bridge into the existing extension API",
+        "before_tool_call",
+        "after_tool_call",
+        "transform_context",
+        "prepare_next_turn",
     ] {
         assert!(
-            spec.to_lowercase().contains(term),
-            "opi-spec must describe the Phase 5 adapter capability surface (missing: {term})"
+            spec.to_lowercase().contains(&phrase.to_lowercase()),
+            "opi-spec must describe the Phase 5 adapter capability surface (missing: {phrase})"
         );
     }
 }

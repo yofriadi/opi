@@ -864,7 +864,7 @@ Adapter 生命周期：
 2. harness 发送 `initialize` 消息；adapter 回复 `capabilities`（工具、命令、hooks、model overrides）。
 3. 运行时，harness 将 adapter 能力桥接到现有 `Extension` trait 方法：`on_command`、`on_before_tool_call`、`on_after_tool_call`、`on_event`、`serialize_state`、`restore_state`。只有 adapter 在 `capabilities.hooks` 中声明过的 hook 才会被分发。
 4. adapter 工具合并到工具集中；adapter hooks 通过 `ExtensionRegistry::wrap_hooks` 与 `CodingAgentHooks` 组合。
-5. 关闭时，harness 发送 `shutdown` 消息并回收子进程。
+5. 普通 registry teardown 是 best-effort kill-only，不保证发送协议 `shutdown`；显式 `AdapterHost::shutdown` 才是带协议握手的关闭路径。
 
 请求/响应关联：请求 id 由 host 生成。每个请求携带一个 `id`；adapter 在响应中返回同一个 `id`。响应按 `id` 匹配到在途请求，无主消息（例如不带 `id` 的 `error`）会被忽略。
 
@@ -872,7 +872,7 @@ Adapter 生命周期：
 
 事件与状态：`event` 是即发即弃；若 adapter 的 stdin 被背压，事件会被丢弃并记录诊断。`state_serialize` 与 `state_restore` 往返 adapter 状态用于会话持久化。
 
-关闭与崩溃：`shutdown` 是尽力而为；host 在宽限超时后回收子进程，若子进程未退出则强制终止。若 adapter 进程在成功握手后退出，在途请求以不可用失败，运行时 adapter 进入降级状态。
+关闭与崩溃：显式 `AdapterHost::shutdown` 会发送尽力而为的 `shutdown` 消息，等待宽限超时，并在子进程未退出时强制终止。普通 registry teardown 是 best-effort kill-only，因为 process adapter 通过共享 registry 引用持有。若 adapter 进程在成功握手后退出，在途请求以不可用失败，运行时 adapter 进入降级状态。
 
 Adapter 协议消息：`initialize`、`capabilities`、`tool_call`、`command`、`hook`、`event`、`state_serialize`、`state_restore`、`cancel`、`shutdown`。所有消息都是通过 stdin/stdout 的单行 JSON，带有相关联的 `id` 字段。
 

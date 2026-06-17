@@ -26,7 +26,7 @@
 |---|---|---|---|---|
 | `@earendil-works/pi-ai` | `opi-ai` | 部分 | 已有核心 provider streaming、provider registry、model metadata、image input、usage/cost、retry、proxy、custom provider/model registration，以及 config-driven OpenAI-compatible profiles。`pi` 仍有更广的一等 provider、OAuth provider 和 image generation 表面。 | 只有 wire protocol 或 auth model 明显不同时才增加一等 provider；OAuth 保持为单独产品决策。 |
 | `@earendil-works/pi-agent-core` | `opi-agent` | 完整 | agent loop 语义、hooks、tool batching、queues、sessions、compaction、SDK types、extensions 和 streaming proxy primitives 均有体现。public surface 保留在 `lib.rs`，loop internals 已移入 `agent_loop.rs`。 | 保持 runtime internals 聚焦且更深，但不引入 shared types crate。 |
-| `@earendil-works/pi-coding-agent` | `opi-coding-agent` | 部分 | CLI modes、built-in tools、config、sessions、context files、images、JSON/RPC、resources、packages、skills、prompt fragments、themes、custom provider registration、RPC extension commands、`/tree`、`/fork`、`/clone`、`--fork`，以及通过运行时 `parent_id`/`leaf` 条目的同文件活跃分支 continuation 已存在。产品工作流广度仍窄于 `pi`。 | 优先补 package-manager workflow 和外部 process/RPC package adapters。 |
+| `@earendil-works/pi-coding-agent` | `opi-coding-agent` | 部分 | CLI modes、built-in tools、config、sessions、context files、images、JSON/RPC、resources、packages、skills、prompt fragments、themes、custom provider registration、RPC extension commands、`/tree`、`/fork`、`/clone`、`--fork`、同文件活跃分支 continuation、`opi package add/remove/list/doctor` CLI、带 `[adapter]` 声明的 manifest V2、通过 `opi-extension-jsonl-v1` 运行的 `process-jsonl` adapter hosting，以及 adapter-to-runtime bridge 均已存在。产品工作流广度仍窄于 `pi`。 | 保持 adapter protocol 演进；API 稳定后再增加更广的 adapter kind。 |
 | `@earendil-works/pi-tui` | `opi-tui` | 有意偏离 | `opi-tui` 使用 `ratatui`/`crossterm` widgets，没有复制 `pi` 的 TypeScript terminal renderer。已有 transcript、markdown/code、diff、pickers、branch picker、themes、keybindings、terminal-image primitives，以及 branch/session picker 的 CJK display-width snapshot 覆盖。 | 除非单独决定做可复用 TUI 产品，否则保持 coding-agent 所需范围。 |
 | `@earendil-works/pi-web-ui` | `opi-web-ui` | 有意偏离 | `opi-web-ui` 是未发布的 Rust event/state/component/rendering crate，不是 `pi-web-ui` 那种独立 browser component package。 | 保持 `publish = false`，在单独 web-app 计划前只描述为 RPC/SDK consumer surface。 |
 
@@ -55,16 +55,17 @@
 | 3 | `find` / `ls`、completions、model/session picker | `opi-coding-agent`、`opi-tui` | `pi` CLI tools 和 interactive UX | 部分 | Commands/tools/pickers 已存在。 | 优先改善 session tree UX。 |
 | 3 | Proxy 和 HTTP pooling | `opi-ai` | `pi-ai` proxy/provider HTTP support | 完整 | Per-provider proxy 和 standard proxy env fallback 已存在。 | 保持 secret redaction 和 no-proxy coverage。 |
 | 4 | RPC JSONL 和 SDK event/command model | `opi-agent`、`opi-coding-agent` | `pi` RPC/SDK modes | 完整 | Strict JSONL、correlated responses、async events、shared SDK types 和 `extension_command` dispatch 已存在。 | 保持协议版本化，并诚实拒绝不支持的 runtime mutations。 |
-| 4 | Extension hooks、tools、commands、messages、state | `opi-agent`、`opi-coding-agent` | `pi` TypeScript extensions | 部分 | 面向 embedder 的 in-process Rust extension API 和 RPC/SDK command dispatch 已存在。 | 为外部 packages 增加 process/RPC adapters；默认不加载任意 Rust dylib。 |
+| 4 | Extension hooks、tools、commands、messages、state | `opi-agent`、`opi-coding-agent` | `pi` TypeScript extensions | 部分 | 面向 embedder 的 in-process Rust extension API、RPC/SDK command dispatch，以及 process-JSONL adapter bridge（tool、command、hook、event、state、cancellation）已存在，可供外部 package 使用。 | 保持 adapter protocol 演进；API 稳定后再增加 gRPC 或其他 adapter kind。 |
 | 4 | Resource discovery | `opi-coding-agent` | `pi` extension/resource loading | 部分 | User/project/explicit resource metadata loading 已存在。 | 确保 metadata 一致接入 interactive、non-interactive 和 RPC。 |
 | 4 | Skills 和 prompt fragments | `opi-coding-agent` | `pi` skills 和 prompt templates | 部分 | Progressive discovery 已存在。 | 增加 invocation 和 metadata paths，但不把 prompt fragments 隐式变成核心命令。 |
 | 4 | Themes | `opi-coding-agent`、`opi-tui` | `pi` themes | 部分 | Theme discovery 和 built-in fallback 已存在。 | 增加 precedence 和 missing theme diagnostics 测试。 |
-| 4 | Packages | `opi-coding-agent` | `pi` packages 和 package manager | 部分 | `package.toml` discovery 和 composition 已存在。 | 若目标是产品 parity，补 install/list/config/update/remove。 |
+| 4 | Packages | `opi-coding-agent` | `pi` packages 和 package manager | 部分 | `package.toml` discovery、composition、`opi package add/remove/list/doctor` CLI、带 adapter 声明的 manifest V2，以及通过 `opi-extension-jsonl-v1` 运行的 process-JSONL adapter hosting 已存在。 | 保持 adapter kind 可扩展；在后续产品计划明确前不声明 marketplace/registry 支持。 |
 | 4 | Custom provider/model registration | `opi-ai`、`opi-coding-agent` | `pi` custom provider extension points | 部分 | Registry registration 已存在；configured profiles 已接入 runtime provider construction 和 `--list-models`。 | 在 extension/package adapter 产品化后，把 extension-provided providers 接入终端用户 runtime paths。 |
 | 4 | Branch selection | `opi-agent`、`opi-coding-agent`、`opi-tui` | `pi` session tree、fork、clone、branch selection | 部分 | `/branch` 和 `/tree` 打开分支/会话树选择器；`/fork`、`/clone` 和 `--fork` 会从活跃分支创建新的父子会话；从选中的 branch tip 继续会写入同文件 sibling path。 | 改善更丰富 branch metadata display 和 package-level workflows。 |
 | 4 | Streaming proxy | `opi-agent` | `pi` process integration/proxy surfaces | 部分 | Streaming proxy primitives 已存在。 | 澄清 sync/async I/O 语义和生产路径接线。 |
 | 4 | Web UI event/state/rendering | `opi-web-ui` | `pi-web-ui` browser package | 有意偏离 | 未发布 Rust consumer crate 已存在。 | 保持声明收窄，或单独创建 browser app 计划。 |
 | 4 | MCP、sub-agent、plan mode、todo、permission gate examples | examples/packages | `pi` 将工作流重功能保持在核心之外 | 完整 | Examples/package scaffolds 位于核心之外。 | 除非通过 extension/package registration 路由，否则不要加入内置 CLI。 |
+| 5 | Package store、CLI、manifest V2、adapter protocol、adapter host、adapter bridge、example adapters | `opi-coding-agent`、`opi-agent` | `pi` package manager 和 extension adapters | 部分 | `opi package add/remove/list/doctor`、local/git sources、带 `[adapter]` 的 manifest V2、通过 `opi-extension-jsonl-v1` 运行的 `process-jsonl` adapter hosting、adapter-to-runtime bridge（tool、command、hook、event、state、cancellation），以及可运行的 example adapter packages（todo、permission-gate、protected-paths）已存在。 | 在宣称广义 package ecosystem 前稳定 adapter protocol；保持 npm/marketplace 超出范围。 |
 
 ## 当前修复优先级
 
@@ -72,7 +73,7 @@
 |---:|---|---|---|
 | P0 | 文档事实 | 版本和阶段状态必须匹配 `Cargo.toml` 与 `CHANGELOG.md`。 | 当前文档描述 `0.5.1` workspace，历史 `0.5.0` 行保持历史含义。 |
 | P1 | Session tree | 同文件 branch continuation 现在已有运行时 `parent_id` 和 `leaf` 覆盖，但 `pi` 仍有更完整的 tree 产品工作流。 | 改善 branch metadata display 和更高层 package/workflow integration。 |
-| P1 | Extension/package execution | Packages 能组合资源，已注册 extensions 能通过 RPC/SDK 路由 commands，但被发现的 packages 仍不会自动变成可执行 workflow。 | 外部 packages 能通过 process/RPC adapters 暴露执行能力，而不修补核心。 |
+| P1 | Extension/package execution | 通过 `opi-extension-jsonl-v1` 运行的 process-JSONL adapter 会把 package command、tool、hook、event、state 和 cancellation 桥接进 runtime。Adapter hosting 和 example packages 已存在。 | 稳定 adapter protocol；API 稳定后再增加更广的 adapter kind（gRPC 等）。 |
 | P1 | Provider profiles | OpenAI-compatible profiles 和 model metadata 已走 config + registry。 | 保持 profile expansion policy 文档化；OAuth providers 单独跟踪。 |
 | P2 | Web UI scope | 当前 `opi-web-ui` 有意窄于 `pi-web-ui`。 | 公开文档不声称 standalone browser app。 |
 | P2 | Rust module depth | `opi-agent` crate 边界仍合理；loop internals 已从 `lib.rs` 移出。 | 只在能提升 locality 时继续深化大型 runtime 区域，不改变 crate 边界。 |

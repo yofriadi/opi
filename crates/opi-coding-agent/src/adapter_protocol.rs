@@ -57,13 +57,18 @@
 //! |----------------------------------|-----------------------------------------------------|
 //! | adapter spawn fails              | package becomes degraded; static resources load     |
 //! | initialize times out             | runtime adapter disabled; diagnostic explains        |
-//! | protocol version mismatch        | runtime adapter disabled; doctor reports versions   |
+//! | protocol version mismatch        | runtime adapter disabled; startup diagnostic reports versions |
 //! | tool call times out              | error tool result returned for that call            |
 //! | adapter crashes                  | runtime unavailable; pending calls fail             |
 //! | before-tool hook times out       | fail closed, block the tool                         |
-//! | after-tool hook times out        | fail open, record diagnostic                        |
+//! | after-tool hook times out        | fail open, continue without changing the tool result |
 //! | event delivery backpressures     | drop event, record diagnostic                       |
 //! | state serialization fails        | continue shutdown, report persistence diagnostic    |
+//!
+//! Explicit [`crate::adapter_host::AdapterHost::shutdown`] sends the protocol
+//! `shutdown` message and waits before killing the child. Ordinary host drop is
+//! a best-effort cleanup path that kills the child without the protocol
+//! handshake.
 //!
 //! # Unstable
 //!

@@ -252,6 +252,7 @@ boundaries; functional implementations land in subsequent releases.
 - This release is published as a GitHub Release only; crates.io publish
   is deferred until the crates have real implementations.
 
+[0.5.1]: https://github.com/OdradekAI/opi/releases/tag/v0.5.1
 [0.5.0]: https://github.com/OdradekAI/opi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/OdradekAI/opi/releases/tag/v0.4.0
 [0.3.0]: https://github.com/OdradekAI/opi/releases/tag/v0.3.0

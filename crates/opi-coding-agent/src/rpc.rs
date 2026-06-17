@@ -642,7 +642,7 @@ impl RpcRunner {
                         "cannot query session info while agent is running",
                     ));
                 }
-                let Some(harness) = self.harness.as_ref() else {
+                let Some(harness) = self.harness.as_mut() else {
                     return emit(&response_error(
                         cmd_id.as_deref(),
                         cmd_name,
@@ -670,7 +670,7 @@ impl RpcRunner {
                         "cannot dispatch extension command while agent is running",
                     ));
                 }
-                let Some(harness) = self.harness.as_ref() else {
+                let Some(harness) = self.harness.as_mut() else {
                     return emit(&response_error(
                         cmd_id.as_deref(),
                         cmd_name,

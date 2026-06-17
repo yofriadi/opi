@@ -21,6 +21,33 @@ fn write_package_version(root: &Path, name: &str, version: &str) {
     .unwrap();
 }
 
+fn write_duplicate_project_packages(workspace: &Path) {
+    let pkg_a = workspace.join("dup-a");
+    let pkg_b = workspace.join("dup-b");
+    write_package(&pkg_a, "dup");
+    write_package(&pkg_b, "dup");
+
+    let store = PackageStore::project(workspace.to_path_buf());
+    store
+        .write_declarations(&[
+            PackageDeclaration {
+                source: "./dup-a".into(),
+                filters: Default::default(),
+            },
+            PackageDeclaration {
+                source: "./dup-b".into(),
+                filters: Default::default(),
+            },
+        ])
+        .unwrap();
+    store
+        .write_lock(&[
+            local_lock_entry("./dup-a".into(), &pkg_a).unwrap(),
+            local_lock_entry("./dup-b".into(), &pkg_b).unwrap(),
+        ])
+        .unwrap();
+}
+
 fn git_in(cwd: &Path, args: &[&str]) -> std::process::Output {
     std::process::Command::new("git")
         .args(args)
@@ -892,6 +919,24 @@ skills = ["review"]
     assert_eq!(code, 0, "doctor should pass for valid package");
 }
 
+#[test]
+fn package_doctor_reports_duplicate_name() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let user = tempfile::tempdir().expect("user tempdir");
+    write_duplicate_project_packages(workspace.path());
+
+    let code = handle_package_command(
+        &PackageCommand::Doctor { json: false },
+        workspace.path().to_path_buf(),
+        user.path().to_path_buf(),
+    );
+
+    assert_eq!(
+        code, 2,
+        "doctor must fail when runtime resolution disables a duplicate package"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Subprocess E2E tests
 // ---------------------------------------------------------------------------
@@ -1089,6 +1134,78 @@ fn package_cli_subprocess_doctor_json() {
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0]["severity"], "error");
     assert_eq!(diagnostics[0]["code"], "source_missing");
+}
+
+#[test]
+fn package_cli_subprocess_doctor_json_reports_duplicate_name() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let user_config = tempfile::tempdir().expect("user config tempdir");
+    let opi = opi_binary();
+    write_duplicate_project_packages(workspace.path());
+
+    let output = opi_command(&opi, workspace.path(), user_config.path())
+        .args(["package", "doctor", "--json"])
+        .output()
+        .expect("run opi package doctor");
+    assert!(
+        !output.status.success(),
+        "doctor should exit non-zero for duplicate packages: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("doctor --json output should be valid JSON: {e}\ngot: {stdout}")
+    });
+    let diagnostic_codes: Vec<_> = rows
+        .as_array()
+        .expect("doctor rows")
+        .iter()
+        .flat_map(|row| row["diagnostics"].as_array().into_iter().flatten())
+        .filter_map(|diagnostic| diagnostic["code"].as_str())
+        .collect();
+    assert!(
+        diagnostic_codes.contains(&"duplicate_name"),
+        "doctor --json must surface duplicate_name diagnostics: {rows}"
+    );
+}
+
+#[test]
+fn package_cli_subprocess_list_json_reports_duplicate_name() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let user_config = tempfile::tempdir().expect("user config tempdir");
+    let opi = opi_binary();
+    write_duplicate_project_packages(workspace.path());
+
+    let output = opi_command(&opi, workspace.path(), user_config.path())
+        .args(["package", "list", "--json"])
+        .output()
+        .expect("run opi package list --json");
+    assert!(
+        output.status.success(),
+        "list --json should report diagnostics without failing: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let rows: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("valid NDJSON row"))
+        .collect();
+    assert_eq!(
+        rows.iter().filter(|row| row["status"] == "ok").count(),
+        1,
+        "list --json should keep only one duplicate package active: {stdout}"
+    );
+    assert!(
+        rows.iter().any(|row| {
+            row["diagnostics"].as_array().is_some_and(|diagnostics| {
+                diagnostics.iter().any(|d| d["code"] == "duplicate_name")
+            })
+        }),
+        "list --json must include a duplicate_name diagnostic row: {stdout}"
+    );
 }
 
 #[test]
