@@ -8,11 +8,11 @@
 |---|---|
 | Status | Draft |
 | Spec version | 0.5-draft |
-| Last updated | 2026-06-08 |
+| Last updated | 2026-06-17 |
 | Repository | `https://github.com/OdradekAI/opi` |
 | Upstream studied | `pi` 0.75.3 at `.repo/pi-0.75.3/` |
-| Current implementation | `opi` 0.5.2 workspace, Phase 5 productized extension/package ecosystem implemented |
-| Next milestone | API stabilization and broader adapter protocol support |
+| Current implementation | `opi` 0.5.2 workspace, Phase 6 alignment and reliability hardening complete; Phase 5 is a Rust-native package and process-adapter MVP |
+| Next milestone | Phase 7 reliability/observability hardening, then Phase 8 runtime stabilization |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
 
@@ -32,7 +32,7 @@ Opi mirrors pi's package structure with five Rust crates:
 - `opi-coding-agent`: the `opi` CLI binary.
 - `opi-web-ui`: unpublished reusable RPC/SDK event, state, component, and HTML rendering crate.
 
-The repository has completed the Phase 4 extensibility substrate on top of the Phase 3 terminal coding agent: RPC JSONL mode, shared SDK types, extension hooks/tools/state, resource discovery, skills, prompt fragments, themes, packages, custom provider/model registration, session branch selection, streaming proxy primitives, and reusable web-facing component/state/rendering code are present. Phase 5 adds a productized extension/package ecosystem: local and git package sources, a `package add/remove/list/doctor` CLI, manifest V2 with `[adapter]` declarations, `process-jsonl` adapter hosting with the `opi-extension-jsonl-v1` protocol, and adapter-to-runtime bridging for tools, commands, hooks, events, state, and cancellation. MCP, sub-agents, plan mode, todos, permission gates, dynamic plugin loading, and a standalone browser app should build on that substrate rather than become core features.
+The repository has completed the Phase 4 extensibility substrate on top of the Phase 3 terminal coding agent: RPC JSONL mode, shared SDK types, extension hooks/tools/state, resource discovery, skills, prompt fragments, themes, packages, custom provider/model registration, session branch selection, streaming proxy primitives, and reusable web-facing component/state/rendering code are present. Phase 5 adds a Rust-native package and process-adapter MVP: local and git package sources, a `package add/remove/list/doctor` CLI, manifest V2 with `[adapter]` declarations, `process-jsonl` adapter hosting with the `opi-extension-jsonl-v1` protocol, and adapter-to-runtime bridging for tools, commands, hooks, events, state, and cancellation. It does not claim pi package ecosystem parity and does not support npm package install, marketplace behavior, TypeScript extension live reload, provider stream interception through adapters, custom terminal UI adapter rendering, or package permission policy enforcement. MCP, sub-agents, plan mode, todos, permission gates, dynamic plugin loading, and a standalone browser app should build on that substrate rather than become core features.
 
 The central design rule:
 
@@ -129,6 +129,26 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 
 The maintained package/phase drift ledger lives in
 [`docs/pi-alignment-matrix.md`](pi-alignment-matrix.md).
+
+### 3.4 pi Alignment Status Vocabulary
+
+The alignment matrix MUST use this fixed status vocabulary so that pi drift is
+tracked consistently across phases:
+
+| Status | Meaning | Required next action |
+|---|---|---|
+| `Full` | opi preserves the user-visible or integrator-visible pi semantics, even if the Rust implementation differs | keep contract tests and avoid accidental regression |
+| `Partial` | opi implements the core idea, but product breadth, edge cases, commands, providers, or ecosystem behavior are narrower than pi | document the missing surface and decide whether a later phase closes it |
+| `Intentional Divergence` | opi deliberately chooses a different Rust-native module, interface, storage format, or adapter strategy | record the reason and do not treat this as a parity bug |
+| `Missing` | pi has the capability and opi does not, but the capability may still belong on the roadmap | file or link a future phase/task before claiming parity |
+| `Out of Scope` | pi has the capability, but opi explicitly does not plan to carry it in core | keep the capability out of core unless a later design changes the scope |
+
+At minimum, the drift ledger SHOULD track agent loop semantics, built-in tools,
+session format, session tree semantics, provider catalog, OAuth/subscription
+login, image input, image generation, package ecosystem, TypeScript extension
+compatibility, TUI renderer architecture, web UI product parity, and workflow
+features that pi keeps out of core such as MCP, sub-agents, plan mode, todos,
+permission popups, and background bash.
 
 ## 4. Current Baseline
 
@@ -814,10 +834,10 @@ Windows SHOULD use `%APPDATA%\opi\` for config-like data and `%LOCALAPPDATA%\opi
 ### 9.3 Session Format
 
 The opi session format is a **Rust-native** append-only JSONL tree. It is an
-independent format rather than a copy of pi's session format: it represents a
-*selected subset* of pi's session concepts — append-only history, parent-linked
-branching, compaction summaries, model and thinking-level change markers, and
-persisted extension state — implemented against opi's Rust crates. It does
+independent format rather than a copy of pi's session format. The current v1
+format represents a selected subset of pi's session concepts: append-only
+history, parent-linked branching, compaction summaries, active leaf pointers,
+and persisted extension state implemented against opi's Rust crates. It does
 **not** promise pi session v3 file read/write compatibility (see 9.4).
 
 Session persistence starts in Phase 2, not Phase 1. The target format is
@@ -835,20 +855,34 @@ Subsequent lines are tree entries:
 {"type":"compaction","id":"c3d4e5f6","parent_id":"b2c3d4e5","timestamp":"2026-05-20T13:00:00Z","summary":"The session inspected CLI scaffolding.","first_kept_entry_id":"b2c3d4e5","tokens_before":45000,"tokens_after":8000}
 ```
 
-Entry types:
+Session entry types are separated into the current v1 surface and the Phase 11
+v2 target. Phase 11 may introduce `version = 2`, but it MUST keep v1 files
+readable and MUST NOT require an automatic migration command as a precondition
+for normal resume.
 
-| Type | Purpose | LLM context |
-|---|---|---|
-| `message` | user, assistant, tool result, or custom message | yes |
-| `model_change` | selected provider/model changed | no |
-| `thinking_level_change` | thinking level changed | no |
-| `compaction` | summary plus first kept entry | yes |
-| `branch_summary` | parent branch summary | yes |
-| `label` | user marker | no |
-| `session_info` | name and metadata | no |
-| `custom` | extension state | no |
-| `custom_message` | extension-provided context | configurable |
-| `leaf` | current branch pointer | no |
+| Type | Status | Purpose | LLM context |
+|---|---|---|---|
+| `message` | v1 | user, assistant, or tool result message | yes |
+| `compaction` | v1 | summary plus first kept entry | yes |
+| `leaf` | v1 | current branch pointer | no |
+| `extension_state` | v1 | persisted extension state | no |
+| `session_info` | Phase 11 v2 target | session name and metadata | no |
+| `model_change` | Phase 11 v2 target | selected provider/model changed | no |
+| `thinking_level_change` | Phase 11 v2 target | thinking level changed | no |
+| `label` | Phase 11 v2 target | user marker or bookmark | no |
+| `branch_summary` | Phase 11 v2 target | parent branch summary used by tree/context reconstruction | yes |
+| `custom_message` | Phase 11 v2 target | extension-provided context message | configurable |
+
+Phase 11 success criteria:
+
+- new writes use the chosen session v2 shape when v2 entries are needed;
+- v1 sessions remain readable and resumable;
+- branch reconstruction, `--list-sessions`, resume, fork, clone, and tree views
+  have deterministic behavior when labels, names, model changes, thinking
+  changes, branch summaries, and custom messages are present;
+- contract tests cover v1 fixtures, v2 fixtures, truncated final lines, corrupt
+  middle entries, active leaf reconstruction, and branch-summary context
+  reconstruction.
 
 Crash recovery MAY ignore an incomplete final line. Corrupt middle entries SHOULD be reported; automatic skipping of middle entries should require explicit recovery mode.
 
@@ -865,7 +899,16 @@ therefore creates a new sibling path without rewriting previous entries.
 
 ### 9.4 Why Not pi Session v3
 
-The opi session JSONL is a Rust-native format that represents selected pi session concepts (append-only history, branching, compaction, model and thinking change markers, and extension state) **without** promising pi session v3 file compatibility. Opi keeps pi's branch and compaction ideas but not its file format because pi stores TypeScript-specific extension data, opi has independent config/plugin plans, and accidental partial compatibility would be misleading. Concepts opi intentionally does not carry over include pi's TypeScript-specific extension entries, its on-disk encoding, and any guarantee that a pi v3 session file can be opened, resumed, or appended to by opi. A future migration command MAY translate pi v3 sessions into opi v1 sessions, but until then the two formats are not interchangeable.
+The opi session JSONL is a Rust-native format that represents selected pi
+session concepts **without** promising pi session v3 file compatibility. Opi
+keeps pi's append-only history, branch, compaction, and session-metadata ideas
+but not its file format because pi stores TypeScript-specific extension data,
+opi has independent config/package plans, and accidental partial compatibility
+would be misleading. Concepts opi intentionally does not carry over include
+pi's TypeScript-specific extension entries, its on-disk encoding, and any
+guarantee that a pi v3 session file can be opened, resumed, or appended to by
+opi. A future migration command MAY translate pi v3 sessions into opi sessions,
+but until then the two formats are not interchangeable.
 
 ### 9.5 Compaction
 
@@ -905,7 +948,7 @@ The default extension execution strategy is explicit registration, not dynamic R
 
 ### 10.1 Package CLI
 
-Phase 5 adds an `opi package` subcommand group that runs before provider construction:
+Phase 5 adds an `opi package` subcommand group that runs before provider construction. This is a Rust-native package and process-adapter MVP, not pi package ecosystem parity:
 
 | Command | Purpose |
 |---|---|
@@ -919,6 +962,22 @@ Packages are recorded in the global user config directory (`packages.toml` and `
 `opi package add` validates the package manifest, records the declaration, and writes a lock entry. Runtime startup reads installed declarations and lock state, resolves valid packages without requiring `config.packages.paths`, starts valid adapter packages, and reports adapter startup diagnostics. `opi package doctor` validates source availability, lock consistency, manifest V2, resource containment, opi version constraints, and adapter command resolution.
 
 Packages are trusted code. Installing a package can run adapter child processes with the same OS privileges as `opi`; Phase 5 package code is not sandboxed, and package permission declarations are not enforced by the package manager.
+
+Phase 5 support levels:
+
+| Capability | Status | Notes |
+|---|---|---|
+| local package declarations | supported | package source may be a local directory |
+| git package declarations | supported | lock records commit/cache metadata when available |
+| `process-jsonl` adapters | experimental | `opi-extension-jsonl-v1` is an honest 0.x protocol, not a stable 1.0 contract |
+| adapter tools, commands, hooks, state, cancellation | experimental | bridged through the existing extension interface |
+| npm package install | not supported | pi npm package compatibility is not claimed |
+| marketplace behavior | does not exist in Phase 5 | no registry search, ratings, publishing, or marketplace update policy |
+| package update/config/enable/disable | not supported in Phase 5 | may be future package-manager work |
+| TypeScript extension live reload | intentionally unsupported | opi does not preserve pi's `jiti` extension ABI |
+| provider stream interception through adapters | does not exist in Phase 5 | provider breadth should use existing provider modules or explicit registry/profile work |
+| custom terminal UI adapter rendering | does not exist in Phase 5 | TUI extension UI requires a separate reviewed design |
+| package permission policy enforcement | does not exist in Phase 5 | declarations may be metadata, but the package manager does not enforce them |
 
 ### 10.2 Process Adapters
 
@@ -1072,7 +1131,7 @@ All crates share one workspace version.
 | 0.3.0 | Phase 2 persistence/providers | GitHub + crates.io |
 | 0.4.0 | Phase 3 production hardening | GitHub + crates.io |
 | 0.5.0 workspace | Phase 4 extensibility substrate | GitHub + crates.io for publishable crates; `opi-web-ui` remains unpublished |
-| 0.5.1 workspace | Phase 5 productized extension/package ecosystem | GitHub + crates.io for publishable crates; `opi-web-ui` remains unpublished |
+| 0.5.1 workspace | Phase 5 Rust-native package and process-adapter MVP | GitHub + crates.io for publishable crates; `opi-web-ui` remains unpublished |
 | 0.5.2 workspace | Phase 6 alignment and reliability hardening | GitHub + crates.io for publishable crates; `opi-web-ui` remains unpublished |
 
 The first crates.io publish is gated by quality, not by the version number alone.
@@ -1226,11 +1285,11 @@ core policy.
 
 Exit criteria: third parties can compose and extend opi through RPC, SDK, extension APIs, discovered resources, skills, prompt fragments, themes, packages, and custom provider/model registration without patching core crates. MCP, sub-agents, plan mode, todos, and permission gates should be demonstrable as extensions or packages, not core features. The `Transport` public surface is absent; it must not be reintroduced as a stable public claim without a real implementation.
 
-### Phase 5 - Productized Extension/Package Ecosystem
+### Phase 5 - Rust-Native Package and Process-Adapter MVP
 
 Status: implemented in the current `0.5.2` workspace.
 
-Phase 5 adds package management and executable adapter hosting so that external packages can provide tools, commands, hooks, and events through child process adapters without patching core crates.
+Phase 5 adds package management and executable adapter hosting so that external packages can provide tools, commands, hooks, and events through child process adapters without patching core crates. It deliberately does not claim parity with pi's npm package ecosystem, TypeScript extension runtime, hot reload behavior, marketplace conventions, provider streaming adapters, custom TUI adapters, or package permission enforcement.
 
 | # | Task | Crate |
 |---|---|---|
@@ -1244,7 +1303,7 @@ Phase 5 adds package management and executable adapter hosting so that external 
 | 5.8 | Runnable example adapter packages | examples / `opi-coding-agent` |
 | 5.9 | Documentation, alignment, and guards | workspace |
 
-Exit criteria: `opi package add/remove/list/doctor` works; packages with `[adapter]` sections start as child processes using `opi-extension-jsonl-v1`; adapter tools, commands, hooks, state, and cancellation bridge into the existing extension API; example packages (todo, permission-gate, protected-paths) exercise the full pipeline; documentation is truthful and guard tests reject claims about npm, marketplace, hot reload, provider streaming adapters, custom TUI adapters, or package permission enforcement.
+Exit criteria: `opi package add/remove/list/doctor` works for local and git package declarations; packages with `[adapter]` sections start as child processes using `opi-extension-jsonl-v1`; adapter tools, commands, hooks, state, and cancellation bridge into the existing extension API; example packages (todo, permission-gate, protected-paths) exercise the full pipeline; documentation is truthful and guard tests reject claims about npm, marketplace, hot reload, provider streaming adapters, custom TUI adapters, package update/config/enable/disable workflows, or package permission enforcement.
 
 ## 16. Decision Log
 
