@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.5.1`。
+当前 crate 版本：`0.5.2`，继承自 workspace package 版本。
 
 `opi-agent` 提供 `opi` 二进制使用的 Provider 无关运行时。它负责 turn 主循环、工具参数 JSON Schema 校验、并行/串行工具执行、支持 retry 的 Provider streaming、图片能力校验、事件订阅、steering/follow-up 队列、JSONL 会话存储、基于 leaf 的会话分支重建、阈值/手动/溢出触发的上下文压缩基础能力、SDK/RPC 命令与响应类型、extension hooks/tools/state，以及传输无关的 streaming proxy。
 
@@ -88,9 +88,9 @@ agent_loop
 
 ## SDK、扩展与 Proxy
 
-- `sdk` 定义 RPC JSONL 模式和嵌入方共享的不稳定、带 schema version 的命令与响应类型：`prompt`、`continue`、`steer`、`follow_up`、`abort`、`set_model`、`set_thinking_level`、`compact`、`session_info` 和 `quit`。
-- `extension` 提供 `Extension` 与 `ExtensionRegistry`，支持生命周期 hooks、自定义工具、自定义命令、每个 extension 的状态序列化、自定义 Provider 和模型覆盖。
-- `streaming_proxy` 可以在任意 `BufRead`/`Write` 传输上转发 JSONL 命令/事件，输出 `proxy_ready` 头，提供有界事件缓冲，支持取消，并默认脱敏常见密钥模式。
+- `sdk` 定义 RPC JSONL 模式和嵌入方共享的不稳定、带 schema version 的命令与响应类型。`SDK_SCHEMA_VERSION` 是 `2`，命令包括 `prompt`、`continue`、`steer`、`follow_up`、`abort`、`set_model`、`set_thinking_level`、`compact`、`session_info`、`extension_command` 和 `quit`。
+- `extension` 提供 `Extension` 与 `ExtensionRegistry`，支持生命周期 hooks、自定义工具、自定义命令、事件观察者、每个 extension 的状态序列化/恢复、自定义 Provider 和模型覆盖。
+- `streaming_proxy` 可以在任意 `BufRead`/`Write` 传输上转发 JSONL 命令/事件，输出 schema version 为 `2` 的 `proxy_ready` 头，提供有界事件缓冲，支持取消，并默认脱敏常见密钥模式。
 
 ## 简短示例
 
@@ -151,7 +151,7 @@ impl Tool for EchoTool {
 | `session_branch` | 根据 session entry 的 parent links 和 leaf pointers 重建分支 |
 | `compaction` | 上下文压缩引擎与 hooks |
 | `sdk` | 共享 SDK/RPC schema version、命令、响应和事件转换 |
-| `extension` | Extension trait、registry、hook 包装、自定义工具/Provider/模型 |
+| `extension` | Extension trait、registry、hook 包装、自定义命令、工具、Provider、模型覆盖、事件分发与状态序列化 |
 | `streaming_proxy` | 带密钥脱敏的传输无关 JSONL 命令/事件 proxy |
 | `state` | 对话状态容器 |
 | `message` | Agent 层消息变体 |

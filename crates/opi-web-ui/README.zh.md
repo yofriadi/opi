@@ -6,16 +6,18 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.5.1`。
+当前 crate 版本：`0.5.2`，继承自 workspace package 版本。
 
 `opi-web-ui` 为 `publish = false`，提供具体的组件层，消费 opi agent 工具包的 RPC/SDK JSON 事件值并将其渲染为类型化的 Rust 状态和 HTML 组件。它不是独立浏览器应用。后续发布决策可能改变其发布状态。
 
 ## 架构
 
 - **`event`** — 将 RPC JSONL 协议的原始 JSON 值解析为类型化的 `WebUiEvent` 变体，并保留未知事件类型以便前向兼容。
-- **`state`** — `ConversationState` 处理事件并维护消息历史、RPC 响应、工具调用状态、思考块、会话元数据和压缩状态。
+- **`state`** — `ConversationState` 处理事件并维护消息历史、RPC 响应、工具调用状态、思考块、会话元数据、资源元数据、压缩状态，以及最近一次成功的压缩响应 payload。
 - **`components`** — 类型化 UI 组件模型：`ChatMessage`、`ToolCallView`、`ThinkingBlock`、`StatusBar`、`ConversationView`。
 - **`render`** — `Render` trait，用于 HTML 输出，支持 XSS 安全转义。
+
+`ConversationState` 为消息、工具调用、思考块、模型、会话 id、turn/message 计数、agent 运行状态、压缩状态、最近 RPC 响应、资源元数据和最近一次成功压缩 payload 提供只读访问器。它也可以派生用于渲染的 `ConversationView` 和 `StatusBar`。
 
 ## 不稳定的 0.x API
 
@@ -46,6 +48,7 @@ state.process(WebUiEvent::MessageEnd);
 // 渲染为 HTML
 let view = state.to_conversation_view();
 let html = view.render_html();
+let status = state.to_status_bar().render_html();
 ```
 
 ## 依赖

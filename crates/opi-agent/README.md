@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.5.1`.
+Current crate version: `0.5.2`, inherited from the workspace package version.
 
 `opi-agent` provides the provider-independent runtime used by the `opi` binary. It handles the turn loop, JSON Schema validation for tools, parallel/sequential tool execution, retry-aware provider streaming, image-capability checks, event subscriptions, steering/follow-up queues, JSONL session storage, branch reconstruction from session leaves, threshold/manual/overflow compaction primitives, SDK/RPC command and response types, extension hooks/tools/state, and transport-agnostic streaming proxy support.
 
@@ -88,9 +88,9 @@ Compaction support includes:
 
 ## SDK, Extensions, and Proxy
 
-- `sdk` defines the unstable schema-versioned command and response types shared by RPC JSONL mode and embedders: `prompt`, `continue`, `steer`, `follow_up`, `abort`, `set_model`, `set_thinking_level`, `compact`, `session_info`, and `quit`.
-- `extension` provides `Extension` and `ExtensionRegistry` for lifecycle hooks, custom tools, custom commands, per-extension state serialization, custom providers, and model overrides.
-- `streaming_proxy` forwards JSONL commands/events over arbitrary `BufRead`/`Write` transports, emits a `proxy_ready` header, applies bounded event buffering, supports cancellation, and redacts common secret patterns by default.
+- `sdk` defines the unstable schema-versioned command and response types shared by RPC JSONL mode and embedders. `SDK_SCHEMA_VERSION` is `2`, and commands are `prompt`, `continue`, `steer`, `follow_up`, `abort`, `set_model`, `set_thinking_level`, `compact`, `session_info`, `extension_command`, and `quit`.
+- `extension` provides `Extension` and `ExtensionRegistry` for lifecycle hooks, custom tools, custom commands, event observers, per-extension state serialization/restoration, custom providers, and model overrides.
+- `streaming_proxy` forwards JSONL commands/events over arbitrary `BufRead`/`Write` transports, emits a `proxy_ready` header with schema version `2`, applies bounded event buffering, supports cancellation, and redacts common secret patterns by default.
 
 ## Quick Example
 
@@ -151,7 +151,7 @@ Create an `Agent` with a boxed `opi_ai::Provider`, tool list, model, optional sy
 | `session_branch` | Branch reconstruction from session entry parent links and leaf pointers |
 | `compaction` | Context compaction engine and hooks |
 | `sdk` | Shared SDK/RPC schema version, commands, responses, and event conversion |
-| `extension` | Extension trait, extension registry, hook wrapping, custom tools/providers/models |
+| `extension` | Extension trait, extension registry, hook wrapping, custom commands, tools, providers, model overrides, event dispatch, and state serialization |
 | `streaming_proxy` | Transport-agnostic JSONL command/event proxy with secret redaction |
 | `state` | Conversation state holder |
 | `message` | Agent-level message variants |

@@ -6,16 +6,18 @@
 
 ## Status
 
-Current crate version: `0.5.1`.
+Current crate version: `0.5.2`, inherited from the workspace package version.
 
 `opi-web-ui` is `publish = false` and provides a concrete component layer that consumes RPC/SDK JSON event values from the opi agent toolkit and renders them as typed Rust state and HTML components. It is not a standalone browser app. A separate release decision may change the publish status in the future.
 
 ## Architecture
 
 - **`event`** — Parses raw JSON values from the RPC JSONL protocol into typed `WebUiEvent` variants, preserving unknown event types for forward-compatible handling.
-- **`state`** — `ConversationState` processes events and maintains message history, RPC responses, tool call state, thinking blocks, session metadata, and compaction status.
+- **`state`** — `ConversationState` processes events and maintains message history, RPC responses, tool call state, thinking blocks, session metadata, resource metadata, compaction status, and the latest successful compaction response payload.
 - **`components`** — Typed UI component models: `ChatMessage`, `ToolCallView`, `ThinkingBlock`, `StatusBar`, `ConversationView`.
 - **`render`** — `Render` trait for HTML output with XSS-safe escaping.
+
+`ConversationState` exposes read-only accessors for messages, tool calls, thinking blocks, model, session id, turn/message counts, agent-running state, compaction state, the last RPC response, resource metadata, and the last successful compaction payload. It can derive both a `ConversationView` and a `StatusBar` for rendering.
 
 ## Unstable 0.x API
 
@@ -46,6 +48,7 @@ state.process(WebUiEvent::MessageEnd);
 // Render to HTML
 let view = state.to_conversation_view();
 let html = view.render_html();
+let status = state.to_status_bar().render_html();
 ```
 
 ## Dependencies

@@ -9,7 +9,7 @@
 
 ## Status
 
-Current workspace version: `0.5.1`.
+Current workspace version: `0.5.2` from `[workspace.package]` in `Cargo.toml`.
 
 `opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, RPC JSONL mode, eight built-in tools, image attachments, model/session/branch/tree pickers, session fork/clone flows, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, package add/remove/list/doctor commands, token usage accumulation, and best-effort cost summaries.
 
@@ -33,7 +33,7 @@ Extensibility surfaces are present and still unstable 0.x APIs: shared SDK/RPC c
 
 Cargo workspace with lockstep versioning. Every crate inherits `version`, `edition`, `license`, `repository`, and `authors` from `[workspace.package]`.
 
-| Crate | Published | Description |
+| Crate | Publishable | Description |
 |-------|-----------|-------------|
 | [`opi-ai`](crates/opi-ai) | yes | Provider-neutral LLM API, streaming events, image content, registry, retry, HTTP pooling/proxy, usage and cost helpers |
 | [`opi-agent`](crates/opi-agent) | yes | Agent loop, tool execution, hooks, events, queues, sessions, compaction, SDK types, extension API, and streaming proxy primitives |
@@ -316,21 +316,25 @@ The coding harness discovers `AGENTS.md` and `CLAUDE.md` from the workspace dire
 
 The shared SDK types live in `opi_agent::sdk`. The extension API in `opi-agent` supports lifecycle hooks, custom tools, custom commands, custom agent messages/state, and custom provider/model registration for embedders. The CLI discovers configured resource metadata from user, project, package, and explicit paths and exposes it in prompts/RPC metadata. It does not dynamically load arbitrary Rust code from disk.
 
-Packages can compose extensions, skills, prompt fragments, and themes from flat `package.toml` manifests. The `opi package` CLI manages local and git sources:
+Packages can compose extensions, skills, prompt fragments, and themes from a `package.toml` manifest plus conventional `extensions/`, `skills/`, `fragments/`, and `themes/` subdirectories. The `opi package` CLI manages local and git sources:
 
 ```sh
 opi package add ./vendor/todo          # local directory
+opi package add --local ./vendor/todo  # write project-local .opi/packages.toml
 opi package add git:github.com/user/pkg@v1  # git source
 opi package list                       # show installed packages
+opi package list --json                # one JSON object per line
 opi package doctor                     # diagnose package issues
+opi package doctor --json              # one JSON array of diagnostic rows
 opi package remove todo                # uninstall a package
+opi package remove --local todo        # remove from project-local scope
 ```
 
-`opi package add` validates the manifest and writes a lock entry. Later runtime startup reads installed declarations and lock state, then starts valid adapter packages without requiring `config.packages.paths`.
+`add` and `remove` write the user-level package store by default; `--local` writes project-local `.opi/packages.toml`. `list` and `doctor` read both user and project package stores. `opi package add` validates the manifest and writes a lock entry. Later runtime startup reads installed declarations and lock state, then starts valid adapter packages without requiring `config.packages.paths`.
 
-Packages are trusted code. Installing a package can run adapter child processes with the same OS privileges as `opi`; Phase 5 package code is not sandboxed, and package permission declarations are not enforced by the package manager.
+Packages are trusted code. Installing a package can run adapter child processes with the same OS privileges as `opi`; package code is not sandboxed, and package permission declarations are not enforced by the package manager.
 
-Packages with `[adapter]` declarations run as child process adapters using the `opi-extension-jsonl-v1` protocol. The adapter process communicates over JSONL stdin/stdout and can expose custom tools, commands, hooks, event observers, session-scoped state, and cancellation through the existing extension API — without Node, npm, or live providers. The `process-jsonl` adapter kind is the only supported adapter type in the Phase 5 MVP.
+Packages with `[adapter]` declarations run as child process adapters using the `opi-extension-jsonl-v1` protocol. The adapter process communicates over JSONL stdin/stdout and can expose custom tools, commands, hooks, event observers, session-scoped state, and cancellation through the existing extension API — without Node, npm, or live providers. `process-jsonl` is the only supported adapter kind. Unsupported adapter `kind` or `protocol` values are skipped at startup with diagnostics while static package resources still load.
 
 Skills and prompt fragments use progressive disclosure: metadata is discovered up front, while bodies are loaded only when needed. Themes can be discovered from `theme.toml` resources and are resolved before falling back to built-in `default` and `monokai`. Duplicate resource names within the same discovery layer are errors; higher-precedence layers override lower-precedence layers.
 

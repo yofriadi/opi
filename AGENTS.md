@@ -6,7 +6,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 `opi` is a Rust reimplementation of ideas from [earendil-works/pi](https://github.com/earendil-works/pi), organized as an AI agent toolkit and terminal-first coding agent.
 
-Current workspace version: `0.5.1`.
+Current workspace version: `0.5.2`.
 
 The current implementation includes:
 

@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.5.1`.
+Current crate version: `0.5.2`, inherited from the workspace package version.
 
 This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, RPC JSONL mode, nine built-in provider prefixes plus configured OpenAI-compatible profiles, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session/branch/tree pickers, interactive session fork/clone, shell completion generation, context file loading, session persistence, resume/fork/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, progressive resource discovery for packages/extensions/skills/fragments/themes, package add/remove/list/doctor commands, process-jsonl package adapters, retry, token usage totals, and best-effort cost summaries.
 
@@ -65,7 +65,7 @@ opi --allow-mutating "Update the README."
 | `-v, --verbose` | Enable debug tracing |
 | `--tools <TOOLS>` | Comma-separated active tool allowlist, for example `read,grep` |
 | `--no-tools` | Disable all tools |
-| `--no-builtin-tools` | Disable built-in tools; reserved for extension/custom tools |
+| `--no-builtin-tools` | Disable built-in tools while leaving extension/custom tools available to embedders or packages |
 | `--image <IMAGE>` | Attach one image file to the initial prompt; can be repeated |
 | `--list-models` | List available models from configured providers and exit |
 | `--rpc` | RPC JSONL mode: bidirectional command/event protocol over stdin/stdout |
@@ -265,7 +265,7 @@ Resume reconstructs the active branch from session JSONL entries. Fork creates a
 
 ### Interactive
 
-With no prompt args, `opi` starts the ratatui TUI. It uses `opi-tui` widgets for transcript rendering, input editing, status, markdown, tool calls, edit diffs, themes, keybindings, model/session/branch pickers, and terminal image output.
+With no prompt args, `opi` starts the ratatui TUI. It uses `opi-tui` widgets for transcript rendering, input editing, status, markdown, tool calls, edit diffs, themes, keybindings, model/session/branch/tree pickers, and terminal image output.
 
 Slash commands:
 
@@ -313,7 +313,7 @@ opi --rpc
 On startup, `opi` emits a `rpc_ready` header:
 
 ```json
-{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.1"}
+{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.2"}
 ```
 
 Commands are JSON objects sent to stdin, one per line. Responses and events are JSON objects emitted to stdout, one per line. Diagnostics go to stderr.
@@ -331,6 +331,7 @@ Commands are JSON objects sent to stdin, one per line. Responses and events are 
 | `set_thinking_level` | Set reasoning/thinking level |
 | `compact` | Trigger manual compaction |
 | `session_info` | Query session metadata |
+| `extension_command` | Dispatch a custom command to the extension registry |
 | `quit` | Shut down the RPC session |
 
 All commands support an optional `id` field for request/response correlation.
@@ -408,7 +409,7 @@ opi package doctor --json
 opi package remove todo
 ```
 
-`add` and `remove` write the user-level package store by default; pass `--local` to write project-local `.opi/packages.toml`. Runtime startup resolves installed declarations, validates lock state, and starts valid `[adapter]` packages that use the `process-jsonl` kind and `opi-extension-jsonl-v1` protocol.
+`add` and `remove` write the user-level package store by default; pass `--local` to write project-local `.opi/packages.toml`. `list --json` emits one JSON object per line; `doctor --json` emits one JSON array of diagnostic rows. Runtime startup resolves installed declarations, validates lock state, and starts valid `[adapter]` packages that use the `process-jsonl` kind and `opi-extension-jsonl-v1` protocol.
 
 The `process-jsonl` adapter protocol is an **unstable 0.x contract**. `docs/opi-spec.md` §10.2 documents the observed lifecycle, deterministic startup order, request-id correlation, timeouts, best-effort cancellation, fire-and-forget events, state serialize/restore, shutdown, and crash behavior. Protocol and kind are validated as a startup-time manifest gate: a package whose `[adapter]` declares any other protocol or kind is skipped with a diagnostic naming the expected and actual values, while its static resources still load.
 

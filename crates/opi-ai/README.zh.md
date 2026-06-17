@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.5.1`。
+当前 crate 版本：`0.5.2`，继承自 workspace package 版本。
 
 `opi-ai` 暴露统一的 `Provider` trait，以及 Provider 无关的请求、消息、模型和流式事件类型。当前包含 Anthropic、OpenAI Chat Completions、OpenAI Responses、Gemini、AWS Bedrock Converse、Azure OpenAI、Google Vertex AI 的真实流式实现，并通过 OpenAI-compatible adapter 支持 OpenRouter 与 Mistral profile。`ProviderRegistry` 会解析 `provider:model` spec，支持注册自定义 Provider，并支持为 deployment 或 fine-tuned 模型叠加模型覆盖。
 
@@ -27,7 +27,7 @@
 | `azure_openai` | `azure` | Azure OpenAI deployment 专用 Chat Completions |
 | `vertex` | `vertex` | Vertex AI Gemini streaming |
 
-每个 Provider 都会把原生 wire event 映射为 `AssistantStreamEvent`，覆盖文本增量、可用时的 thinking 增量、工具调用增量、终止完成、用量与错误。
+每个 Provider 都会把原生 wire event 映射为 `AssistantStreamEvent`，覆盖文本增量、可用时的 thinking 增量、工具调用增量、终止完成、用量与错误。内置模型列表有意保持有限，用于能力校验和模型列表输出；deployment、fine-tuned 模型或站点专用模型 ID 应通过 registry 模型覆盖或已配置 Provider profile 提供。
 
 ## 核心 API
 
@@ -37,6 +37,7 @@
 - `InputContent` / `OutputContent`：文本和图片内容，图片来源支持 URL、base64 或原始 bytes。
 - `AssistantStreamEvent`：Provider 无关流式事件，覆盖 start/text/thinking/tool/done/error。
 - `ModelInfo`：模型描述，包含上下文窗口、最大输出 token、图片支持、流式支持与 thinking 支持。
+- `ApiKind`：兼容 adapter 使用的 wire protocol family 标记。
 - `registry::ProviderRegistry`：解析 `provider:model` spec，注册自定义 Provider，叠加模型覆盖，列出所有模型，并暴露模型能力查询。
 - `http::HttpClient`：共享 `reqwest` client 封装，支持连接池与显式或环境变量代理。
 - `retry`：retry 配置、指数退避与 `Retry-After` 解析。

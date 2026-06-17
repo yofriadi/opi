@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (No notable changes yet.)
 
+## [0.5.2] - 2026-06-17
+
+### Fixed
+
+- `opi-coding-agent`: RPC JSONL mode now surfaces provider and harness construction diagnostics at startup and documents the session JSONL format as an unstable 0.x contract instead of implying stability.
+- `opi-coding-agent`: `opi package` runtime degraded paths (adapter, lock, source, and resource failures) now report actionable diagnostics instead of failing silently.
+- `opi-coding-agent`: the process-JSONL adapter protocol (`opi-extension-jsonl-v1`) is documented honestly as an unstable 0.x protocol, and adapter startup diagnostics are enriched.
+- `opi-coding-agent`: Phase 6 documentation-truth and reliability audit gaps are closed; current-state docs, the spec hash ledger, and the English/Chinese counterparts now stay synchronized with the workspace version, guarded by Phase 6 alignment tests.
+
 ## [0.5.1] - 2026-06-15
 
 ### Added
@@ -252,6 +261,7 @@ boundaries; functional implementations land in subsequent releases.
 - This release is published as a GitHub Release only; crates.io publish
   is deferred until the crates have real implementations.
 
+[0.5.2]: https://github.com/OdradekAI/opi/releases/tag/v0.5.2
 [0.5.1]: https://github.com/OdradekAI/opi/releases/tag/v0.5.1
 [0.5.0]: https://github.com/OdradekAI/opi/releases/tag/v0.5.0
 [0.4.0]: https://github.com/OdradekAI/opi/releases/tag/v0.4.0

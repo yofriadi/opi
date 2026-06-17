@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.5.1`。
+当前 crate 版本：`0.5.2`，继承自 workspace package 版本。
 
 本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、RPC JSONL 模式、9 个内置 Provider 前缀加已配置的 OpenAI-compatible profile、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话/分支/会话树选择器、交互式会话 fork/clone、shell 补全生成、上下文文件加载、会话持久化、会话 resume/fork/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、packages/extensions/skills/fragments/themes 的渐进式资源发现、package add/remove/list/doctor 命令、process-jsonl package adapter、retry、token 用量统计，以及尽力而为的费用摘要。
 
@@ -65,7 +65,7 @@ opi --allow-mutating "更新 README。"
 | `-v, --verbose` | 启用 debug tracing |
 | `--tools <TOOLS>` | 逗号分隔的启用工具 allowlist，例如 `read,grep` |
 | `--no-tools` | 禁用所有工具 |
-| `--no-builtin-tools` | 禁用内置工具；为扩展/自定义工具预留 |
+| `--no-builtin-tools` | 禁用内置工具，同时保留嵌入方或 package 提供的 extension/custom 工具 |
 | `--image <IMAGE>` | 给初始提示词附加一张图片；可重复 |
 | `--list-models` | 列出已配置 Provider 可用模型并退出 |
 | `--rpc` | RPC JSONL 模式：通过 stdin/stdout 双向命令/事件协议 |
@@ -265,7 +265,7 @@ Resume 会从 session JSONL 条目重建活跃分支。Fork 会创建新的 JSON
 
 ### 交互式
 
-没有提示词参数时，`opi` 启动 ratatui TUI。它使用 `opi-tui` 组件渲染对话记录、输入编辑器、状态、Markdown、工具调用、编辑 diff、主题、按键绑定、模型/会话/分支选择器和终端图片输出。
+没有提示词参数时，`opi` 启动 ratatui TUI。它使用 `opi-tui` 组件渲染对话记录、输入编辑器、状态、Markdown、工具调用、编辑 diff、主题、按键绑定、模型/会话/分支/会话树选择器和终端图片输出。
 
 Slash 命令：
 
@@ -313,7 +313,7 @@ opi --rpc
 启动时，`opi` 会输出 `rpc_ready` 头：
 
 ```json
-{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.1"}
+{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.2"}
 ```
 
 命令是以 JSON 对象形式发送到 stdin（每行一个）。响应和事件是以 JSON 对象形式输出到 stdout（每行一个）。诊断信息输出到 stderr。
@@ -331,11 +331,54 @@ opi --rpc
 | `set_thinking_level` | 设置推理/思考级别 |
 | `compact` | 触发手动压缩 |
 | `session_info` | 查询会话元数据 |
+| `extension_command` | 向 extension registry 分发自定义命令 |
 | `quit` | 关闭 RPC 会话 |
 
 所有命令都支持可选的 `id` 字段用于请求/响应关联。
 
+#### 响应格式
+
+```json
+{"type":"response","id":"req-1","command":"prompt","success":true}
+{"type":"response","id":"req-2","command":"set_model","success":false,"error":"model not found"}
+{"type":"response","id":"req-3","command":"session_info","success":true,"data":{"model":"anthropic:claude-sonnet-4"}}
+```
+
 对于 `prompt` 和 `continue`，`success: true` 表示命令已被接受。agent 事件（包括接受后的错误）以异步事件行到达。
+
+#### 错误语义
+
+- **解析错误**：`{"type":"response","command":"parse","success":false,"error":"..."}`
+- **命令被拒绝**：`{"type":"response","command":"<cmd>","success":false,"error":"..."}`
+- **接受后的 Agent 错误**：作为常规 agent 事件输出，而不是第二条 response。
+
+#### 取消
+
+`abort` 会通过 cancellation token 取消当前 agent 操作。Agent 会通过常规事件流暴露 `Cancelled` 错误。空闲时第二次调用 `abort` 是 no-op。
+
+#### 示例
+
+```python
+import subprocess, json
+
+proc = subprocess.Popen(
+    ["opi", "--rpc"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+)
+
+def send(cmd):
+    proc.stdin.write(json.dumps(cmd) + "\n")
+    proc.stdin.flush()
+
+def read_line():
+    return json.loads(proc.stdout.readline())
+
+header = read_line()  # rpc_ready
+send({"type": "session_info", "id": "1"})
+resp = read_line()    # response with session info
+send({"type": "quit"})
+resp = read_line()    # response: quit success
+```
 
 ## 上下文文件
 
@@ -366,7 +409,7 @@ opi package doctor --json
 opi package remove todo
 ```
 
-`add` 和 `remove` 默认写入用户级 package store；传入 `--local` 时写入项目本地 `.opi/packages.toml`。运行时启动会解析已安装声明、校验 lock 状态，并启动有效的 `[adapter]` package；当前支持的 adapter kind 是 `process-jsonl`，协议是 `opi-extension-jsonl-v1`。
+`add` 和 `remove` 默认写入用户级 package store；传入 `--local` 时写入项目本地 `.opi/packages.toml`。`list --json` 每行输出一个 JSON 对象；`doctor --json` 输出一个诊断行 JSON 数组。运行时启动会解析已安装声明、校验 lock 状态，并启动有效的 `[adapter]` package；当前支持的 adapter kind 是 `process-jsonl`，协议是 `opi-extension-jsonl-v1`。
 
 `process-jsonl` adapter 协议是**不稳定的 0.x 契约**。`docs/opi-spec.md` 第 10.2 节记录了实际观察到的生命周期、确定性启动顺序、请求 id 关联、超时、尽力而为的取消、即发即弃事件、状态序列化/恢复、关闭以及崩溃行为。协议与类型作为启动期的 manifest 门控进行校验：若某 package 的 `[adapter]` 声明了其他协议或类型，会被跳过并产生一条同时指明期望值与实际值的诊断，而其静态资源仍会加载。
 

@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 workspace 版本：`0.5.1`。
+当前 workspace 版本：`0.5.2`，来源于 `Cargo.toml` 的 `[workspace.package]`。
 
 `opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、RPC JSONL 模式、8 个内置工具、图片附件、模型/会话/分支/会话树选择器、会话 fork/clone 流程、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、package add/remove/list/doctor 命令、token 用量累计，以及尽力而为的费用摘要。
 
@@ -33,7 +33,7 @@
 
 Cargo workspace 采用锁步版本。所有 crate 都从 `[workspace.package]` 继承 `version`、`edition`、`license`、`repository` 和 `authors`。
 
-| Crate | 是否发布 | 说明 |
+| Crate | 是否可发布 | 说明 |
 |-------|----------|------|
 | [`opi-ai`](crates/opi-ai) | 是 | Provider 无关 LLM API、流式事件、图片内容、注册表、重试、HTTP 连接池/代理、用量与费用工具 |
 | [`opi-agent`](crates/opi-agent) | 是 | Agent 主循环、工具执行、hooks、事件、队列、会话、压缩、SDK 类型、extension API 和 streaming proxy 原语 |
@@ -316,21 +316,25 @@ opi --delete-session <session-id>
 
 共享 SDK 类型位于 `opi_agent::sdk`。`opi-agent` 的 extension API 面向嵌入方支持生命周期 hook、自定义工具、自定义命令、自定义 agent message/state，以及自定义 provider/model 注册。CLI 会从用户、项目、package 和显式路径发现已配置的资源元数据，并把它暴露到 prompt/RPC metadata 中。它不会从磁盘动态加载任意 Rust 代码。
 
-Package 可以通过扁平 `package.toml` manifest 组合 extensions、skills、prompt fragments 和 themes。`opi package` CLI 管理本地和 git 来源：
+Package 可以通过 `package.toml` manifest 以及约定的 `extensions/`、`skills/`、`fragments/`、`themes/` 子目录组合 extensions、skills、prompt fragments 和 themes。`opi package` CLI 管理本地和 git 来源：
 
 ```sh
 opi package add ./vendor/todo          # 本地目录
+opi package add --local ./vendor/todo  # 写入项目本地 .opi/packages.toml
 opi package add git:github.com/user/pkg@v1  # git 来源
 opi package list                       # 列出已安装的 package
+opi package list --json                # 每行一个 JSON 对象
 opi package doctor                     # 诊断 package 问题
+opi package doctor --json              # 输出一个诊断行 JSON 数组
 opi package remove todo                # 卸载 package
+opi package remove --local todo        # 从项目本地作用域移除
 ```
 
-`opi package add` 会验证 manifest 并写入 lock 条目。后续运行时启动会读取已安装声明和 lock 状态，然后启动有效的 adapter package，不需要再配置 `config.packages.paths`。
+`add` 和 `remove` 默认写入用户级 package store；传入 `--local` 时写入项目本地 `.opi/packages.toml`。`list` 和 `doctor` 会读取用户级和项目级 package store。`opi package add` 会验证 manifest 并写入 lock 条目。后续运行时启动会读取已安装声明和 lock 状态，然后启动有效的 adapter package，不需要再配置 `config.packages.paths`。
 
-Package 是受信任代码。安装 package 后，其 adapter 子进程会以与 `opi` 相同的操作系统权限运行；第五阶段 package 代码不会被 sandbox，package 权限声明也不会由 package manager 执行。
+Package 是受信任代码。安装 package 后，其 adapter 子进程会以与 `opi` 相同的操作系统权限运行；package 代码不会被 sandbox，package 权限声明也不会由 package manager 执行。
 
-带有 `[adapter]` 声明的 package 会以子进程 adapter 的方式运行，使用 `opi-extension-jsonl-v1` 协议。Adapter 进程通过 JSONL stdin/stdout 通信，可以通过现有 extension API 暴露自定义工具、命令、hooks、事件观察者、会话作用域状态和取消桥接——无需 Node、npm 或在线 provider。`process-jsonl` 是第五阶段 MVP 中唯一支持的 adapter 类型。
+带有 `[adapter]` 声明的 package 会以子进程 adapter 的方式运行，使用 `opi-extension-jsonl-v1` 协议。Adapter 进程通过 JSONL stdin/stdout 通信，可以通过现有 extension API 暴露自定义工具、命令、hooks、事件观察者、会话作用域状态和取消桥接——无需 Node、npm 或在线 provider。`process-jsonl` 是当前唯一支持的 adapter 类型。不支持的 adapter `kind` 或 `protocol` 会在启动时被跳过并产生 diagnostics，但静态 package 资源仍会加载。
 
 Skills 与 prompt fragments 采用渐进式披露：先发现元数据，只有需要时才加载正文。Themes 可以从 `theme.toml` 资源发现，并在回退到内置 `default` 和 `monokai` 前优先解析。同一发现层内的重复资源名会报错；高优先级层会覆盖低优先级层。
 

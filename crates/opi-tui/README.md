@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.5.1`.
+Current crate version: `0.5.2`, inherited from the workspace package version.
 
 `opi-tui` is a synchronous widget library. The application owns the event loop and async runtime. The crate provides transcript, editor, status, markdown, tool-call, diff, select-list, branch-picker, terminal-image, theme, and keybinding primitives used by `opi-coding-agent`.
 
@@ -24,7 +24,7 @@ Current crate version: `0.5.1`.
 | `ToolCallView` | Tool-call line with name, args, and status |
 | `MarkdownView` / `CodeBlock` | Markdown rendering and fenced code-block presentation |
 | `DiffView` | Unified diff rendering for before/after file edits |
-| `SelectList` / `SelectListState` | Fuzzy-select list used by model and session pickers |
+| `SelectList` / `SelectListState` | Fuzzy-select list used by model, session, and session-tree pickers |
 | `BranchPicker` / `BranchPickerState` | Session branch picker with active-branch marking and Unicode-width-aware rows |
 | `terminal_image` | Kitty/iTerm2/Sixel escape generation plus text fallback |
 | `Theme` / `resolve_theme` | Semantic palettes; built-in `default` and `monokai` |
@@ -76,7 +76,7 @@ pub struct BranchItem {
 - `kitty_escape`, `iterm_escape`, `sixel_escape`, and `text_fallback`.
 - `ImageData` with PNG, JPEG, GIF, or WebP metadata.
 
-Current protocol detection recognizes Kitty and iTerm2 explicitly and otherwise falls back to text placeholders.
+Current protocol detection recognizes Kitty and iTerm2 explicitly and otherwise falls back to text placeholders. `sixel_escape` is part of the public surface but currently returns an empty string; callers should treat Sixel as not implemented until that function produces encoded output.
 
 ## Keybindings
 
@@ -106,7 +106,7 @@ The `opi` binary uses this crate from `crates/opi-coding-agent/src/interactive.r
 1. Keep application state in the caller.
 2. Update that state from `opi_agent::AgentEvent` callbacks.
 3. Resolve a `Theme` and `Keybindings`.
-4. Build `SelectList` overlays for model/session/branch selection when requested.
+4. Build `SelectList` overlays for model/session/tree selection and branch-picker overlays when requested.
 5. Build a `Shell` each frame and render it with ratatui.
 
 ## License

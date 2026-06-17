@@ -58,6 +58,7 @@ impl<'a> CredentialResolutionInput<'a> {
     ///
     /// The caller must own the strings and pass references:
     /// ```
+    /// # use opi_ai::bedrock::credentials::{credentials_from_env, CredentialResolutionInput};
     /// let (akid, sak, token, region) = credentials_from_env();
     /// let input = CredentialResolutionInput::from_env_refs(
     ///     akid.as_deref(), sak.as_deref(), token.as_deref(), region.as_deref(),

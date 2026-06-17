@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.5.1`.
+Current crate version: `0.5.2`, inherited from the workspace package version.
 
 `opi-ai` exposes the common `Provider` trait plus provider-neutral request, message, model, and stream event types. The crate contains real streaming implementations for Anthropic, OpenAI Chat Completions, OpenAI Responses, Gemini, AWS Bedrock Converse, Azure OpenAI, and Google Vertex AI, plus OpenAI-compatible profiles for OpenRouter and Mistral. `ProviderRegistry` resolves `provider:model` specs, accepts custom providers, and supports model overrides for deployments or fine-tuned models.
 
@@ -27,7 +27,7 @@ Current crate version: `0.5.1`.
 | `azure_openai` | `azure` | Azure OpenAI deployment-specific Chat Completions |
 | `vertex` | `vertex` | Vertex AI Gemini streaming |
 
-Each provider maps native wire events into `AssistantStreamEvent`, including text deltas, thinking deltas when available, tool-call deltas, terminal completion, usage, and errors.
+Each provider maps native wire events into `AssistantStreamEvent`, including text deltas, thinking deltas when available, tool-call deltas, terminal completion, usage, and errors. Built-in model lists are intentionally finite and are used for capability checks and model listing; deployments, fine-tuned models, and site-specific model IDs should be supplied through registry model overrides or configured provider profiles.
 
 ## Core API
 
@@ -37,6 +37,7 @@ Each provider maps native wire events into `AssistantStreamEvent`, including tex
 - `InputContent` / `OutputContent`: text and image content with URL, base64, or raw-byte image sources.
 - `AssistantStreamEvent`: provider-neutral stream variants for start/text/thinking/tool/done/error.
 - `ModelInfo`: model descriptor with context window, max output tokens, image support, streaming support, and thinking support.
+- `ApiKind`: wire protocol family marker used by compatibility adapters.
 - `registry::ProviderRegistry`: resolves `provider:model` specs, registers custom providers, layers model overrides, lists all models, and exposes model capabilities.
 - `http::HttpClient`: shared `reqwest` client wrapper with connection pooling and explicit or environment-derived proxy support.
 - `retry`: retry config, exponential backoff, and `Retry-After` parsing.

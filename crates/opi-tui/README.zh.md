@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前 crate 版本：`0.5.1`。
+当前 crate 版本：`0.5.2`，继承自 workspace package 版本。
 
 `opi-tui` 是同步 widget library。事件循环和异步 runtime 由调用方持有。本 crate 提供 `opi-coding-agent` 使用的对话记录、编辑器、状态栏、Markdown、工具调用、diff、选择列表、分支选择器、终端图片、主题和按键绑定基础组件。
 
@@ -24,7 +24,7 @@
 | `ToolCallView` | 展示工具名、参数和状态的工具调用行 |
 | `MarkdownView` / `CodeBlock` | Markdown 渲染和 fenced code block 展示 |
 | `DiffView` | 为文件编辑 before/after 渲染 unified diff |
-| `SelectList` / `SelectListState` | 模型与会话选择器使用的 fuzzy-select 列表 |
+| `SelectList` / `SelectListState` | 模型、会话与会话树选择器使用的 fuzzy-select 列表 |
 | `BranchPicker` / `BranchPickerState` | 会话分支选择器，支持活跃分支标记和按 Unicode 宽度处理行 |
 | `terminal_image` | Kitty/iTerm2/Sixel escape 生成与文本 fallback |
 | `Theme` / `resolve_theme` | 语义调色板；内置 `default` 与 `monokai` |
@@ -76,7 +76,7 @@ pub struct BranchItem {
 - `kitty_escape`、`iterm_escape`、`sixel_escape` 和 `text_fallback`。
 - 带 PNG、JPEG、GIF 或 WebP 元数据的 `ImageData`。
 
-当前协议检测会明确识别 Kitty 和 iTerm2，其余情况回退为文本占位符。
+当前协议检测会明确识别 Kitty 和 iTerm2，其余情况回退为文本占位符。`sixel_escape` 属于公开表面，但当前返回空字符串；在该函数真正输出编码内容前，调用方应把 Sixel 视为尚未实现。
 
 ## 按键绑定
 
@@ -106,7 +106,7 @@ pub struct BranchItem {
 1. 调用方维护应用状态。
 2. 从 `opi_agent::AgentEvent` 回调更新状态。
 3. 解析 `Theme` 和 `Keybindings`。
-4. 在需要时构建模型/会话/分支选择器的 `SelectList` overlay。
+4. 在需要时构建模型/会话/会话树选择器的 `SelectList` overlay，以及分支选择器 overlay。
 5. 每帧构建一个 `Shell`，并通过 ratatui 渲染。
 
 ## 许可证
