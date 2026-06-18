@@ -40,6 +40,13 @@ fn main() {
         std::process::exit(exit_code);
     }
 
+    // Handle the top-level `opi doctor` command before provider construction.
+    // Doctor is network-free and must not require credentials or a provider.
+    if let Some(opi_coding_agent::cli::Command::Doctor { json, scope }) = &cli.command {
+        let exit_code = run_doctor_cli(&cli, scope.as_deref(), *json);
+        std::process::exit(exit_code);
+    }
+
     // Handle --list-models early -- needs config but not a full provider session.
     if cli.list_models {
         let config = match resolve_config(ConfigSource {
@@ -153,6 +160,80 @@ fn main() {
             run_interactive(&cli, &config, resumed_messages, resume_info, tool_selection).await
         });
     }
+}
+
+/// Run the top-level `opi doctor` command and return the exit code.
+///
+/// Network-free: config is resolved best-effort so a broken config surfaces as
+/// a config-scope error diagnostic (exit 2) rather than an internal failure
+/// (exit 1). An unparseable `--scope` list is an internal failure (exit 1).
+fn run_doctor_cli(cli: &Cli, scope: Option<&str>, json: bool) -> i32 {
+    use opi_coding_agent::config::OpiConfig;
+    use opi_coding_agent::doctor::{
+        DoctorContext, DoctorScope, format_json, format_text, run_doctor,
+    };
+
+    let scopes = match scope {
+        Some(raw) => match DoctorScope::parse_list(raw) {
+            Ok(scopes) => scopes,
+            Err(message) => {
+                eprintln!("opi doctor: {message}");
+                return 1;
+            }
+        },
+        None => Vec::new(),
+    };
+
+    // Resolve config best-effort: a config failure is reported as a diagnostic
+    // (exit 2) rather than aborting the command (exit 1).
+    let config_source = ConfigSource {
+        cli_model: cli.model.clone(),
+        config_path: cli.config.clone(),
+        env_model: std::env::var("OPI_MODEL").ok(),
+        project_dir: std::env::current_dir().ok(),
+        user_config_path: None,
+    };
+    let (config, config_error) = match resolve_config(config_source) {
+        Ok(config) => (config, None),
+        Err(err) => (OpiConfig::default(), Some(err)),
+    };
+
+    let workspace_root = std::env::current_dir().unwrap_or_default();
+    let user_config_dir = opi_coding_agent::config::user_config_dir();
+    let sessions_dir = opi_coding_agent::session_cli::session_dir();
+    let term = std::env::var("TERM").ok();
+    let term_program = std::env::var("TERM_PROGRAM").ok();
+    let term_features = std::env::var("TERM_FEATURES").ok();
+    let no_color = std::env::var_os("NO_COLOR").is_some();
+    let colorterm = std::env::var("COLORTERM").ok();
+    let env_probe = |name: &str| std::env::var(name).ok();
+
+    let ctx = DoctorContext {
+        config: &config,
+        config_error: config_error.as_ref(),
+        workspace_root: &workspace_root,
+        user_config_dir: &user_config_dir,
+        sessions_dir: &sessions_dir,
+        term: term.as_deref(),
+        term_program: term_program.as_deref(),
+        term_features: term_features.as_deref(),
+        no_color,
+        colorterm: colorterm.as_deref(),
+        env_var: &env_probe,
+    };
+
+    let report = run_doctor(&scopes, &ctx);
+    if json {
+        let json_out = format_json(&report);
+        if json_out.is_empty() {
+            println!();
+        } else {
+            println!("{json_out}");
+        }
+    } else {
+        print!("{}", format_text(&report));
+    }
+    report.exit_code()
 }
 
 async fn run_non_interactive(

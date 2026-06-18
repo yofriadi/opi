@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod context_files;
 pub mod diagnostic_bridge;
+pub mod doctor;
 pub mod harness;
 pub mod image;
 pub mod interactive;

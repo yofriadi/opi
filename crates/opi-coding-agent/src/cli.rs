@@ -120,6 +120,19 @@ pub enum Command {
         #[command(subcommand)]
         command: PackageCommand,
     },
+    /// Summarize local health across config, provider, package, session, tui, rpc.
+    ///
+    /// Makes no paid model calls or network checks by default. Distinct from
+    /// `opi package doctor`.
+    Doctor {
+        /// Output diagnostics as NDJSON (one JSON object per line).
+        #[arg(long)]
+        json: bool,
+        /// Comma-separated scope list (config,provider,package,session,tui,rpc).
+        /// Default: all scopes.
+        #[arg(long)]
+        scope: Option<String>,
+    },
 }
 
 /// Package management subcommands.
