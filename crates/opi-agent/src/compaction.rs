@@ -57,6 +57,43 @@ pub enum CompactionError {
     NothingToCompact,
 }
 
+impl From<&CompactionError> for crate::diagnostic::Diagnostic {
+    fn from(error: &CompactionError) -> Self {
+        use crate::diagnostic::{SOURCE_SESSION, Severity, code::*};
+        match error {
+            // NothingToCompact is a benign no-op, not a failure: report it as Info.
+            CompactionError::NothingToCompact => crate::diagnostic::Diagnostic::new(
+                Severity::Info,
+                CODE_COMPACTION_NOTHING_TO_COMPACT,
+                SOURCE_SESSION,
+                "compaction skipped: nothing to compact",
+            ),
+        }
+    }
+}
+
+impl CompactionOutput {
+    /// Classify a successful compaction as an informational diagnostic carrying
+    /// before/after token counts. The harness records this after a compaction.
+    pub fn diagnostic(&self) -> crate::diagnostic::Diagnostic {
+        use crate::diagnostic::{Diagnostic, SOURCE_SESSION, Severity, code::*};
+        Diagnostic::new(
+            Severity::Info,
+            CODE_SESSION_COMPACTED,
+            SOURCE_SESSION,
+            "conversation compacted",
+        )
+        .details(serde_json::json!({
+            "tokens_before": self.tokens_before,
+            "tokens_after": self.tokens_after,
+            "summary_source": match self.summary_source {
+                SummarySource::Core => "core",
+                SummarySource::Hook => "hook",
+            },
+        }))
+    }
+}
+
 /// Hook trait for customizing compaction summary generation.
 pub trait CompactionHooks: Send + Sync {
     /// Generate a summary for the messages being compacted.

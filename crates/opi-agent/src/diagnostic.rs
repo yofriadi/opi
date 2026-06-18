@@ -150,6 +150,50 @@ pub const SOURCE_SESSION: &str = "session";
 pub const SOURCE_CONFIG: &str = "config";
 pub const SOURCE_RPC: &str = "rpc";
 pub const SOURCE_TUI: &str = "tui";
+/// Agent-runtime-internal observations: hook failures, cancellation, and the
+/// max-turns guard. Distinct from `SOURCE_RPC` (the JSONL protocol) and
+/// `SOURCE_TOOL` (built-in/extension tools) so the producing subsystem is
+/// reported accurately regardless of whether the loop is driven by RPC,
+/// interactive, or non-interactive mode.
+pub const SOURCE_AGENT: &str = "agent";
+
+/// Stable snake_case diagnostic codes. Declared as named constants so a typo
+/// in a code literal is a compile error (when referenced via the constant) and
+/// a typo in the constant value is caught by the code-stability tests.
+pub mod code {
+    pub const CODE_PROVIDER_AUTH_FAILED: &str = "provider_auth_failed";
+    pub const CODE_PROVIDER_RATE_LIMITED: &str = "provider_rate_limited";
+    pub const CODE_PROVIDER_TIMEOUT: &str = "provider_timeout";
+    pub const CODE_PROVIDER_REQUEST_FAILED: &str = "provider_request_failed";
+    pub const CODE_PROVIDER_STREAM_ERROR: &str = "provider_stream_error";
+    /// Generic provider failure surfaced through the agent loop when the
+    /// structured [`opi_ai::provider::ProviderError`] category is no longer
+    /// recoverable (e.g. retries exhausted).
+    pub const CODE_PROVIDER_ERROR: &str = "provider_error";
+    pub const CODE_TOOL_FAILED: &str = "tool_failed";
+    pub const CODE_HOOK_FAILED: &str = "hook_failed";
+    pub const CODE_AGENT_CANCELLED: &str = "agent_cancelled";
+    pub const CODE_AGENT_MAX_TURNS_EXCEEDED: &str = "agent_max_turns_exceeded";
+    // Runtime emission codes (agent loop).
+    pub const CODE_PROVIDER_RETRY_ATTEMPT: &str = "provider_retry_attempt";
+    pub const CODE_PROVIDER_RETRY_SUCCEEDED: &str = "provider_retry_succeeded";
+    pub const CODE_PROVIDER_RETRY_EXHAUSTED: &str = "provider_retry_exhausted";
+    pub const CODE_PROVIDER_CAPABILITY_INVALID: &str = "provider_capability_invalid";
+    pub const CODE_TOOL_UNKNOWN: &str = "tool_unknown";
+    pub const CODE_TOOL_VALIDATION_FAILED: &str = "tool_validation_failed";
+    pub const CODE_TOOL_EXECUTION_FAILED: &str = "tool_execution_failed";
+    // Session/compaction classification codes.
+    pub const CODE_SESSION_COMPACTED: &str = "session_compacted";
+    pub const CODE_COMPACTION_NOTHING_TO_COMPACT: &str = "compaction_nothing_to_compact";
+    pub const CODE_SESSION_CORRUPT_ENTRIES: &str = "session_corrupt_entries";
+    pub const CODE_SESSION_TRUNCATED_LINE: &str = "session_truncated_line";
+    pub const CODE_SESSION_CORRUPT_WITH_TRUNCATION: &str = "session_corrupt_with_truncation";
+    // opi-coding-agent bridges (package/config). Package diagnostics carry a
+    // dynamic granular code in `details.package_code`; the shared code is stable.
+    pub const CODE_PACKAGE_DIAGNOSTIC: &str = "package_diagnostic";
+    pub const CODE_CONFIG_PARSE_FAILED: &str = "config_parse_failed";
+    pub const CODE_CONFIG_READ_FAILED: &str = "config_read_failed";
+}
 
 const REDACTED: &str = "[REDACTED]";
 
@@ -226,6 +270,126 @@ fn is_content_sensitive_key(key: &str) -> bool {
     CONTENT_SENSITIVE_KEYS
         .iter()
         .any(|sensitive| sensitive.eq_ignore_ascii_case(key))
+}
+
+// ---------------------------------------------------------------------------
+// Classification bridges: map provider and agent-loop errors into Diagnostics.
+// ---------------------------------------------------------------------------
+
+/// Remediation hint attached to authentication failures.
+const ACTION_CHECK_CREDENTIALS: &str = "check the API key or provider credentials";
+/// Remediation hint attached to rate-limited responses.
+const ACTION_SLOW_DOWN: &str = "reduce request frequency or wait for the retry-after delay";
+
+/// Classify a [`opi_ai::provider::ProviderError`] into a [`Diagnostic`].
+///
+/// The provider taxonomy itself lives in `opi-ai` (`ProviderError::category`);
+/// this bridge only fixes the diagnostic `severity`, `code`, and `source` for
+/// each category. Runtime behavior is unchanged — the error is still returned
+/// as-is; this only describes how it would be surfaced diagnostically.
+impl From<&opi_ai::provider::ProviderError> for Diagnostic {
+    fn from(error: &opi_ai::provider::ProviderError) -> Self {
+        use opi_ai::provider::ProviderError;
+        match error {
+            ProviderError::RateLimited { retry_after_ms } => Diagnostic::new(
+                Severity::Warning,
+                code::CODE_PROVIDER_RATE_LIMITED,
+                SOURCE_PROVIDER,
+                "rate limited by provider",
+            )
+            .details_option(retry_after_ms.map(|ms| serde_json::json!({ "retry_after_ms": ms })))
+            .action(ACTION_SLOW_DOWN),
+            ProviderError::Timeout => Diagnostic::new(
+                Severity::Warning,
+                code::CODE_PROVIDER_TIMEOUT,
+                SOURCE_PROVIDER,
+                "provider request timed out",
+            ),
+            ProviderError::RequestFailed(message) => Diagnostic::new(
+                Severity::Error,
+                code::CODE_PROVIDER_REQUEST_FAILED,
+                SOURCE_PROVIDER,
+                message.clone(),
+            ),
+            ProviderError::StreamError(message) => Diagnostic::new(
+                Severity::Error,
+                code::CODE_PROVIDER_STREAM_ERROR,
+                SOURCE_PROVIDER,
+                message.clone(),
+            ),
+            ProviderError::AuthFailed(message) => Diagnostic::new(
+                Severity::Error,
+                code::CODE_PROVIDER_AUTH_FAILED,
+                SOURCE_PROVIDER,
+                message.clone(),
+            )
+            .action(ACTION_CHECK_CREDENTIALS),
+        }
+    }
+}
+
+/// Classify an [`crate::loop_types::AgentError`] into a [`Diagnostic`].
+///
+/// `AgentError::Provider`/`AuthFailed` map onto the provider vocabulary; tool
+/// and hook failures carry their own sources; cancellation is informational
+/// (harness/user-initiated, not a failure); the max-turns guard is a warning.
+impl From<&crate::loop_types::AgentError> for Diagnostic {
+    fn from(error: &crate::loop_types::AgentError) -> Self {
+        use crate::loop_types::AgentError;
+        match error {
+            AgentError::Provider(message) => Diagnostic::new(
+                Severity::Error,
+                code::CODE_PROVIDER_ERROR,
+                SOURCE_PROVIDER,
+                message.clone(),
+            ),
+            AgentError::AuthFailed(message) => Diagnostic::new(
+                Severity::Error,
+                code::CODE_PROVIDER_AUTH_FAILED,
+                SOURCE_PROVIDER,
+                message.clone(),
+            )
+            .action(ACTION_CHECK_CREDENTIALS),
+            AgentError::Tool(message) => Diagnostic::new(
+                Severity::Error,
+                code::CODE_TOOL_FAILED,
+                SOURCE_TOOL,
+                message.clone(),
+            ),
+            AgentError::Hook(message) => Diagnostic::new(
+                Severity::Error,
+                code::CODE_HOOK_FAILED,
+                SOURCE_AGENT,
+                message.clone(),
+            ),
+            AgentError::Cancelled => Diagnostic::new(
+                Severity::Info,
+                code::CODE_AGENT_CANCELLED,
+                SOURCE_AGENT,
+                "agent run cancelled",
+            ),
+            AgentError::MaxTurnsExceeded(max_turns) => Diagnostic::new(
+                Severity::Warning,
+                code::CODE_AGENT_MAX_TURNS_EXCEEDED,
+                SOURCE_AGENT,
+                format!("max turns exceeded ({max_turns})"),
+            )
+            .details(serde_json::json!({ "max_turns": max_turns }))
+            .action("increase max_turns or narrow the task"),
+        }
+    }
+}
+
+impl Diagnostic {
+    /// Like [`Diagnostic::details`] but takes an `Option`, leaving details
+    /// unset when `None`. Used by classification bridges that only attach
+    /// details for some variants.
+    fn details_option(self, details: Option<serde_json::Value>) -> Self {
+        match details {
+            Some(value) => self.details(value),
+            None => self,
+        }
+    }
 }
 
 #[cfg(test)]

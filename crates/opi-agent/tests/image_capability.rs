@@ -85,6 +85,7 @@ async fn image_input_to_text_only_model_fails_before_provider_call() {
         system: None,
         steering_queue: None,
         follow_up_queue: None,
+        diagnostic_sink: None,
     };
 
     let err = opi_agent::agent_loop(

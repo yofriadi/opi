@@ -13,6 +13,7 @@ use opi_ai::message::{InputContent, Message, UserMessage};
 use opi_ai::provider::{Provider, ThinkingConfig};
 use tokio_util::sync::CancellationToken;
 
+use crate::diagnostic_sink::DiagnosticSink;
 use crate::event::{AgentEvent, AgentEventSink};
 use crate::hooks::AgentHooks;
 use crate::loop_types::{AgentError, AgentLoopConfig, AgentLoopContext};
@@ -100,6 +101,7 @@ pub struct Agent {
     messages: Vec<AgentMessage>,
     steering_queue: Arc<Mutex<VecDeque<String>>>,
     follow_up_queue: Arc<Mutex<VecDeque<String>>>,
+    diagnostic_sink: Option<Arc<dyn DiagnosticSink>>,
 }
 
 impl Agent {
@@ -124,7 +126,17 @@ impl Agent {
             messages: Vec::new(),
             steering_queue: Arc::new(Mutex::new(VecDeque::new())),
             follow_up_queue: Arc::new(Mutex::new(VecDeque::new())),
+            diagnostic_sink: None,
         }
+    }
+
+    /// Install a diagnostic sink that receives observations emitted from
+    /// runtime failure paths during `prompt`/`continue_` (retry, cancellation,
+    /// provider/tool failures). `None` (the default) disables emission without
+    /// changing any other runtime behavior. Non-breaking: callers that do not
+    /// set a sink are unaffected.
+    pub fn set_diagnostic_sink(&mut self, sink: Option<Arc<dyn DiagnosticSink>>) {
+        self.diagnostic_sink = sink;
     }
 
     /// Send a user message and run the agent loop.
@@ -346,6 +358,7 @@ impl Agent {
             system: self.system.clone(),
             steering_queue: Some(self.steering_queue.clone()),
             follow_up_queue: Some(self.follow_up_queue.clone()),
+            diagnostic_sink: self.diagnostic_sink.clone(),
         };
 
         let sink = self.build_event_sink();

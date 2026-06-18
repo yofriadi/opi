@@ -7,6 +7,9 @@ use opi_ai::provider::{Request, validate_request_capabilities};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+use crate::diagnostic::code::*;
+use crate::diagnostic::{Diagnostic, SOURCE_AGENT, SOURCE_PROVIDER, SOURCE_TOOL, Severity};
+use crate::diagnostic_sink::DiagnosticSink;
 use crate::event::{AgentEvent, AgentEventSink};
 use crate::hooks::{
     AfterToolCallContext, AfterToolCallResult, AgentHooks, BeforeToolCallContext,
@@ -29,6 +32,10 @@ pub async fn agent_loop(
     events: AgentEventSink,
     cancel: CancellationToken,
 ) -> Result<Vec<AgentMessage>, AgentError> {
+    // Clone the sink handle up front (before any partial move out of `context`)
+    // so every failure path below can record an observation. `None` means
+    // emission is disabled and nothing below observes any behavior change.
+    let diagnostic_sink = context.diagnostic_sink.clone();
     let tools_map: HashMap<String, &dyn Tool> = context
         .tools
         .iter()
@@ -43,6 +50,7 @@ pub async fn agent_loop(
     let mut has_tools_pending;
     for turn_idx in 0..config.max_turns {
         if cancel.is_cancelled() {
+            record(&diagnostic_sink, cancelled_diagnostic("before_turn"));
             events(AgentEvent::AgentEnd {
                 messages: messages.clone(),
             });
@@ -76,6 +84,15 @@ pub async fn agent_loop(
                 cancel: cancel.clone(),
             };
             if let Err(e) = validate_request_capabilities(context.provider.as_ref(), &request) {
+                record(
+                    &diagnostic_sink,
+                    Diagnostic::new(
+                        Severity::Error,
+                        CODE_PROVIDER_CAPABILITY_INVALID,
+                        SOURCE_PROVIDER,
+                        e.to_string(),
+                    ),
+                );
                 events(AgentEvent::AgentEnd {
                     messages: messages.clone(),
                 });
@@ -88,6 +105,10 @@ pub async fn agent_loop(
                 tokio::select! {
                     biased;
                     _ = cancel.cancelled() => {
+                        record(
+                            &diagnostic_sink,
+                            cancelled_diagnostic("during_stream"),
+                        );
                         events(AgentEvent::AgentEnd {
                             messages: messages.clone(),
                         });
@@ -157,6 +178,7 @@ pub async fn agent_loop(
                                             hooks,
                                             &messages,
                                             cancel.clone(),
+                                            &diagnostic_sink,
                                         )
                                         .await;
 
@@ -204,13 +226,20 @@ pub async fn agent_loop(
                                             let tools_map = &tools_map;
                                             let messages = &messages;
                                             let cancel = cancel.clone();
+                                            let diagnostic_sink = diagnostic_sink.clone();
                                             let tc_id = tc.id.clone();
                                             let tc_name = tc.name.clone();
                                             let args = args.clone();
                                             async move {
                                                 let result = execute_tool(
-                                                    &tc_id, &tc_name, &args, tools_map, hooks,
-                                                    messages, cancel,
+                                                    &tc_id,
+                                                    &tc_name,
+                                                    &args,
+                                                    tools_map,
+                                                    hooks,
+                                                    messages,
+                                                    cancel,
+                                                    &diagnostic_sink,
                                                 )
                                                 .await;
                                                 (tc_id, tc_name, result)
@@ -308,10 +337,28 @@ pub async fn agent_loop(
                                 delay_ms,
                                 error_message: e.to_string(),
                             });
+                            record(
+                                &diagnostic_sink,
+                                Diagnostic::new(
+                                    Severity::Warning,
+                                    CODE_PROVIDER_RETRY_ATTEMPT,
+                                    SOURCE_PROVIDER,
+                                    "retrying after retryable provider error",
+                                )
+                                .details(json!({
+                                    "attempt": retry_attempt,
+                                    "max_attempts": rc.max_attempts,
+                                    "delay_ms": delay_ms,
+                                })),
+                            );
 
                             tokio::select! {
                                 biased;
                                 _ = cancel.cancelled() => {
+                                    record(
+                                        &diagnostic_sink,
+                                        cancelled_diagnostic("during_retry_sleep"),
+                                    );
                                     events(AgentEvent::AgentEnd {
                                         messages: messages.clone(),
                                     });
@@ -330,8 +377,25 @@ pub async fn agent_loop(
                                 attempt: retry_attempt,
                                 final_error: Some(e.to_string()),
                             });
+                            record(
+                                &diagnostic_sink,
+                                Diagnostic::new(
+                                    Severity::Error,
+                                    CODE_PROVIDER_RETRY_EXHAUSTED,
+                                    SOURCE_PROVIDER,
+                                    "provider retries exhausted",
+                                )
+                                .details(json!({
+                                    "attempts": retry_attempt,
+                                    "max_attempts": max_attempts,
+                                }))
+                                .action("reduce request frequency or check model availability"),
+                            );
                         }
 
+                        // The underlying provider error is classified regardless of whether
+                        // retries were attempted, so callers see what actually failed.
+                        record(&diagnostic_sink, Diagnostic::from(&e));
                         events(AgentEvent::AgentEnd {
                             messages: messages.clone(),
                         });
@@ -351,6 +415,16 @@ pub async fn agent_loop(
                     attempt: retry_attempt,
                     final_error: None,
                 });
+                record(
+                    &diagnostic_sink,
+                    Diagnostic::new(
+                        Severity::Info,
+                        CODE_PROVIDER_RETRY_SUCCEEDED,
+                        SOURCE_PROVIDER,
+                        "provider request succeeded after retry",
+                    )
+                    .details(json!({ "attempts": retry_attempt })),
+                );
             }
             break 'stream;
         }
@@ -460,6 +534,7 @@ fn process_stream_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // private helper threading diagnostic sink alongside existing call context
 async fn execute_tool(
     call_id: &str,
     tool_name: &str,
@@ -468,10 +543,15 @@ async fn execute_tool(
     hooks: &dyn AgentHooks,
     messages: &[AgentMessage],
     cancel: CancellationToken,
+    sink: &Option<Arc<dyn DiagnosticSink>>,
 ) -> ToolResult {
     let tool = match tools_map.get(tool_name) {
         Some(t) => *t,
         None => {
+            record(
+                sink,
+                tool_diagnostic(CODE_TOOL_UNKNOWN, tool_name, "unknown tool requested"),
+            );
             return ToolResult {
                 content: vec![opi_ai::message::OutputContent::Text {
                     text: format!("unknown tool: {tool_name}"),
@@ -485,6 +565,14 @@ async fn execute_tool(
 
     let schema = &tool.definition().input_schema;
     if let Err(err) = validation::validate(schema, args) {
+        record(
+            sink,
+            tool_diagnostic(
+                CODE_TOOL_VALIDATION_FAILED,
+                tool_name,
+                "tool arguments failed schema validation",
+            ),
+        );
         return ToolResult::from_validation_error(err);
     }
 
@@ -497,6 +585,14 @@ async fn execute_tool(
     match hooks.before_tool_call(ctx).await {
         BeforeToolCallResult::Allow => {}
         BeforeToolCallResult::Deny { reason } => {
+            record(
+                sink,
+                tool_diagnostic(
+                    CODE_TOOL_EXECUTION_FAILED,
+                    tool_name,
+                    "tool call denied by hook",
+                ),
+            );
             return ToolResult {
                 content: vec![opi_ai::message::OutputContent::Text { text: reason }],
                 details: None,
@@ -518,14 +614,24 @@ async fn execute_tool(
                 AfterToolCallResult::Replace(replacement) => replacement,
             }
         }
-        Err(e) => ToolResult {
-            content: vec![opi_ai::message::OutputContent::Text {
-                text: e.to_string(),
-            }],
-            details: None,
-            is_error: true,
-            terminate: false,
-        },
+        Err(e) => {
+            record(
+                sink,
+                tool_diagnostic(
+                    CODE_TOOL_EXECUTION_FAILED,
+                    tool_name,
+                    "tool execution failed",
+                ),
+            );
+            ToolResult {
+                content: vec![opi_ai::message::OutputContent::Text {
+                    text: e.to_string(),
+                }],
+                details: None,
+                is_error: true,
+                terminate: false,
+            }
+        }
     }
 }
 
@@ -557,4 +663,31 @@ fn user_text_message(text: String) -> AgentMessage {
         content: vec![InputContent::Text { text }],
         timestamp_ms: 0,
     }))
+}
+
+/// Record a diagnostic into the optional sink. A `None` sink disables emission
+/// without any other observable effect.
+fn record(sink: &Option<Arc<dyn DiagnosticSink>>, diagnostic: Diagnostic) {
+    if let Some(sink) = sink {
+        sink.record(diagnostic);
+    }
+}
+
+/// Build an informational cancellation diagnostic tagged with the lifecycle
+/// phase that observed the cancel. Cancellation is harness/user-initiated, so
+/// it is `Info`, not an error.
+fn cancelled_diagnostic(phase: &str) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Info,
+        CODE_AGENT_CANCELLED,
+        SOURCE_AGENT,
+        "agent run cancelled",
+    )
+    .details(json!({ "phase": phase }))
+}
+
+/// Build an error tool-failure diagnostic carrying the tool name in details.
+fn tool_diagnostic(code: &'static str, tool_name: &str, message: &str) -> Diagnostic {
+    Diagnostic::new(Severity::Error, code, SOURCE_TOOL, message)
+        .details(json!({ "tool_name": tool_name }))
 }

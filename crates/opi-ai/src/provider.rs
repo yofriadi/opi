@@ -135,6 +135,53 @@ impl ProviderError {
             ProviderError::RateLimited { .. } | ProviderError::Timeout
         )
     }
+
+    /// Stable diagnostic category for this provider error.
+    ///
+    /// `opi-ai` cannot depend on `opi-agent`'s shared `Diagnostic` model, so
+    /// the provider-side classification surface is this small taxonomy. The
+    /// `opi-agent` diagnostic layer maps each [`ProviderErrorCategory`] into a
+    /// diagnostic `code`/`severity`/`source` triple.
+    pub fn category(&self) -> ProviderErrorCategory {
+        match self {
+            ProviderError::AuthFailed(_) => ProviderErrorCategory::Auth,
+            ProviderError::RateLimited { .. } => ProviderErrorCategory::RateLimit,
+            ProviderError::Timeout => ProviderErrorCategory::Timeout,
+            ProviderError::RequestFailed(_) => ProviderErrorCategory::Request,
+            ProviderError::StreamError(_) => ProviderErrorCategory::Stream,
+        }
+    }
+
+    /// Server-advised delay before retrying, in milliseconds.
+    ///
+    /// Only [`ProviderError::RateLimited`] carries a `retry_after_ms` today;
+    /// every other variant returns `None`.
+    pub fn retry_after_ms(&self) -> Option<u64> {
+        match self {
+            ProviderError::RateLimited { retry_after_ms } => *retry_after_ms,
+            _ => None,
+        }
+    }
+}
+
+/// Diagnostic category for a [`ProviderError`].
+///
+/// This is the opi-ai-owned classification substrate consumed by the
+/// `opi-agent` diagnostic layer. Keeping it here means provider error
+/// classification can be tested without any network access and without a
+/// dependency on the shared `Diagnostic` model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProviderErrorCategory {
+    /// Authentication failed (bad key, expired token).
+    Auth,
+    /// Rate limited; a retry may succeed after a delay.
+    RateLimit,
+    /// Request timed out; a retry may succeed.
+    Timeout,
+    /// Request was rejected by the provider (non-retryable HTTP/logic error).
+    Request,
+    /// Streaming response failed mid-flight.
+    Stream,
 }
 
 /// Discriminant for the kind of provider backend.

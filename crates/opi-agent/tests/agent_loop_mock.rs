@@ -152,6 +152,7 @@ async fn no_tool_turn_emits_lifecycle_events() {
         system: None,
         steering_queue: None,
         follow_up_queue: None,
+        diagnostic_sink: None,
     };
 
     let config = AgentLoopConfig {
@@ -246,6 +247,7 @@ async fn tool_use_turn_executes_tool_and_loops() {
         system: None,
         steering_queue: None,
         follow_up_queue: None,
+        diagnostic_sink: None,
     };
 
     let config = AgentLoopConfig {
@@ -310,6 +312,7 @@ async fn text_content_preserved_in_assistant_message() {
         system: None,
         steering_queue: None,
         follow_up_queue: None,
+        diagnostic_sink: None,
     };
 
     let config = AgentLoopConfig {

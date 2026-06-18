@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod compaction;
 pub mod diagnostic;
+pub mod diagnostic_sink;
 pub mod event;
 pub mod extension;
 pub mod hooks;
@@ -25,6 +26,7 @@ mod agent_loop;
 pub use agent::Agent;
 pub use agent_loop::agent_loop;
 pub use diagnostic::{Diagnostic, RedactionMode, Severity, redact};
+pub use diagnostic_sink::{DiagnosticSink, NullSink, RecordingSink};
 pub use event::{AgentEvent, AgentEventSink};
 pub use extension::{
     Extension, ExtensionCommand, ExtensionError, ExtensionHookResult, ExtensionRegistry,

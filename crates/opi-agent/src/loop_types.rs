@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use crate::diagnostic_sink::DiagnosticSink;
 use crate::message::AgentMessage;
 use crate::tool::Tool;
 use opi_ai::provider::{Provider, ThinkingConfig};
@@ -40,6 +41,10 @@ pub struct AgentLoopContext {
     pub steering_queue: Option<Arc<Mutex<VecDeque<String>>>>,
     /// Follow-up queue (messages injected when agent would otherwise stop).
     pub follow_up_queue: Option<Arc<Mutex<VecDeque<String>>>>,
+    /// Optional sink receiving diagnostics emitted from runtime failure paths
+    /// (retry, cancellation, provider/tool failures). `None` disables emission
+    /// without changing any other runtime behavior.
+    pub diagnostic_sink: Option<Arc<dyn DiagnosticSink>>,
 }
 
 /// Configuration for the agent loop.

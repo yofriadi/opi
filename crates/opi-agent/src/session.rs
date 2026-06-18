@@ -124,6 +124,44 @@ impl CrashRecovery {
             | CrashRecovery::CorruptEntriesWithTruncation { count } => *count,
         }
     }
+
+    /// Project this recovery outcome into shared diagnostics.
+    ///
+    /// `Clean` produces nothing. The degraded cases produce a single warning
+    /// diagnostic each, carrying only the corrupt-entry count (never entry
+    /// content) so the observation is safe to surface. The harness records these
+    /// after a session load; producing them here keeps the classification testable
+    /// without driving the harness.
+    pub fn diagnostics(&self) -> Vec<crate::diagnostic::Diagnostic> {
+        use crate::diagnostic::{Diagnostic, SOURCE_SESSION, Severity, code::*};
+        match self {
+            CrashRecovery::Clean => Vec::new(),
+            CrashRecovery::TruncatedLine => vec![Diagnostic::new(
+                Severity::Warning,
+                CODE_SESSION_TRUNCATED_LINE,
+                SOURCE_SESSION,
+                "session had a truncated trailing line; recovered preceding entries",
+            )],
+            CrashRecovery::CorruptEntries { count } => vec![
+                Diagnostic::new(
+                    Severity::Warning,
+                    CODE_SESSION_CORRUPT_ENTRIES,
+                    SOURCE_SESSION,
+                    "session recovered with corrupt entries skipped",
+                )
+                .details(serde_json::json!({ "corrupt_count": count })),
+            ],
+            CrashRecovery::CorruptEntriesWithTruncation { count } => vec![
+                Diagnostic::new(
+                    Severity::Warning,
+                    CODE_SESSION_CORRUPT_WITH_TRUNCATION,
+                    SOURCE_SESSION,
+                    "session recovered with corrupt entries and a truncated trailing line",
+                )
+                .details(serde_json::json!({ "corrupt_count": count })),
+            ],
+        }
+    }
 }
 
 /// Append-only JSONL writer with crash-safe flush.
