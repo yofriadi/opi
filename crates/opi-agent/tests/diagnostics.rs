@@ -1,0 +1,278 @@
+//! Phase 7 task 7.1 — shared diagnostic model and redaction core.
+//!
+//! These tests pin the observable contract of `opi_agent::diagnostic`:
+//! severity ordering and serde stability, deterministic serialization, stable
+//! snake_case codes/sources, and redaction that scrubs known secrets and
+//! sensitive content by default (summary mode) while preserving it in verbose
+//! mode minus secrets.
+
+use opi_agent::diagnostic::{
+    Diagnostic, RedactionMode, SOURCE_ADAPTER, SOURCE_CONFIG, SOURCE_PROVIDER, SOURCE_RPC,
+    SOURCE_SESSION, SOURCE_TOOL, SOURCE_TUI, Severity, redact,
+};
+use serde_json::{Value, json};
+
+// ---------------------------------------------------------------------------
+// Severity: ordering + serde stability
+// ---------------------------------------------------------------------------
+
+#[test]
+fn severity_orders_error_above_warning_above_info() {
+    assert!(Severity::Error > Severity::Warning);
+    assert!(Severity::Warning > Severity::Info);
+    assert!(Severity::Error > Severity::Info);
+}
+
+#[test]
+fn severity_serializes_to_stable_lowercase_strings() {
+    assert_eq!(serde_json::to_string(&Severity::Info).unwrap(), "\"info\"");
+    assert_eq!(
+        serde_json::to_string(&Severity::Warning).unwrap(),
+        "\"warning\""
+    );
+    assert_eq!(
+        serde_json::to_string(&Severity::Error).unwrap(),
+        "\"error\""
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic: deterministic serialization + stable shape
+// ---------------------------------------------------------------------------
+
+#[test]
+fn diagnostic_serializes_deterministically() {
+    let diag = Diagnostic::new(
+        Severity::Error,
+        "provider_auth_failed",
+        "provider",
+        "authentication failed",
+    );
+    let first = serde_json::to_string(&diag).unwrap();
+    let second = serde_json::to_string(&diag).unwrap();
+    assert_eq!(first, second, "serialization must be deterministic");
+}
+
+#[test]
+fn diagnostic_serializes_stable_field_names_and_snake_case() {
+    let diag = Diagnostic::new(
+        Severity::Warning,
+        "config_invalid_key",
+        "config",
+        "unknown key `foo`",
+    );
+    let value: Value = serde_json::to_value(&diag).unwrap();
+    assert_eq!(value["severity"], "warning");
+    assert_eq!(value["code"], "config_invalid_key");
+    assert_eq!(value["source"], "config");
+    assert_eq!(value["message"], "unknown key `foo`");
+    // Optionals are absent when unset, not null, keeping the wire shape minimal.
+    assert!(value.get("details").is_none());
+    assert!(value.get("action").is_none());
+}
+
+#[test]
+fn diagnostic_serializes_optionals_when_present() {
+    let diag = Diagnostic::new(
+        Severity::Info,
+        "session_compacted",
+        "session",
+        "compacted 3 turns",
+    )
+    .details(json!({ "removed_turns": 3 }))
+    .action("no action needed");
+    let value: Value = serde_json::to_value(&diag).unwrap();
+    assert_eq!(value["details"]["removed_turns"], 3);
+    assert_eq!(value["action"], "no action needed");
+}
+
+// ---------------------------------------------------------------------------
+// Shared source vocabulary constants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn source_constants_are_stable_snake_case_strings() {
+    assert_eq!(SOURCE_PROVIDER, "provider");
+    assert_eq!(SOURCE_TOOL, "tool");
+    assert_eq!(SOURCE_CONFIG, "config");
+    assert_eq!(SOURCE_SESSION, "session");
+    assert_eq!(SOURCE_ADAPTER, "adapter");
+    assert_eq!(SOURCE_RPC, "rpc");
+    assert_eq!(SOURCE_TUI, "tui");
+}
+
+// ---------------------------------------------------------------------------
+// Redaction: summary mode scrubs secrets and sensitive content by default
+// ---------------------------------------------------------------------------
+
+fn sensitive_details() -> Value {
+    json!({
+        "api_key": "sk-ant-1234567890abcdefghijklmnopqrstuv",
+        "bearer": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIg.abc123def456",
+        "prompt": "You are a hidden system prompt.",
+        "tool_output": "contents of /etc/passwd style leak",
+        "env": { "HOME": "/Users/secret", "TOKEN": "leak" },
+        "command": "curl -H 'Authorization: Bearer x' https://example",
+        "cwd": "/Users/secret/proj",
+        "kept": "benign metadata",
+        "count": 42
+    })
+}
+
+#[test]
+fn summary_redaction_scrubs_known_secrets() {
+    let redacted = redact(&sensitive_details(), RedactionMode::Summary);
+    assert_eq!(redacted["api_key"], "[REDACTED]");
+    assert_eq!(redacted["bearer"], "[REDACTED]");
+}
+
+#[test]
+fn summary_redaction_scrubs_sensitive_content_fields() {
+    let redacted = redact(&sensitive_details(), RedactionMode::Summary);
+    assert_eq!(redacted["prompt"], "[REDACTED]");
+    assert_eq!(redacted["tool_output"], "[REDACTED]");
+    // env/command/cwd carry full environment, commands, and absolute working dirs.
+    assert_eq!(redacted["env"], "[REDACTED]");
+    assert_eq!(redacted["command"], "[REDACTED]");
+    assert_eq!(redacted["cwd"], "[REDACTED]");
+}
+
+#[test]
+fn summary_redaction_scrubs_command_args_and_tool_result_keys() {
+    let details = json!({
+        "command": "rm -rf /",
+        "args": ["--token", "sk-leak1234567890abcdefghijklmnopqr"],
+        "tool_result": "tool stdout containing secrets"
+    });
+    let redacted = redact(&details, RedactionMode::Summary);
+    assert_eq!(redacted["command"], "[REDACTED]");
+    assert_eq!(redacted["args"], "[REDACTED]");
+    assert_eq!(redacted["tool_result"], "[REDACTED]");
+}
+
+#[test]
+fn summary_redaction_preserves_benign_metadata() {
+    let redacted = redact(&sensitive_details(), RedactionMode::Summary);
+    assert_eq!(redacted["kept"], "benign metadata");
+    assert_eq!(redacted["count"], 42);
+}
+
+#[test]
+fn summary_redaction_scrubs_absolute_paths_but_keeps_relative() {
+    let details = json!({
+        "unix_path": "/Users/secret/proj/src/main.rs",
+        "win_path": "C:\\Users\\secret\\proj",
+        "rel_path": "src/main.rs",
+        "mentions_path": "see /Users/secret/proj for more"
+    });
+    let redacted = redact(&details, RedactionMode::Summary);
+    assert_eq!(redacted["unix_path"], "[REDACTED]");
+    assert_eq!(redacted["win_path"], "[REDACTED]");
+    assert_eq!(redacted["rel_path"], "src/main.rs");
+    // A value that merely mentions an absolute path is scrubbed too: the path
+    // must not leak out of the workspace by default.
+    assert_eq!(redacted["mentions_path"], "[REDACTED]");
+}
+
+#[test]
+fn summary_redaction_is_recursive() {
+    let details = json!({
+        "nested": {
+            "deep": {
+                "api_key": "sk-ant-1234567890abcdefghijklmnopqrstuv",
+                "prompt": "hidden"
+            }
+        },
+        "list": [
+            { "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIg.abc123def456" },
+            "plain"
+        ]
+    });
+    let redacted = redact(&details, RedactionMode::Summary);
+    assert_eq!(redacted["nested"]["deep"]["api_key"], "[REDACTED]");
+    assert_eq!(redacted["nested"]["deep"]["prompt"], "[REDACTED]");
+    assert_eq!(redacted["list"][0]["token"], "[REDACTED]");
+    assert_eq!(redacted["list"][1], "plain");
+}
+
+// ---------------------------------------------------------------------------
+// Redaction: verbose mode keeps content but still scrubs secrets
+// ---------------------------------------------------------------------------
+
+#[test]
+fn verbose_redaction_keeps_content_but_still_scrubs_secrets() {
+    let details = json!({
+        "prompt": "benign prompt text without secrets",
+        "tool_output": "ordinary tool output",
+        "api_key": "sk-ant-1234567890abcdefghijklmnopqrstuv",
+        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIg.abc123def456",
+        "kept": "ok"
+    });
+    let redacted = redact(&details, RedactionMode::Verbose);
+    // Content is preserved in verbose mode...
+    assert_eq!(redacted["prompt"], "benign prompt text without secrets");
+    assert_eq!(redacted["tool_output"], "ordinary tool output");
+    assert_eq!(redacted["kept"], "ok");
+    // ...but secrets are still scrubbed.
+    assert_eq!(redacted["api_key"], "[REDACTED]");
+    assert_eq!(redacted["token"], "[REDACTED]");
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic.redacted_details: redaction does not touch core fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn redacted_details_scrubs_only_details() {
+    let diag = Diagnostic::new(
+        Severity::Error,
+        "provider_request_failed",
+        "provider",
+        "request failed",
+    )
+    .details(json!({ "api_key": "sk-ant-1234567890abcdefghijklmnopqrstuv", "status": 503 }))
+    .action("retry with backoff");
+
+    let redacted = diag.redacted_details(RedactionMode::Summary).unwrap();
+    assert_eq!(redacted["api_key"], "[REDACTED]");
+    assert_eq!(redacted["status"], 503);
+
+    // Core diagnostic fields are untouched by redaction.
+    assert_eq!(diag.code, "provider_request_failed");
+    assert_eq!(diag.source, "provider");
+    assert_eq!(diag.severity, Severity::Error);
+    assert_eq!(diag.action.as_deref(), Some("retry with backoff"));
+}
+
+#[test]
+fn redacted_details_is_none_when_no_details() {
+    let diag = Diagnostic::new(Severity::Info, "noop", "config", "nothing happened");
+    assert!(diag.redacted_details(RedactionMode::Summary).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Display: stable one-line form, no CLI/color formatting in the model
+// ---------------------------------------------------------------------------
+
+#[test]
+fn diagnostic_display_is_stable_one_line() {
+    let diag = Diagnostic::new(
+        Severity::Warning,
+        "config_invalid_key",
+        "config",
+        "unknown key `foo`",
+    )
+    .action("remove the key");
+    let rendered = diag.to_string();
+    assert!(rendered.contains("[warning]"), "rendered: {rendered}");
+    assert!(
+        rendered.contains("config::config_invalid_key"),
+        "rendered: {rendered}"
+    );
+    assert!(
+        rendered.contains("unknown key `foo`"),
+        "rendered: {rendered}"
+    );
+    // No ANSI color escapes leak into the runtime-layer formatting.
+    assert!(!rendered.contains('\u{1b}'), "rendered: {rendered}");
+}
