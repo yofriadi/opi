@@ -59,6 +59,13 @@ pub enum RedactionMode {
     Verbose,
 }
 
+/// The default redaction mode is [`RedactionMode::Summary`] (safe by default).
+impl Default for RedactionMode {
+    fn default() -> Self {
+        RedactionMode::Summary
+    }
+}
+
 /// A structured diagnostic record shared across runtime, provider, tool,
 /// package, adapter, session, config, and RPC surfaces.
 ///
@@ -193,6 +200,8 @@ pub mod code {
     pub const CODE_PACKAGE_DIAGNOSTIC: &str = "package_diagnostic";
     pub const CODE_CONFIG_PARSE_FAILED: &str = "config_parse_failed";
     pub const CODE_CONFIG_READ_FAILED: &str = "config_read_failed";
+    /// A local trace sink failed mid-run and was disabled (fail-open).
+    pub const CODE_TRACE_SINK_FAILED: &str = "trace_sink_failed";
 }
 
 const REDACTED: &str = "[REDACTED]";
