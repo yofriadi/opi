@@ -11,7 +11,9 @@
 
 Current workspace version: `0.5.2` from `[workspace.package]` in `Cargo.toml`.
 
-`opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, RPC JSONL mode, eight built-in tools, image attachments, model/session/branch/tree pickers, session fork/clone flows, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, package add/remove/list/doctor commands, token usage accumulation, and best-effort cost summaries.
+`opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, RPC JSONL mode, eight built-in tools, image attachments, model/session/branch/tree pickers, session fork/clone flows, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, package add/remove/list/doctor commands, token usage accumulation, best-effort cost summaries, shared runtime diagnostics, an opt-in local trace envelope, and a top-level `opi doctor` health command.
+
+Observability is local and explicit: shared diagnostics, the trace envelope, and `opi doctor` run against local state only, never phone home, and stay an unstable 0.x surface. opi does not collect telemetry or analytics and does not share sessions automatically.
 
 Extensibility surfaces are present and still unstable 0.x APIs: shared SDK/RPC command types, extension hooks/tools/state for embedders, layered resource discovery for extensions, packages, skills, prompt fragments, and themes, process-jsonl package adapters, custom provider/model registration, and a streaming proxy. `opi-web-ui` remains `publish = false`; it is not a standalone browser app, but it provides reusable RPC/SDK event parsing, conversation state, component models, and HTML rendering.
 

@@ -66,6 +66,7 @@
 | 4 | Web UI event/state/rendering | `opi-web-ui` | `pi-web-ui` browser package | 有意偏离 | 未发布 Rust consumer crate 已存在。 | 保持声明收窄，或单独创建 browser app 计划。 |
 | 4 | MCP、sub-agent、plan mode、todo、permission gate examples | examples/packages | `pi` 将工作流重功能保持在核心之外 | 完整 | Examples/package scaffolds 位于核心之外。 | 除非通过 extension/package registration 路由，否则不要加入内置 CLI。 |
 | 5 | Package store、CLI、manifest V2、adapter protocol、adapter host、adapter bridge、example adapters | `opi-coding-agent`、`opi-agent` | `pi` package manager 和 extension adapters | 部分 | `opi package add/remove/list/doctor`、local/git sources、带 `[adapter]` 的 manifest V2、通过 `opi-extension-jsonl-v1` 运行的 `process-jsonl` adapter hosting、adapter-to-runtime bridge（tool、command、hook、event、state、cancellation），以及可运行的 example adapter packages（todo、permission-gate、protected-paths）已存在。 | 在宣称广义 package ecosystem 前稳定 adapter protocol；保持 npm/marketplace 超出范围。 |
+| 7 | 可靠性与可观测性（共享诊断、本地 trace envelope、`opi doctor`） | `opi-agent`、`opi-coding-agent` | `pi` 的错误/诊断暴露 | 部分 | 共享诊断模型、脱敏核心、provider/runtime 错误分类、可选的不稳定 0.x 本地 trace envelope，以及无网络的顶层 `opi doctor` 已作为本地且显式的表面存在。 | 保持可观测性本地且显式；不会新增 telemetry、analytics、自动共享会话或稳定 1.0 可观测协议。 |
 
 ## 当前修复优先级
 

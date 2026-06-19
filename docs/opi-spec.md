@@ -1048,7 +1048,9 @@ Additional rules:
 
 ### 11.3 Observability
 
-`tracing` spans SHOULD cover provider calls, SSE parsing, agent turns, tool execution, session append/load, compaction, and retry scheduling. Secrets and raw provider payloads MUST be redacted by default.
+Observability in opi is **local and explicit**. Shared diagnostics, the local trace envelope, and the `opi doctor` command run against local state only — they never phone home, transmit telemetry or analytics, or share sessions automatically. This is an **unstable 0.x** surface: the diagnostic codes, trace envelope shape, and `--json`/RPC event fields may change between minor versions until a later phase stabilizes them.
+
+`tracing` spans SHOULD cover provider calls, SSE parsing, agent turns, tool execution, session append/load, compaction, and retry scheduling. Secrets and raw provider payloads MUST be redacted by default. A trace is produced only when explicitly requested via the `--trace` CLI flag or the RPC `trace` command, and is never persisted automatically forever.
 
 ### 11.4 Performance Targets
 

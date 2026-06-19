@@ -3281,6 +3281,170 @@ mod phase7 {
         let _ = task2.await;
     }
 
+    /// DoD SC6 (RPC trace surface): a requested trace envelope over a run whose
+    /// prompt embeds every sensitive class (API key, GitHub token, credentialed
+    /// URL, bearer/JWT) contains none of them. The envelope is serialized via
+    /// the shared redaction boundary, so this guards both structural-metadata
+    /// emission and any future diagnostic-details leak.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_rpc_trace_redacts_sensitive_values() {
+        let secrets = [
+            "sk-ant-1234567890abcdefghijklmnopqrstuv",
+            "ghp_01234567890123456789012345678901234567",
+            "https://alice:s3cr3t@gitlab.example.com/o/r.git",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIg.abc123def456",
+        ];
+        let prompt = format!(
+            "rotate now: {} {} {} {}",
+            secrets[0], secrets[1], secrets[2], secrets[3]
+        );
+
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner = RpcRunner::new_with_trace(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            Some(trace_sink.clone()),
+        )
+        .expect("rpc runner with trace");
+
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        let _ready = recv_rpc_line(&mut output_rx).await; // rpc_ready
+        command_tx
+            .send(RpcCommand::prompt {
+                id: None,
+                message: prompt.clone(),
+            })
+            .unwrap();
+        let _ = recv_response(&mut output_rx, "prompt").await;
+        recv_until_agent_end(&mut output_rx).await;
+
+        command_tx
+            .send(RpcCommand::trace {
+                id: Some("t-redact".into()),
+            })
+            .unwrap();
+        let resp = recv_response(&mut output_rx, "trace").await;
+        assert_eq!(resp["success"], true, "trace request succeeds when enabled");
+        let envelope = serde_json::to_string(&resp["data"]).unwrap_or_default();
+        for secret in secrets {
+            assert!(
+                !envelope.contains(secret),
+                "RPC trace envelope leaked a sensitive value: {secret}\n--- envelope ---\n{envelope}",
+            );
+        }
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
+    }
+
+    /// SC 1 (RPC structured boundary): a run that produces a runtime diagnostic
+    /// surfaces it in the trace envelope as a `diagnostic_linked` record whose
+    /// `source` is a shared SOURCE_* vocabulary token and whose
+    /// `diagnostic_code` is a stable snake_case shared code — i.e. the shared
+    /// Diagnostic shape crosses the RPC boundary, not an ad-hoc string. The
+    /// unsupported-trace path additionally returns a structured `error_code`
+    /// rather than a free-text error (asserted by the supported/unsupported
+    /// test above).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_shared_diagnostics_used_by_rpc() {
+        // A retryable error then success emits a provider retry diagnostic,
+        // which the agent loop mirrors as a diagnostic-linked trace record.
+        let provider = MockProvider::new_with_errors(
+            "mock",
+            vec![
+                MockResponse::Error(ProviderError::RateLimited {
+                    retry_after_ms: Some(1),
+                }),
+                MockResponse::Events(test_support::text_response("ok")),
+            ],
+        );
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner = RpcRunner::new_with_trace(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            Some(trace_sink.clone()),
+        )
+        .expect("rpc runner with trace");
+
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        let _ready = recv_rpc_line(&mut output_rx).await; // rpc_ready
+        command_tx
+            .send(RpcCommand::prompt {
+                id: None,
+                message: "hi".into(),
+            })
+            .unwrap();
+        let _ = recv_response(&mut output_rx, "prompt").await;
+        recv_until_agent_end(&mut output_rx).await;
+
+        command_tx
+            .send(RpcCommand::trace {
+                id: Some("t-shape".into()),
+            })
+            .unwrap();
+        let resp = recv_response(&mut output_rx, "trace").await;
+        assert_eq!(resp["success"], true);
+        let records = resp["data"]["records"]
+            .as_array()
+            .expect("envelope records array");
+
+        // At least one diagnostic-linked record carries the shared shape.
+        let linked: Vec<&serde_json::Value> = records
+            .iter()
+            .filter(|r| r["kind"] == "diagnostic_linked")
+            .collect();
+        assert!(
+            !linked.is_empty(),
+            "expected >=1 diagnostic_linked trace record from the retry path; records: {records:?}"
+        );
+        let valid_sources = ["provider", "tool", "agent", "session", "config", "rpc"];
+        for record in &linked {
+            let source = record["source"].as_str().unwrap_or("");
+            assert!(
+                valid_sources.contains(&source),
+                "diagnostic_linked source {source:?} is not a shared SOURCE_* token"
+            );
+            let code = record["diagnostic_code"].as_str().unwrap_or("");
+            assert!(
+                !code.is_empty()
+                    && code
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "diagnostic_linked code {code:?} is not a stable snake_case shared code"
+            );
+            assert!(
+                record.get("severity").is_some(),
+                "diagnostic_linked record carries the shared severity field"
+            );
+        }
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
+    }
+
     /// Across multiple RPC runs in one session, run_summary counts are scoped
     /// per run (not cumulative) and each run_summary is preceded by AgentEnd.
     /// Pins the two evaluator-confirmed fixes for Phase 7 task 7.5.

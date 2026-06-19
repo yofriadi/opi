@@ -251,6 +251,63 @@ fn redacted_details_is_none_when_no_details() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 7 task 7.6 — DoD SC6 end-to-end redaction guard
+//
+// Consolidates every sensitive class the shared redaction core must scrub at
+// the diagnostic boundary: API keys, bearer tokens, environment values, prompt
+// content, and tool output, plus the 7.4-evaluator-deferred gaps (GitHub PATs,
+// credentialed-URL userinfo, and Authorization-header-by-name). These flow
+// through `redact()` (shared by doctor --json, JSON/RPC, and trace sinks), so a
+// single test pins the contract for every Phase 7 surface.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn phase7_redacts_sensitive_values() {
+    let details = json!({
+        "api_key": "sk-ant-1234567890abcdefghijklmnopqrstuv",
+        "bearer": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIg.abc123def456",
+        "github_pat": "ghp_01234567890123456789012345678901234567",
+        // A credentialed git URL (the doctor package_source leak path).
+        "package_source": "https://ghp_01234567890123456789012345678901234567@github.com/owner/repo.git",
+        "userpass_url": "https://alice:s3cr3t@gitlab.example.com/owner/repo.git",
+        "authorization": "Bearer opaqueTokenValueNotMatchingOtherPatterns",
+        "prompt": "system prompt text",
+        "tool_output": "stdout embedding sk-ant-1234567890abcdefghijklmnopqrstuv",
+        "env": { "OPENAI_API_KEY": "sk-leak1234567890abcdefghijklmnopqr" },
+        "cwd": "/Users/secret/proj",
+        "benign": "ordinary value kept",
+        "count": 7
+    });
+
+    let redacted = redact(&details, RedactionMode::Summary);
+
+    // API keys + bearer (SecretRedactor value patterns).
+    assert_eq!(redacted["api_key"], "[REDACTED]");
+    assert_eq!(redacted["bearer"], "[REDACTED]");
+    // Content-sensitive whole-field redaction (Summary mode).
+    assert_eq!(redacted["prompt"], "[REDACTED]");
+    assert_eq!(redacted["tool_output"], "[REDACTED]");
+    assert_eq!(redacted["env"], "[REDACTED]");
+    assert_eq!(redacted["cwd"], "[REDACTED]");
+    // 7.6 gaps: GitHub PAT, credentialed URLs, Authorization header.
+    assert_eq!(redacted["github_pat"], "[REDACTED]");
+    assert_eq!(redacted["package_source"], "[REDACTED]");
+    assert_eq!(redacted["userpass_url"], "[REDACTED]");
+    assert_eq!(redacted["authorization"], "[REDACTED]");
+    // Benign metadata survives.
+    assert_eq!(redacted["benign"], "ordinary value kept");
+    assert_eq!(redacted["count"], 7);
+
+    // Verbose mode still scrubs the shared secret patterns.
+    let verbose = redact(&details, RedactionMode::Verbose);
+    assert_eq!(verbose["github_pat"], "[REDACTED]");
+    assert_eq!(verbose["package_source"], "[REDACTED]");
+    assert_eq!(verbose["authorization"], "[REDACTED]");
+    // ...while content fields are retained.
+    assert_eq!(verbose["prompt"], "system prompt text");
+}
+
+// ---------------------------------------------------------------------------
 // Display: stable one-line form, no CLI/color formatting in the model
 // ---------------------------------------------------------------------------
 

@@ -17,9 +17,12 @@ use std::path::Path;
 
 use opi_agent::Severity;
 use opi_coding_agent::config::{ConfigError, OpiConfig};
-use opi_coding_agent::diagnostic_bridge::diagnostic_from_config;
+use opi_coding_agent::diagnostic_bridge::{diagnostic_from_config, diagnostic_from_package};
 use opi_coding_agent::doctor::{
-    DoctorContext, DoctorReport, DoctorScope, format_json, format_text, run_doctor,
+    DoctorContext, DoctorEntry, DoctorReport, DoctorScope, format_json, format_text, run_doctor,
+};
+use opi_coding_agent::package_resolver::{
+    InstalledPackageScope, PackageDiagnostic, PackageDiagnosticSeverity,
 };
 
 const ANTHROPIC_ENV: &str = "ANTHROPIC_API_KEY";
@@ -434,6 +437,143 @@ fn format_json_is_ndjson_with_required_fields() {
         assert!(value.get("source").is_some(), "missing source: {line}");
         assert!(value.get("message").is_some(), "missing message: {line}");
     }
+}
+
+// ===========================================================================
+// Phase 7 task 7.6 — redaction + shared-diagnostic-shape guards
+//
+// `phase7_doctor_redacts_sensitive_values` closes the credentialed-URL leak
+// path the 7.4 evaluator deferred (a package source URL carrying a GitHub PAT
+// or user:password userinfo must not survive the `--json` boundary). It drives
+// the real production bridge (`diagnostic_from_package`) so the assertion
+// covers the path that produces `details.package_source`, not a synthetic
+// shortcut. `phase7_shared_diagnostics_used_by_doctor` proves every doctor
+// entry is the shared `opi_agent::Diagnostic` at the public boundary (SC 1).
+// ===========================================================================
+
+#[test]
+fn phase7_doctor_redacts_sensitive_values() {
+    let credentialed =
+        "https://ghp_01234567890123456789012345678901234567@github.com/owner/repo.git";
+    let pd = PackageDiagnostic {
+        scope: InstalledPackageScope::Project,
+        source: credentialed.to_string(),
+        severity: PackageDiagnosticSeverity::Warning,
+        code: "source_unavailable".to_string(),
+        message: "package source unreachable".to_string(),
+    };
+    let diagnostic = diagnostic_from_package(&pd);
+    // The shared bridge places the raw source into details.package_source.
+    assert_eq!(
+        diagnostic.details.as_ref().unwrap()["package_source"],
+        credentialed,
+        "precondition: the raw credentialed URL must reach details before redaction"
+    );
+
+    let report = DoctorReport {
+        entries: vec![DoctorEntry {
+            scope: DoctorScope::Package,
+            diagnostic,
+        }],
+    };
+
+    let json = format_json(&report);
+    assert!(
+        !json.contains("ghp_01234567890123456789012345678901234567"),
+        "GitHub PAT leaked through doctor --json details.package_source: {json}",
+    );
+    assert!(
+        !json.contains(":s3cr3t@") && !json.contains("ghp_"),
+        "credentialed-URL credential leaked through doctor --json: {json}",
+    );
+    assert!(
+        json.contains("[REDACTED]"),
+        "expected a redaction marker in doctor --json, got: {json}",
+    );
+
+    // A user:password userinfo URL must also be scrubbed at the boundary.
+    let pd2 = PackageDiagnostic {
+        scope: InstalledPackageScope::Project,
+        source: "https://alice:s3cr3t@gitlab.example.com/o/r.git".to_string(),
+        ..pd
+    };
+    let report2 = DoctorReport {
+        entries: vec![DoctorEntry {
+            scope: DoctorScope::Package,
+            diagnostic: diagnostic_from_package(&pd2),
+        }],
+    };
+    let json2 = format_json(&report2);
+    assert!(
+        !json2.contains("s3cr3t") && !json2.contains("alice:s3cr3t@"),
+        "userinfo credentials leaked through doctor --json: {json2}",
+    );
+    assert!(
+        json2.contains("[REDACTED]"),
+        "expected redaction, got: {json2}"
+    );
+}
+
+#[test]
+fn phase7_shared_diagnostics_used_by_doctor() {
+    // SC 1: doctor emits the shared `opi_agent::Diagnostic` shape (stable
+    // severity/code/source/message) at its public boundary, not ad-hoc strings.
+    let config = test_config("anthropic:claude-test-model");
+    let dir = tempfile::tempdir().unwrap();
+    let report = run_doctor(DoctorScope::ALL, &ctx(&config, dir.path(), &no_env));
+
+    // Every entry's diagnostic IS the shared Diagnostic (source is a stable
+    // shared SOURCE_* vocabulary token; code is stable snake_case).
+    let valid_sources = ["config", "provider", "package", "session", "tui", "rpc"];
+    assert!(!report.entries.is_empty());
+    for entry in &report.entries {
+        assert!(
+            valid_sources.contains(&entry.diagnostic.source),
+            "doctor diagnostic source {:?} is not in the shared SOURCE_* vocabulary",
+            entry.diagnostic.source,
+        );
+        assert!(
+            !entry.diagnostic.code.is_empty()
+                && entry
+                    .diagnostic
+                    .code
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "doctor diagnostic code {:?} is not stable snake_case",
+            entry.diagnostic.code,
+        );
+    }
+
+    // The NDJSON output flattens the shared Diagnostic fields (not a custom
+    // shape): every line carries severity/code/source/message.
+    let json = format_json(&report);
+    for line in json.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("doctor --json line is not valid JSON: {line}\nerror: {e}"));
+        for field in ["severity", "code", "source", "message"] {
+            assert!(
+                value.get(field).is_some(),
+                "doctor --json line does not carry shared Diagnostic field {field}: {line}"
+            );
+        }
+    }
+
+    // A package diagnostic built through the shared bridge carries the stable
+    // shared code `package_diagnostic` (CODE_PACKAGE_DIAGNOSTIC) and source
+    // `package`, proving the shared shape crosses the doctor boundary.
+    let pd = PackageDiagnostic {
+        scope: InstalledPackageScope::Project,
+        source: "https://example.com/o/r.git".to_string(),
+        severity: PackageDiagnosticSeverity::Warning,
+        code: "source_unavailable".to_string(),
+        message: "unreachable".to_string(),
+    };
+    let bridged = diagnostic_from_package(&pd);
+    assert_eq!(bridged.code, "package_diagnostic");
+    assert_eq!(bridged.source, "package");
 }
 
 // ===========================================================================

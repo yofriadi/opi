@@ -11,7 +11,9 @@
 
 当前 workspace 版本：`0.5.2`，来源于 `Cargo.toml` 的 `[workspace.package]`。
 
-`opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、RPC JSONL 模式、8 个内置工具、图片附件、模型/会话/分支/会话树选择器、会话 fork/clone 流程、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、package add/remove/list/doctor 命令、token 用量累计，以及尽力而为的费用摘要。
+`opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、RPC JSONL 模式、8 个内置工具、图片附件、模型/会话/分支/会话树选择器、会话 fork/clone 流程、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、package add/remove/list/doctor 命令、token 用量累计、尽力而为的费用摘要、共享运行时诊断、可选的本地 trace envelope，以及顶层 `opi doctor` 健康检查命令。
+
+可观测性是本地且显式的：共享诊断、trace envelope 与 `opi doctor` 仅针对本地状态运行，从不回传，并保持为不稳定 0.x 表面。opi 不收集 telemetry 或 analytics，也不会自动共享会话。
 
 可扩展性表面已经存在且仍是不稳定 0.x API：共享 SDK/RPC 命令类型、面向嵌入方的 extension hooks/tools/state、按层发现 extensions、packages、skills、prompt fragments 和 themes 资源、process-jsonl package adapter、自定义 provider/model 注册，以及 streaming proxy。`opi-web-ui` 仍是 `publish = false`；它不是独立浏览器应用，但已经提供可复用的 RPC/SDK 事件解析、对话状态、组件模型和 HTML 渲染。
 

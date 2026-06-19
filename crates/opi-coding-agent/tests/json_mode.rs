@@ -638,4 +638,69 @@ mod phase7 {
             "trace must not leak secret-like content"
         );
     }
+
+    /// DoD SC6 (JSON trace surface): every sensitive class the shared redaction
+    /// core must scrub — API keys, bearer/JWT, GitHub tokens, and credentialed
+    /// URLs embedded in the prompt — is absent from the requested trace
+    /// envelope. The envelope carries only structural metadata by design, so
+    /// this also guards against any future regression that attaches prompt
+    /// content to a trace record.
+    #[tokio::test]
+    async fn phase7_json_trace_redacts_sensitive_values() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let trace_path = dir.path().join("trace.jsonl");
+        let secrets = [
+            "sk-ant-1234567890abcdefghijklmnopqrstuv",
+            "ghp_01234567890123456789012345678901234567",
+            "https://alice:s3cr3t@gitlab.example.com/o/r.git",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIg.abc123def456",
+        ];
+        let prompt = format!(
+            "rotate these now: {} {} {} {}",
+            secrets[0], secrets[1], secrets[2], secrets[3]
+        );
+
+        let provider = MockProvider::new("mock", vec![test_support::text_response("done")]);
+        let mut runner =
+            runner_with_startup(Box::new(provider), Vec::new(), Some(trace_path.clone()));
+        let result = runner.run_json(&prompt).await;
+        assert_eq!(result.exit_code, ExitCode::Success as i32);
+
+        let contents = std::fs::read_to_string(&trace_path).expect("trace file written");
+        assert!(!contents.is_empty(), "trace envelope must be produced");
+        for secret in secrets {
+            assert!(
+                !contents.contains(secret),
+                "trace envelope leaked a sensitive value: {secret}\n--- trace ---\n{contents}",
+            );
+        }
+        // The secrets must not appear in any diagnostic/details payload in the
+        // run's NDJSON output either. (The prompt text itself is the user's own
+        // input and is legitimately echoed in the conversation event stream, so
+        // it is intentionally excluded from this redaction assertion.)
+        for line in result.stdout.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            // Only inspect structured diagnostic-bearing events, not the
+            // conversation message stream.
+            let ty = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if !matches!(
+                ty,
+                "StartupDiagnostics" | "session_summary" | "run_summary" | "RuntimeFailure"
+            ) {
+                continue;
+            }
+            let serialized = serde_json::to_string(&value).unwrap_or_default();
+            for secret in secrets {
+                assert!(
+                    !serialized.contains(secret),
+                    "JSON diagnostic event {ty:?} leaked a sensitive value: {secret}\n{serialized}",
+                );
+            }
+        }
+    }
 }

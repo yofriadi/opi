@@ -172,6 +172,76 @@ fn diagnostic_linked_record_carries_severity_and_code() {
     assert_eq!(rec.diagnostic_code, Some(CODE_PROVIDER_TIMEOUT));
 }
 
+/// Phase 7 task 7.6 — DoD SC6 (trace diagnostic-linked boundary): if a
+/// diagnostic-linked record ever carries structured details (today the agent
+/// loop attaches only severity + code, but the envelope must stay safe if a
+/// future caller adds details), the centralized redaction at the trace emit
+/// boundary scrubs every sensitive class. Pins `trace.rs` emit-inner redaction
+/// for the diagnostic-linked path in both modes.
+#[test]
+fn phase7_trace_redacts_sensitive_values_in_diagnostic_linked() {
+    fn secret_details() -> serde_json::Value {
+        serde_json::json!({
+            "api_key": "sk-ant-1234567890abcdefghijklmnopqrstuv",
+            "github_pat": "ghp_01234567890123456789012345678901234567",
+            "package_source": "https://alice:s3cr3t@gitlab.example.com/o/r.git",
+            "authorization": "Bearer opaqueValue123",
+            "prompt": "hidden system prompt",
+            "tool_output": "stdout with sk-ant-1234567890abcdefghijklmnopqrstuv",
+            "benign": "kept"
+        })
+    }
+
+    // Summary mode: secrets AND content-sensitive fields scrubbed.
+    let sink = Arc::new(RecordingTraceSink::new());
+    let collector =
+        TraceCollector::new("run-dl-redact", RedactionMode::Summary, sink.clone(), None);
+    collector.prepare().unwrap();
+    collector
+        .record(SOURCE_PROVIDER, TraceKind::DiagnosticLinked)
+        .severity(Severity::Warning)
+        .diagnostic_code(CODE_PROVIDER_RATE_LIMITED)
+        .details(secret_details())
+        .emit();
+
+    let snapshot = sink.snapshot();
+    let details = snapshot[0]
+        .details
+        .as_ref()
+        .expect("diagnostic-linked details present");
+    assert_eq!(details["api_key"], "[REDACTED]");
+    assert_eq!(details["github_pat"], "[REDACTED]");
+    assert_eq!(details["package_source"], "[REDACTED]");
+    assert_eq!(details["authorization"], "[REDACTED]");
+    assert_eq!(details["prompt"], "[REDACTED]");
+    assert_eq!(details["tool_output"], "[REDACTED]");
+    assert_eq!(details["benign"], "kept");
+
+    // Verbose mode: content retained, but secrets (incl. the 7.6 ghp_/userinfo/
+    // authorization additions) still scrubbed.
+    let sink_v = Arc::new(RecordingTraceSink::new());
+    let collector_v =
+        TraceCollector::new("run-dl-vrb", RedactionMode::Verbose, sink_v.clone(), None);
+    collector_v.prepare().unwrap();
+    collector_v
+        .record(SOURCE_PROVIDER, TraceKind::DiagnosticLinked)
+        .severity(Severity::Warning)
+        .diagnostic_code(CODE_PROVIDER_RATE_LIMITED)
+        .details(secret_details())
+        .emit();
+
+    let snapshot_v = sink_v.snapshot();
+    let details_v = snapshot_v[0]
+        .details
+        .as_ref()
+        .expect("diagnostic-linked details present");
+    assert_eq!(details_v["api_key"], "[REDACTED]");
+    assert_eq!(details_v["github_pat"], "[REDACTED]");
+    assert_eq!(details_v["package_source"], "[REDACTED]");
+    assert_eq!(details_v["authorization"], "[REDACTED]");
+    assert_eq!(details_v["prompt"], "hidden system prompt");
+}
+
 // ---------------------------------------------------------------------------
 // Redaction modes
 // ---------------------------------------------------------------------------

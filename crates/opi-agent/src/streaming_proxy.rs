@@ -41,9 +41,12 @@
 //! secret patterns:
 //! - `sk-ant-*` (Anthropic API keys)
 //! - `sk-*` (OpenAI API keys)
+//! - `gh[pousr]_*` and `github_pat_*` (GitHub tokens)
+//! - Credentialed URL userinfo (`scheme://user:password@host`)
 //! - Bearer tokens / JWTs (`eyJ*`)
 //! - JSON fields named `password`, `secret`, `token`, `api_key`, `apikey`,
-//!   `private_key`, `access_token`, `refresh_token`
+//!   `private_key`, `access_token`, `refresh_token`, `authorization`,
+//!   `proxy-authorization`
 //!
 //! Matching values are replaced with `[REDACTED]`. Custom patterns can be
 //! added via [`SecretRedactor::new`].
@@ -308,9 +311,12 @@ impl<R: BufRead, W: Write, H: ProxyHandler> ProxyEngine<R, W, H> {
 ///
 /// The default instance matches:
 /// - API keys in values: `sk-ant-*`, `sk-*`
+/// - GitHub tokens in values: `gh[pousr]_*`, `github_pat_*`
+/// - Credentialed URL userinfo in values: `scheme://user:password@host`
 /// - JWT/Bearer tokens in values: `eyJ*`
 /// - Sensitive JSON field names: `password`, `secret`, `token`, `api_key`,
-///   `apikey`, `private_key`, `access_token`, `refresh_token`
+///   `apikey`, `private_key`, `access_token`, `refresh_token`,
+///   `authorization`, `proxy-authorization`
 ///
 /// Custom patterns can be provided via [`SecretRedactor::new`].
 #[derive(Debug, Clone)]
@@ -328,6 +334,16 @@ impl Default for SecretRedactor {
         let value_patterns = vec![
             // Anthropic API keys
             r"sk-ant-[a-zA-Z0-9]{20,}".to_owned(),
+            // GitHub tokens (classic PATs, OAuth, app/server, refresh, and
+            // fine-grained PATs). Phase 7 task 7.6 closes the doctor
+            // package_source credentialed-URL leak deferred by the 7.4
+            // evaluator.
+            r"gh[pousr]_[A-Za-z0-9]{36,}".to_owned(),
+            r"github_pat_[A-Za-z0-9_]{82,}".to_owned(),
+            // Credentialed URL userinfo: scheme://user:password@host. Catches
+            // inline basic-auth credentials embedded in git/https URLs even
+            // when the credential is not a recognized token prefix.
+            r"[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s@]+:[^/\s@]+@".to_owned(),
             // OpenAI-style API keys
             r"sk-[a-zA-Z0-9]{20,}".to_owned(),
             // JWT/Bearer tokens (eyJ header plus two token segments)
@@ -346,6 +362,10 @@ impl Default for SecretRedactor {
                 "private_key".to_owned(),
                 "access_token".to_owned(),
                 "refresh_token".to_owned(),
+                // Authorization/Bearer headers are redacted by name so an opaque
+                // bearer value is scrubbed regardless of token prefix (7.6).
+                "authorization".to_owned(),
+                "proxy-authorization".to_owned(),
             ],
         }
     }
