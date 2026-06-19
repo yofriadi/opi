@@ -51,6 +51,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use opi_agent::agent::AgentControl;
+use opi_agent::diagnostic::Diagnostic;
 use opi_agent::event::AgentEvent;
 use opi_agent::extension::ExtensionRegistry;
 use opi_agent::loop_types::AgentError;
@@ -217,7 +218,7 @@ impl RpcRunner {
             Some(extension_registry),
             Some(installed_packages),
             diagnostics,
-            None,
+            Some(Arc::new(RecordingTraceSink::new())),
         )
     }
 
@@ -233,7 +234,7 @@ impl RpcRunner {
         initial_messages: Vec<AgentMessage>,
         extension_registry: Option<ExtensionRegistry>,
         installed_packages: Option<Vec<crate::package_discovery::PackageResource>>,
-        startup_diagnostics: Vec<String>,
+        startup_diagnostics: Vec<Diagnostic>,
         trace_sink: Option<Arc<RecordingTraceSink>>,
     ) -> Result<Self, crate::policy::ToolPolicyError> {
         let tool_config = crate::policy::ToolRuntimeConfig::resolve(
@@ -351,7 +352,11 @@ impl RpcRunner {
         let startup_diagnostics = self
             .harness
             .as_ref()
-            .map(|harness| harness.resource_metadata().diagnostics.clone())
+            .map(|harness| {
+                harness
+                    .resource_metadata()
+                    .diagnostic_payloads(RedactionMode::Summary)
+            })
             .unwrap_or_default();
         let header = serde_json::json!({
             "type": "rpc_ready",
@@ -376,6 +381,19 @@ impl RpcRunner {
         let mut run_task: Option<tokio::task::JoinHandle<RunResult>> = None;
 
         loop {
+            if run_task.as_ref().is_some_and(|task| task.is_finished()) {
+                let task = run_task.take().expect("run task checked above");
+                let joined = task.await;
+                // Flush the run's queued events (incl. AgentEnd) BEFORE
+                // emitting the run_summary so the on-wire order is
+                // ...events, AgentEnd, run_summary (Phase 7 task 7.5).
+                drain_events(&mut event_rx, &mut emit);
+                if !self.complete_run_task(joined, &mut emit) {
+                    return ExitCode::RuntimeFailure as i32;
+                }
+                continue;
+            }
+
             tokio::select! {
                 Some(event) = event_rx.recv() => {
                     if !emit(&event) {

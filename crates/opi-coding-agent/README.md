@@ -315,7 +315,7 @@ opi --rpc
 On startup, `opi` emits a `rpc_ready` header:
 
 ```json
-{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.2"}
+{"type":"rpc_ready","schema_version":3,"mode":"rpc","version":"0.5.2"}
 ```
 
 Commands are JSON objects sent to stdin, one per line. Responses and events are JSON objects emitted to stdout, one per line. Diagnostics go to stderr.

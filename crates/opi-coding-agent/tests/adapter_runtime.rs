@@ -609,22 +609,20 @@ async fn start_adapters_unsupported_protocol_diagnostic_names_expected_and_actua
     let diag = &diagnostics[0];
 
     // The diagnostic must name the rejected package.
-    assert!(
-        diag.contains("proto-pkg"),
-        "diagnostic must name the package: {diag:?}"
+    assert_eq!(
+        diag.code,
+        opi_agent::diagnostic::code::CODE_ADAPTER_PROTOCOL_UNSUPPORTED
     );
+    assert_eq!(diag.source, opi_agent::diagnostic::SOURCE_ADAPTER);
+    assert_eq!(diag.message, "unsupported adapter protocol");
+    let details = diag.details.as_ref().expect("diagnostic details");
+    assert_eq!(details["package_name"], "proto-pkg");
 
     // It must name the expected protocol so authors know what the host accepts.
-    assert!(
-        diag.contains("opi-extension-jsonl-v1"),
-        "diagnostic must name the expected protocol `opi-extension-jsonl-v1`: {diag:?}"
-    );
+    assert_eq!(details["expected_protocol"], "opi-extension-jsonl-v1");
 
     // It must name the actual (rejected) protocol.
-    assert!(
-        diag.contains("unknown-protocol"),
-        "diagnostic must name the actual protocol `unknown-protocol`: {diag:?}"
-    );
+    assert_eq!(details["actual_protocol"], "unknown-protocol");
 
     // The package is skipped at the gate, so no adapter is registered.
     assert!(
@@ -650,22 +648,20 @@ async fn start_adapters_unsupported_kind_diagnostic_names_expected_and_actual() 
     assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
     let diag = &diagnostics[0];
 
-    assert!(
-        diag.contains("kind-pkg"),
-        "diagnostic must name the package: {diag:?}"
+    assert_eq!(
+        diag.code,
+        opi_agent::diagnostic::code::CODE_ADAPTER_KIND_UNSUPPORTED
     );
+    assert_eq!(diag.source, opi_agent::diagnostic::SOURCE_ADAPTER);
+    assert_eq!(diag.message, "unsupported adapter kind");
+    let details = diag.details.as_ref().expect("diagnostic details");
+    assert_eq!(details["package_name"], "kind-pkg");
 
     // The diagnostic must name the expected kind.
-    assert!(
-        diag.contains("process-jsonl"),
-        "diagnostic must name the expected kind `process-jsonl`: {diag:?}"
-    );
+    assert_eq!(details["expected_kind"], "process-jsonl");
 
     // It must name the actual (rejected) kind.
-    assert!(
-        diag.contains("websocket"),
-        "diagnostic must name the actual kind `websocket`: {diag:?}"
-    );
+    assert_eq!(details["actual_kind"], "websocket");
 
     assert!(
         registry.collect_tools().is_empty(),

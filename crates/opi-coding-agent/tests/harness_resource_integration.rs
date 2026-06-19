@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use opi_agent::diagnostic::{SOURCE_ADAPTER, Severity, code};
 use opi_agent::extension::ExtensionRegistry;
 use opi_agent::session::{
     ExtensionStateEntry, MessageEntry, SessionEntry, SessionHeader, SessionWriter,
@@ -387,6 +388,7 @@ async fn resumed_installed_adapter_state_restores_on_current_thread_runtime() {
         session_id: "sess-adapter-restore".into(),
         entries,
         original_cwd: workspace.path().to_path_buf(),
+        diagnostics: Vec::new(),
     };
     let mut harness = CodingHarness::builder(
         Box::new(provider),
@@ -499,10 +501,12 @@ async fn adapter_startup_failure_produces_diagnostic() {
         !diagnostics.is_empty(),
         "expected diagnostics for failed adapter"
     );
-    assert!(
-        diagnostics[0].contains("bad-pkg"),
-        "diagnostic should mention package name: {:?}",
-        diagnostics[0]
+    assert_eq!(diagnostics[0].code, code::CODE_ADAPTER_STARTUP_FAILED);
+    assert_eq!(diagnostics[0].source, SOURCE_ADAPTER);
+    assert_eq!(diagnostics[0].severity, Severity::Error);
+    assert_eq!(
+        diagnostics[0].details.as_ref().unwrap()["package_name"],
+        "bad-pkg"
     );
     assert!(
         registry.collect_tools().is_empty(),
@@ -526,10 +530,11 @@ async fn unsupported_adapter_protocol_produces_diagnostic() {
         start_adapters_from_packages(&[package], dir.path(), registry).await;
 
     assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
-    assert!(
-        diagnostics[0].contains("unsupported adapter protocol"),
-        "{:?}",
-        diagnostics[0]
+    assert_eq!(diagnostics[0].code, code::CODE_ADAPTER_PROTOCOL_UNSUPPORTED);
+    assert_eq!(diagnostics[0].source, SOURCE_ADAPTER);
+    assert_eq!(
+        diagnostics[0].details.as_ref().unwrap()["actual_protocol"],
+        "unknown-protocol"
     );
 }
 
@@ -549,10 +554,11 @@ async fn unsupported_adapter_kind_produces_diagnostic() {
         start_adapters_from_packages(&[package], dir.path(), registry).await;
 
     assert_eq!(diagnostics.len(), 1);
-    assert!(
-        diagnostics[0].contains("unsupported adapter kind"),
-        "{:?}",
-        diagnostics[0]
+    assert_eq!(diagnostics[0].code, code::CODE_ADAPTER_KIND_UNSUPPORTED);
+    assert_eq!(diagnostics[0].source, SOURCE_ADAPTER);
+    assert_eq!(
+        diagnostics[0].details.as_ref().unwrap()["actual_kind"],
+        "websocket"
     );
 }
 
@@ -767,6 +773,11 @@ async fn adapter_diagnostics_in_resource_metadata() {
         .as_array()
         .expect("diagnostics array");
     assert!(!diag_arr.is_empty(), "RPC JSON should contain diagnostics");
+    assert_eq!(
+        diag_arr[0]["code"],
+        code::CODE_ADAPTER_STARTUP_FAILED,
+        "RPC diagnostics should be structured payloads"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -928,26 +939,14 @@ async fn adapter_unsupported_protocol_diagnostic_includes_command_and_disabled_s
 
     assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
     let d = &diagnostics[0];
-    assert!(
-        d.contains("unsupported adapter protocol"),
-        "must keep the gate reason: {d}"
-    );
-    assert!(
-        d.contains("unknown-protocol"),
-        "must name the actual protocol: {d}"
-    );
-    assert!(
-        d.contains("adapter command"),
-        "must reference the adapter command: {d}"
-    );
-    assert!(
-        d.contains(&cmd_str),
-        "must name the resolved adapter command value: {d}"
-    );
-    assert!(
-        d.contains("disabled at runtime"),
-        "must declare disabled-at-runtime state: {d}"
-    );
+    assert_eq!(d.code, code::CODE_ADAPTER_PROTOCOL_UNSUPPORTED);
+    assert_eq!(d.message, "unsupported adapter protocol");
+    let details = d.details.as_ref().expect("adapter details");
+    assert_eq!(details["package_name"], "proto-cmd-pkg");
+    assert_eq!(details["actual_protocol"], "unknown-protocol");
+    assert_eq!(details["expected_protocol"], "opi-extension-jsonl-v1");
+    assert_eq!(details["adapter_command"], cmd_str);
+    assert_eq!(details["disabled_at_runtime"], true);
     assert!(
         registry.collect_tools().is_empty(),
         "unsupported-protocol package must not register an adapter"
@@ -970,23 +969,13 @@ async fn adapter_startup_failure_diagnostic_includes_command_and_disabled_state(
 
     assert_eq!(diagnostics.len(), 1, "expected exactly one diagnostic");
     let d = &diagnostics[0];
-    assert!(d.contains("bad-cmd-pkg"), "must name the package: {d}");
-    assert!(
-        d.contains("adapter startup failed"),
-        "must keep the startup-failure reason prefix: {d}"
-    );
-    assert!(
-        d.contains("adapter command"),
-        "must reference the adapter command: {d}"
-    );
-    assert!(
-        d.contains(&cmd_str),
-        "must name the resolved adapter command value: {d}"
-    );
-    assert!(
-        d.contains("disabled at runtime"),
-        "must declare disabled-at-runtime state: {d}"
-    );
+    assert_eq!(d.code, code::CODE_ADAPTER_STARTUP_FAILED);
+    assert_eq!(d.message, "adapter startup failed");
+    let details = d.details.as_ref().expect("adapter details");
+    assert_eq!(details["package_name"], "bad-cmd-pkg");
+    assert_eq!(details["adapter_command"], cmd_str);
+    assert_eq!(details["disabled_at_runtime"], true);
+    assert!(details.get("adapter_error").is_some());
     assert!(
         registry.collect_tools().is_empty(),
         "failed-startup package must not register an adapter"

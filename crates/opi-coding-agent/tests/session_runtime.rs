@@ -643,6 +643,76 @@ async fn harness_emits_compaction_events_on_threshold() {
     clear_sessions_dir();
 }
 
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn threshold_compaction_is_counted_in_diagnostics() {
+    let _lock = session_lock();
+    let dir = tempfile::tempdir().unwrap();
+    set_sessions_dir(dir.path());
+
+    let mut config = OpiConfig::default();
+    config.compaction.threshold_tokens = 0;
+
+    let provider = MockProvider::new("mock", vec![test_support::text_response("ok")]);
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock-model".into(),
+        config,
+        std::env::current_dir().unwrap(),
+    )
+    .record_diagnostics(true)
+    .build();
+
+    harness.prompt("first prompt").await.unwrap();
+
+    let counts = harness
+        .diagnostic_counts()
+        .expect("record_diagnostics installs a sink");
+    assert!(
+        counts.info >= 1,
+        "successful compaction should be counted as an info diagnostic: {counts:?}"
+    );
+
+    clear_sessions_dir();
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn manual_compaction_is_counted_in_diagnostics() {
+    let _lock = session_lock();
+    let dir = tempfile::tempdir().unwrap();
+    set_sessions_dir(dir.path());
+
+    let mut config = OpiConfig::default();
+    config.compaction.threshold_tokens = u64::MAX;
+
+    let provider = MockProvider::new("mock", vec![test_support::text_response("ok")]);
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock-model".into(),
+        config,
+        std::env::current_dir().unwrap(),
+    )
+    .record_diagnostics(true)
+    .build();
+
+    harness.prompt("first prompt").await.unwrap();
+    let result = harness
+        .compact(opi_agent::session_event::CompactionReason::Manual)
+        .unwrap();
+    assert!(result.is_some(), "manual compaction should produce output");
+
+    let counts = harness
+        .diagnostic_counts()
+        .expect("record_diagnostics installs a sink");
+    assert!(
+        counts.info >= 1,
+        "manual compaction should be counted as an info diagnostic: {counts:?}"
+    );
+
+    clear_sessions_dir();
+}
+
 #[test]
 fn open_existing_appends_to_original_file() {
     use opi_agent::compaction::CompactionConfig;

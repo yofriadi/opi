@@ -26,7 +26,7 @@ mod agent_loop;
 
 pub use agent::Agent;
 pub use agent_loop::agent_loop;
-pub use diagnostic::{Diagnostic, RedactionMode, Severity, redact};
+pub use diagnostic::{Diagnostic, DiagnosticPayload, RedactionMode, Severity, redact, redact_text};
 pub use diagnostic_sink::{DiagnosticSink, NullSink, RecordingSink};
 pub use event::{AgentEvent, AgentEventSink};
 pub use extension::{

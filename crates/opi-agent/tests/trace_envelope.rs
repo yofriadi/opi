@@ -865,6 +865,44 @@ mod wiring {
         }
     }
 
+    /// A tool whose process completed but reported a semantic tool error.
+    struct ErrorResultTool;
+    impl Tool for ErrorResultTool {
+        fn definition(&self) -> ToolDef {
+            ToolDef {
+                name: "soft_fail".into(),
+                description: "returns an error result".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        fn execute(
+            &self,
+            _call_id: &str,
+            _arguments: serde_json::Value,
+            _signal: tokio_util::sync::CancellationToken,
+            _on_update: Option<opi_agent::tool::UpdateCallback>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<ToolResult, opi_agent::tool::ToolError>>
+                    + Send,
+            >,
+        > {
+            Box::pin(async move {
+                Ok(ToolResult {
+                    content: vec![OutputContent::Text {
+                        text: "tool reported failure".into(),
+                    }],
+                    details: None,
+                    is_error: true,
+                    terminate: false,
+                })
+            })
+        }
+        fn execution_mode(&self) -> ExecutionMode {
+            ExecutionMode::Sequential
+        }
+    }
+
     #[tokio::test]
     async fn phase7_run_emits_boundary_and_provider_records() {
         let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
@@ -1041,6 +1079,54 @@ mod wiring {
         assert!(
             kinds.contains(&TraceKind::ToolCallCompleted),
             "missing ToolCallCompleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase7_tool_error_result_emits_failed_trace_and_diagnostic() {
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("tc-1", "soft_fail", r#"{}"#),
+                test_support::text_response("done"),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(
+                provider,
+                diag.clone(),
+                Some(trace),
+                vec![Box::new(ErrorResultTool)],
+            ),
+            config(None),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(kinds.contains(&TraceKind::ToolCallStarted));
+        assert!(
+            kinds.contains(&TraceKind::ToolCallFailed),
+            "is_error=true tool result must be traced as failed: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&TraceKind::ToolCallCompleted),
+            "is_error=true tool result must not be traced as completed: {kinds:?}"
+        );
+        assert!(
+            diag.snapshot()
+                .iter()
+                .any(|d| d.code == CODE_TOOL_EXECUTION_FAILED
+                    && d.details.as_ref().and_then(|v| v["tool_name"].as_str())
+                        == Some("soft_fail")),
+            "is_error=true tool result must emit a tool execution diagnostic"
         );
     }
 

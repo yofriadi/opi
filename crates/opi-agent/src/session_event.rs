@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::diagnostic::DiagnosticPayload;
 use crate::event::AgentEvent;
 
 /// Reasons why compaction was triggered (S9.5).
@@ -101,7 +102,7 @@ pub enum AgentSessionEvent {
     /// state before run output begins. Additive; absent on runs that did not
     /// collect startup diagnostics.
     StartupDiagnostics {
-        diagnostics: Vec<String>,
+        diagnostics: Vec<DiagnosticPayload>,
     },
 }
 

@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use opi_agent::Diagnostic;
 use thiserror::Error;
 
 /// Errors from session CLI operations.
@@ -36,6 +37,8 @@ pub struct ResumedSession {
     pub path: PathBuf,
     /// Number of corrupt/unparseable entries skipped during load.
     pub skipped_entries: usize,
+    /// Structured recovery diagnostics produced while reading the session.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Return the platform-specific session storage directory (S9.2).
@@ -132,12 +135,14 @@ pub fn resume_session(dir: &Path, session_id: &str) -> Result<ResumedSession, Se
         .map_err(|e| SessionCliError::Corrupt(format!("{}: {e}", path.display())))?;
 
     let skipped_entries = recovery.corrupt_count();
+    let diagnostics = recovery.diagnostics();
 
     Ok(ResumedSession {
         header,
         entries,
         path,
         skipped_entries,
+        diagnostics,
     })
 }
 
@@ -172,6 +177,7 @@ pub fn fork_session(dir: &Path, session_id: &str) -> Result<ResumedSession, Sess
         entries,
         path,
         skipped_entries: 0,
+        diagnostics: Vec::new(),
     })
 }
 

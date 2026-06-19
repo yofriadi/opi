@@ -335,10 +335,16 @@ impl RecordingTraceSink {
     pub fn is_empty(&self) -> bool {
         self.lock().is_empty()
     }
+
+    /// Clear all recorded trace records.
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
 }
 
 impl TraceSink for RecordingTraceSink {
     fn prepare(&self) -> Result<(), TraceError> {
+        self.clear();
         Ok(())
     }
     fn write(&self, record: &TraceRecord) -> Result<(), TraceError> {

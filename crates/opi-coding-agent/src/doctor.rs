@@ -338,16 +338,20 @@ fn provider_diagnostics(
         return out;
     };
 
-    match provider_credential_env_name(config, provider) {
-        Some(env_name) => {
-            // Presence only: the credential value is never read into a diagnostic.
-            let present = env_var(&env_name).is_some();
-            let message = if present {
-                format!("provider {provider:?} credentials present (env {env_name})")
+    match provider_credential_probe(config, provider, env_var) {
+        Some(probe) => {
+            let message = if probe.present {
+                format!(
+                    "provider {:?} credentials present ({})",
+                    provider, probe.label
+                )
             } else {
-                format!("provider {provider:?} credentials not set (env {env_name})")
+                format!(
+                    "provider {:?} credentials not set ({})",
+                    provider, probe.label
+                )
             };
-            let severity = if present {
+            let severity = if probe.present {
                 Severity::Info
             } else {
                 Severity::Warning
@@ -361,7 +365,8 @@ fn provider_diagnostics(
                 )
                 .details(serde_json::json!({
                     "provider": provider,
-                    "credentials_present": present,
+                    "credentials_present": probe.present,
+                    "credential_probe": probe.label,
                 })),
             );
         }
@@ -585,6 +590,59 @@ fn env_or_default(configured: &str, default: &str) -> String {
     } else {
         configured.to_string()
     }
+}
+
+struct CredentialProbe {
+    label: String,
+    present: bool,
+}
+
+fn provider_credential_probe(
+    config: &OpiConfig,
+    provider: &str,
+    env_var: &dyn Fn(&str) -> Option<String>,
+) -> Option<CredentialProbe> {
+    if provider == "bedrock" {
+        return Some(bedrock_credential_probe(config, env_var));
+    }
+
+    let env_name = provider_credential_env_name(config, provider)?;
+    Some(CredentialProbe {
+        present: env_value_present(env_var, &env_name),
+        label: format!("env {env_name}"),
+    })
+}
+
+fn bedrock_credential_probe(
+    config: &OpiConfig,
+    env_var: &dyn Fn(&str) -> Option<String>,
+) -> CredentialProbe {
+    let bedrock = &config.providers.bedrock;
+    let config_access_present = bedrock
+        .access_key_id
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let env_access_present = env_value_present(env_var, "AWS_ACCESS_KEY_ID");
+    let secret_env = bedrock
+        .secret_access_key_env
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("AWS_SECRET_ACCESS_KEY");
+    let secret_present = env_value_present(env_var, secret_env);
+    let access_label = if config_access_present {
+        "config access_key_id"
+    } else {
+        "env AWS_ACCESS_KEY_ID"
+    };
+
+    CredentialProbe {
+        present: (config_access_present || env_access_present) && secret_present,
+        label: format!("{access_label} + env {secret_env}"),
+    }
+}
+
+fn env_value_present(env_var: &dyn Fn(&str) -> Option<String>, name: &str) -> bool {
+    env_var(name).is_some_and(|value| !value.trim().is_empty())
 }
 
 /// Resolve the credential environment-variable name for a selected provider, if

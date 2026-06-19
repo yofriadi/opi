@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use opi_agent::diagnostic::{Diagnostic, RedactionMode, SOURCE_SESSION, Severity, code};
+use opi_agent::diagnostic::{Diagnostic, DiagnosticPayload, RedactionMode, Severity};
 use opi_agent::event::AgentEvent;
 use opi_agent::extension::ExtensionRegistry;
 use opi_agent::hooks::AgentHooks;
@@ -18,9 +18,15 @@ use opi_agent::trace::TraceKind;
 use opi_agent::{Agent, DiagnosticSink, RecordingSink, TraceCollector, TraceSink};
 use opi_ai::message::Message;
 use opi_ai::provider::{EventStream, ModelInfo, Provider, ThinkingConfig};
+use serde::Serialize;
 
 use crate::config::OpiConfig;
 use crate::context_files;
+use crate::diagnostic_bridge::{
+    diagnostic_for_model_registry_error, diagnostic_for_package_discovery_error,
+    diagnostic_for_resource_discovery_error, diagnostic_for_resource_layer_message,
+    diagnostic_from_package, diagnostic_from_package_resolution_error,
+};
 use crate::package_discovery::PackageResource;
 use crate::policy::{RunMode, ToolRuntimeConfig, ToolSelection};
 use crate::prompt::SystemPromptBuilder;
@@ -37,6 +43,8 @@ pub struct ResumeInfo {
     /// The workspace cwd recorded in the session header. Used to restore the
     /// correct workspace root when resuming from a different directory.
     pub original_cwd: PathBuf,
+    /// Structured diagnostics observed while reading the resumed session.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Opt-in trace configuration handed to the harness (Phase 7 task 7.5).
@@ -89,14 +97,15 @@ pub struct RuntimeThinkingState {
 }
 
 /// Public metadata for resources discovered by the coding harness.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct DiscoveredResourceMetadata {
     pub extensions: Vec<ResourceMetadataEntry>,
     pub packages: Vec<ResourceMetadataEntry>,
     pub skills: Vec<ResourceMetadataEntry>,
     pub fragments: Vec<ResourceMetadataEntry>,
     pub themes: Vec<ResourceMetadataEntry>,
-    pub diagnostics: Vec<String>,
+    #[serde(serialize_with = "serialize_redacted_diagnostics")]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// One metadata entry exposed to prompts, RPC clients, and embedders.
@@ -160,7 +169,9 @@ impl DiscoveredResourceMetadata {
                 "Resource discovery diagnostics:\n{}",
                 self.diagnostics
                     .iter()
-                    .map(|diagnostic| format!("- {diagnostic}"))
+                    .map(|diagnostic| {
+                        format!("- {}", diagnostic.redacted_payload(RedactionMode::Summary))
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             ));
@@ -175,8 +186,15 @@ impl DiscoveredResourceMetadata {
             "skills": metadata_names(&self.skills),
             "fragments": metadata_names(&self.fragments),
             "themes": metadata_names(&self.themes),
-            "diagnostics": self.diagnostics.clone(),
+            "diagnostics": self.diagnostic_payloads(RedactionMode::Summary),
         })
+    }
+
+    pub fn diagnostic_payloads(&self, mode: RedactionMode) -> Vec<DiagnosticPayload> {
+        self.diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.redacted_payload(mode))
+            .collect()
     }
 
     fn add_extension_name(&mut self, name: String) {
@@ -190,6 +208,20 @@ impl DiscoveredResourceMetadata {
         });
         self.extensions.sort_by(|a, b| a.name.cmp(&b.name));
     }
+}
+
+fn serialize_redacted_diagnostics<S>(
+    diagnostics: &[Diagnostic],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let payloads = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.redacted_payload(RedactionMode::Summary))
+        .collect::<Vec<_>>();
+    payloads.serialize(serializer)
 }
 
 fn metadata_names(entries: &[ResourceMetadataEntry]) -> Vec<&str> {
@@ -258,7 +290,7 @@ pub struct CodingHarnessBuilder {
     resource_layers: Option<ResourceDiscoveryLayers>,
     resource_metadata: Option<DiscoveredResourceMetadata>,
     installed_packages: Option<Vec<PackageResource>>,
-    startup_diagnostics: Vec<String>,
+    startup_diagnostics: Vec<Diagnostic>,
     record_diagnostics: bool,
     trace: Option<TraceConfig>,
 }
@@ -347,7 +379,7 @@ impl CodingHarnessBuilder {
         self
     }
 
-    pub fn startup_diagnostics(mut self, diagnostics: Vec<String>) -> Self {
+    pub fn startup_diagnostics(mut self, diagnostics: Vec<Diagnostic>) -> Self {
         self.startup_diagnostics = diagnostics;
         self
     }
@@ -405,7 +437,7 @@ struct HarnessBuildOptions {
     resource_layers: Option<ResourceDiscoveryLayers>,
     resource_metadata: Option<DiscoveredResourceMetadata>,
     installed_packages: Option<Vec<PackageResource>>,
-    startup_diagnostics: Vec<String>,
+    startup_diagnostics: Vec<Diagnostic>,
     tool_selection: ToolSelection,
     record_diagnostics: bool,
     trace: Option<TraceConfig>,
@@ -772,6 +804,10 @@ impl CodingHarness {
             threshold_tokens: config.compaction.threshold_tokens,
         };
 
+        let resume_diagnostics = resume
+            .as_ref()
+            .map(|info| info.diagnostics.clone())
+            .unwrap_or_default();
         let session = if let Some(info) = resume {
             SessionCoordinator::open_existing(
                 info.path,
@@ -793,6 +829,9 @@ impl CodingHarness {
         let diagnostics = if build_options.record_diagnostics {
             let sink = Arc::new(RecordingSink::new());
             agent.set_diagnostic_sink(Some(sink.clone() as Arc<dyn DiagnosticSink>));
+            for diagnostic in resume_diagnostics {
+                sink.record(diagnostic);
+            }
             Some(sink)
         } else {
             None
@@ -1175,21 +1214,7 @@ impl CodingHarness {
                 match session.execute_compaction(reason) {
                     Ok(Some(out)) => {
                         let wire = to_wire_result(&out);
-                        // Mirror compaction into the active trace as a
-                        // diagnostic-linked record (scenario 3: compaction
-                        // represented in diagnostics and trace). Fail-open.
-                        self.trace_diagnostic(
-                            &Diagnostic::new(
-                                Severity::Info,
-                                code::CODE_SESSION_COMPACTED,
-                                SOURCE_SESSION,
-                                "session context compacted",
-                            )
-                            .details(serde_json::json!({
-                                "tokens_before": wire.tokens_before,
-                                "tokens_after": wire.tokens_after,
-                            })),
-                        );
+                        self.record_harness_diagnostic(out.diagnostic.clone());
                         self.agent.replace_messages(out.new_agent_messages);
                         self.agent.emit_event(AgentEvent::CompactionEnd {
                             reason,
@@ -1325,6 +1350,13 @@ impl CodingHarness {
                 .diagnostic_code(diagnostic.code)
                 .emit();
         }
+    }
+
+    fn record_harness_diagnostic(&self, diagnostic: Diagnostic) {
+        if let Some(sink) = &self.diagnostics {
+            sink.record(diagnostic.clone());
+        }
+        self.trace_diagnostic(&diagnostic);
     }
 
     /// Severity counts captured during the most recent run, when diagnostic
@@ -1483,6 +1515,7 @@ impl CodingHarness {
             .execute_compaction(reason)
             .map_err(|e| format!("compaction failed: {e}"))?;
         if let Some(out) = &result {
+            self.record_harness_diagnostic(out.diagnostic.clone());
             self.agent.replace_messages(out.new_agent_messages.clone());
         }
         Ok(result.map(|out| crate::session_coordinator::to_wire_result(&out)))
@@ -1563,7 +1596,7 @@ impl CodingHarness {
             Err(e) => {
                 metadata
                     .diagnostics
-                    .push(format!("package discovery failed: {e}"));
+                    .push(diagnostic_for_package_discovery_error(e));
                 Vec::new()
             }
         };
@@ -1577,12 +1610,9 @@ impl CodingHarness {
                     user_config_dir,
                 ) {
                     Ok(resolution) => {
-                        metadata.diagnostics.extend(
-                            resolution
-                                .diagnostics
-                                .iter()
-                                .map(format_installed_package_diagnostic),
-                        );
+                        metadata
+                            .diagnostics
+                            .extend(resolution.diagnostics.iter().map(diagnostic_from_package));
                         merge_package_resources(
                             &mut packages,
                             resolution
@@ -1594,7 +1624,7 @@ impl CodingHarness {
                     }
                     Err(e) => metadata
                         .diagnostics
-                        .push(format!("installed package resolution failed: {e}")),
+                        .push(diagnostic_from_package_resolution_error(e)),
                 }
             }
             None => {}
@@ -1609,7 +1639,12 @@ impl CodingHarness {
             .collect();
 
         let package_layers = crate::package_discovery::package_composed_resource_layers(&packages);
-        metadata.diagnostics.extend(package_layers.diagnostics);
+        metadata.diagnostics.extend(
+            package_layers
+                .diagnostics
+                .into_iter()
+                .map(diagnostic_for_resource_layer_message),
+        );
         layers.extensions.extend(package_layers.extensions);
         layers.skills.extend(package_layers.skills);
         layers.fragments.extend(package_layers.fragments);
@@ -1628,7 +1663,7 @@ impl CodingHarness {
             }
             Err(e) => metadata
                 .diagnostics
-                .push(format!("extension discovery failed: {e}")),
+                .push(diagnostic_for_resource_discovery_error("extension", e)),
         }
 
         match crate::skill::discover_skills(&layers.skills) {
@@ -1644,7 +1679,7 @@ impl CodingHarness {
             }
             Err(e) => metadata
                 .diagnostics
-                .push(format!("skill discovery failed: {e}")),
+                .push(diagnostic_for_resource_discovery_error("skill", e)),
         }
 
         match crate::prompt_fragment::discover_fragments(&layers.fragments) {
@@ -1660,7 +1695,7 @@ impl CodingHarness {
             }
             Err(e) => metadata
                 .diagnostics
-                .push(format!("fragment discovery failed: {e}")),
+                .push(diagnostic_for_resource_discovery_error("fragment", e)),
         }
 
         let theme_resources = match crate::theme_discovery::discover_themes(&layers.themes) {
@@ -1678,7 +1713,7 @@ impl CodingHarness {
             Err(e) => {
                 metadata
                     .diagnostics
-                    .push(format!("theme discovery failed: {e}"));
+                    .push(diagnostic_for_resource_discovery_error("theme", e));
                 Vec::new()
             }
         };
@@ -1692,14 +1727,16 @@ impl CodingHarness {
     fn build_model_registry(
         provider: &dyn Provider,
         extension_registry: Option<&ExtensionRegistry>,
-    ) -> (opi_ai::ProviderRegistry, Vec<String>) {
+    ) -> (opi_ai::ProviderRegistry, Vec<Diagnostic>) {
         let mut registry = opi_ai::ProviderRegistry::new();
         let mut diagnostics = Vec::new();
 
         if let Some(extension_registry) = extension_registry {
             for provider in extension_registry.collect_providers() {
                 if let Err(e) = registry.register_provider(provider) {
-                    diagnostics.push(format!("extension provider registration failed: {e}"));
+                    diagnostics.push(diagnostic_for_model_registry_error(format!(
+                        "extension provider registration failed: {e}"
+                    )));
                 }
             }
         }
@@ -1707,28 +1744,23 @@ impl CodingHarness {
         if let Err(e) =
             registry.register_provider(Box::new(MetadataProvider::from_provider(provider)))
         {
-            diagnostics.push(format!("active provider metadata registration failed: {e}"));
+            diagnostics.push(diagnostic_for_model_registry_error(format!(
+                "active provider metadata registration failed: {e}"
+            )));
         }
 
         if let Some(extension_registry) = extension_registry {
             for (provider_id, model) in extension_registry.collect_model_overrides() {
                 if let Err(e) = registry.register_model(&provider_id, model) {
-                    diagnostics.push(format!("extension model override registration failed: {e}"));
+                    diagnostics.push(diagnostic_for_model_registry_error(format!(
+                        "extension model override registration failed: {e}"
+                    )));
                 }
             }
         }
 
         (registry, diagnostics)
     }
-}
-
-fn format_installed_package_diagnostic(
-    diagnostic: &crate::package_resolver::PackageDiagnostic,
-) -> String {
-    format!(
-        "installed package {:?} {}: {} ({})",
-        diagnostic.scope, diagnostic.source, diagnostic.code, diagnostic.message
-    )
 }
 
 fn merge_package_resources(

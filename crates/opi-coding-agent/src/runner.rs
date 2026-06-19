@@ -26,7 +26,7 @@ use crate::policy::{RunMode, ToolPolicyError, ToolRuntimeConfig, ToolSelection, 
 use crate::runtime_packages::RuntimePackageStartup;
 
 /// NDJSON output schema version.
-pub const NDJSON_SCHEMA_VERSION: u32 = 1;
+pub const NDJSON_SCHEMA_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Exit codes (S10)
@@ -192,7 +192,10 @@ impl NonInteractiveRunner {
         // output (the first agent event is AgentStart). Additive NDJSON line.
         {
             let startup = AgentSessionEvent::StartupDiagnostics {
-                diagnostics: self.harness.resource_metadata().diagnostics.clone(),
+                diagnostics: self
+                    .harness
+                    .resource_metadata()
+                    .diagnostic_payloads(RedactionMode::Summary),
             };
             if let Ok(json) = serde_json::to_string(&startup)
                 && let Ok(mut guard) = output.lock()
@@ -445,7 +448,10 @@ impl NonInteractiveRunner {
         // output (the first agent event is AgentStart). Additive NDJSON line.
         {
             let startup = AgentSessionEvent::StartupDiagnostics {
-                diagnostics: self.harness.resource_metadata().diagnostics.clone(),
+                diagnostics: self
+                    .harness
+                    .resource_metadata()
+                    .diagnostic_payloads(RedactionMode::Summary),
             };
             if let Ok(json) = serde_json::to_string(&startup)
                 && let Ok(mut guard) = output.lock()

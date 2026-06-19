@@ -9,6 +9,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use opi_agent::diagnostic::code::CODE_SESSION_CORRUPT_ENTRIES;
 use opi_agent::session::{MessageEntry, SessionEntry, SessionHeader, SessionWriter};
 use opi_ai::message::{InputContent, Message, UserMessage};
 use opi_coding_agent::session_cli::{
@@ -471,6 +472,14 @@ fn resume_session_reports_skipped_corrupt_entries() {
     assert_eq!(
         result.skipped_entries, 1,
         "should report 1 corrupt entry skipped"
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == CODE_SESSION_CORRUPT_ENTRIES
+                && d.details.as_ref().and_then(|v| v["corrupt_count"].as_u64()) == Some(1)),
+        "resume should carry CrashRecovery diagnostics"
     );
 }
 
