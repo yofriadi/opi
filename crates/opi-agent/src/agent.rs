@@ -102,6 +102,7 @@ pub struct Agent {
     steering_queue: Arc<Mutex<VecDeque<String>>>,
     follow_up_queue: Arc<Mutex<VecDeque<String>>>,
     diagnostic_sink: Option<Arc<dyn DiagnosticSink>>,
+    trace_collector: Option<Arc<crate::trace::TraceCollector>>,
 }
 
 impl Agent {
@@ -127,6 +128,7 @@ impl Agent {
             steering_queue: Arc::new(Mutex::new(VecDeque::new())),
             follow_up_queue: Arc::new(Mutex::new(VecDeque::new())),
             diagnostic_sink: None,
+            trace_collector: None,
         }
     }
 
@@ -137,6 +139,15 @@ impl Agent {
     /// set a sink are unaffected.
     pub fn set_diagnostic_sink(&mut self, sink: Option<Arc<dyn DiagnosticSink>>) {
         self.diagnostic_sink = sink;
+    }
+
+    /// Install a trace collector that receives versioned redacted trace
+    /// records during the next `prompt`/`continue_` run. `None` (the default)
+    /// runs untraced with no behavior change. The collector MUST be prepared
+    /// by the caller before the run (fail-closed): the agent loop does not
+    /// call `prepare`/`finish`, only emits records (fail-open).
+    pub fn set_trace_collector(&mut self, collector: Option<Arc<crate::trace::TraceCollector>>) {
+        self.trace_collector = collector;
     }
 
     /// Send a user message and run the agent loop.
@@ -359,6 +370,7 @@ impl Agent {
             steering_queue: Some(self.steering_queue.clone()),
             follow_up_queue: Some(self.follow_up_queue.clone()),
             diagnostic_sink: self.diagnostic_sink.clone(),
+            trace: self.trace_collector.clone(),
         };
 
         let sink = self.build_event_sink();

@@ -202,6 +202,8 @@ pub mod code {
     pub const CODE_CONFIG_READ_FAILED: &str = "config_read_failed";
     /// A local trace sink failed mid-run and was disabled (fail-open).
     pub const CODE_TRACE_SINK_FAILED: &str = "trace_sink_failed";
+    /// A requested trace could not be prepared before the run (fail-closed).
+    pub const CODE_TRACE_SETUP_FAILED: &str = "trace_setup_failed";
 }
 
 const REDACTED: &str = "[REDACTED]";
@@ -385,6 +387,13 @@ impl From<&crate::loop_types::AgentError> for Diagnostic {
             )
             .details(serde_json::json!({ "max_turns": max_turns }))
             .action("increase max_turns or narrow the task"),
+            AgentError::TraceSetup(message) => Diagnostic::new(
+                Severity::Error,
+                code::CODE_TRACE_SETUP_FAILED,
+                SOURCE_AGENT,
+                message.clone(),
+            )
+            .action("check the trace path is writable and its parent directory exists"),
         }
     }
 }

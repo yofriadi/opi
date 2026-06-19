@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use crate::diagnostic_sink::DiagnosticSink;
 use crate::message::AgentMessage;
 use crate::tool::Tool;
+use crate::trace::TraceCollector;
 use opi_ai::provider::{Provider, ThinkingConfig};
 
 /// Errors that can occur during the agent loop.
@@ -23,6 +24,11 @@ pub enum AgentError {
     Cancelled,
     #[error("max turns exceeded ({0})")]
     MaxTurnsExceeded(u32),
+    /// A requested trace could not be prepared before the run (fail-closed):
+    /// the trace file could not be created/opened. The run is aborted so it
+    /// never runs untraced when tracing was explicitly requested.
+    #[error("trace setup failed: {0}")]
+    TraceSetup(String),
 }
 
 /// Input context for the agent loop.
@@ -45,6 +51,11 @@ pub struct AgentLoopContext {
     /// (retry, cancellation, provider/tool failures). `None` disables emission
     /// without changing any other runtime behavior.
     pub diagnostic_sink: Option<Arc<dyn DiagnosticSink>>,
+    /// Optional trace collector receiving versioned redacted trace records
+    /// (run/turn/provider/tool/diagnostic-linked) during the run. `None`
+    /// (the default) runs untraced with no behavior change. Tracing is opt-in
+    /// and fail-open: a trace sink write failure never aborts the run.
+    pub trace: Option<Arc<TraceCollector>>,
 }
 
 /// Configuration for the agent loop.

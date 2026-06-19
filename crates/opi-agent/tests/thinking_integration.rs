@@ -82,6 +82,7 @@ async fn thinking_config_passed_to_provider() {
         steering_queue: None,
         follow_up_queue: None,
         diagnostic_sink: None,
+        trace: None,
     };
     let config = AgentLoopConfig {
         max_turns: 1,
@@ -114,6 +115,7 @@ async fn thinking_disabled_by_default() {
         steering_queue: None,
         follow_up_queue: None,
         diagnostic_sink: None,
+        trace: None,
     };
     let config = AgentLoopConfig {
         max_turns: 1,

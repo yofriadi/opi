@@ -89,7 +89,28 @@ pub enum AgentSessionEvent {
         tokens: SessionTokenTotals,
         #[serde(skip_serializing_if = "Option::is_none")]
         cost_usd: Option<SessionCostTotals>,
+        /// Structured diagnostic counts observed during the run, when the
+        /// harness recorded them. Absent (skipped) when no recording sink was
+        /// attached, preserving the pre-7.5 wire shape.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        diagnostics: Option<SessionDiagnosticCounts>,
     },
+    /// Startup diagnostics (package/adapter/config/model-registry) surfaced
+    /// before the first accepted prompt output. Phase 7 task 7.5 places these
+    /// ahead of any `AgentStart` so a consumer learns about degraded startup
+    /// state before run output begins. Additive; absent on runs that did not
+    /// collect startup diagnostics.
+    StartupDiagnostics {
+        diagnostics: Vec<String>,
+    },
+}
+
+/// Severity tally for a run, attached to [`AgentSessionEvent::SessionSummary`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionDiagnosticCounts {
+    pub info: u64,
+    pub warning: u64,
+    pub error: u64,
 }
 
 /// Token totals carried by `AgentSessionEvent::SessionSummary`.

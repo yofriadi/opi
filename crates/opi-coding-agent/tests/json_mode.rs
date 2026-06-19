@@ -469,3 +469,173 @@ async fn json_mode_session_summary_roundtrips_through_agent_session_event() {
         other => panic!("expected SessionSummary, got {other:?}"),
     }
 }
+
+// ===========================================================================
+// Phase 7 task 7.5 — JSON exposure: startup diagnostics, run-summary
+// diagnostic counts, and the versioned redacted trace envelope.
+// ===========================================================================
+
+mod phase7 {
+    use super::parse_ndjson;
+    use opi_agent::TRACE_SCHEMA_VERSION;
+    use opi_agent::extension::ExtensionRegistry;
+    use opi_agent::session_event::AgentSessionEvent;
+    use opi_ai::provider::{Provider, ProviderError};
+    use opi_ai::test_support::{self, MockProvider, MockResponse};
+    use opi_coding_agent::config::OpiConfig;
+    use opi_coding_agent::policy::ToolSelection;
+    use opi_coding_agent::runner::{ExitCode, NonInteractiveRunner};
+    use opi_coding_agent::runtime_packages::RuntimePackageStartup;
+
+    fn workspace_root() -> std::path::PathBuf {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    }
+
+    fn runner_with_startup(
+        provider: Box<dyn Provider>,
+        diagnostics: Vec<String>,
+        trace_path: Option<std::path::PathBuf>,
+    ) -> NonInteractiveRunner {
+        NonInteractiveRunner::new_with_resume_and_runtime_packages(
+            provider,
+            "mock-model".into(),
+            OpiConfig::default(),
+            workspace_root(),
+            false,
+            None,
+            Vec::new(),
+            None,
+            ToolSelection::Default,
+            Some(RuntimePackageStartup {
+                extension_registry: ExtensionRegistry::new(),
+                installed_packages: Vec::new(),
+                diagnostics,
+            }),
+            trace_path,
+        )
+        .expect("non-interactive tool policy should be valid")
+    }
+
+    /// Startup diagnostics appear before accepted prompt output (clause 1).
+    #[tokio::test]
+    async fn phase7_startup_diagnostics_and_counts() {
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let mut runner =
+            runner_with_startup(Box::new(provider), vec!["phase7 startup warn".into()], None);
+        let result = runner.run_json("hello").await;
+        assert_eq!(result.exit_code, ExitCode::Success as i32);
+
+        let lines = parse_ndjson(&result.stdout);
+        // lines[0] is the session_header; the startup diagnostics line must
+        // follow it and precede the first Agent event.
+        assert_eq!(lines[0]["type"], "session_header", "first line is header");
+        assert_eq!(
+            lines[1]["type"], "StartupDiagnostics",
+            "second line must be startup diagnostics"
+        );
+        assert_eq!(
+            lines[1]["diagnostics"][0], "phase7 startup warn",
+            "startup diagnostic carried verbatim"
+        );
+        let agent_idx = lines
+            .iter()
+            .position(|l| l["type"] == "Agent")
+            .expect("at least one Agent event");
+        assert!(
+            agent_idx > 1,
+            "startup diagnostics must precede the first Agent event"
+        );
+    }
+
+    /// Run summary carries structured diagnostic counts (clause 2).
+    #[tokio::test]
+    async fn phase7_run_summary_carries_diagnostic_counts() {
+        // One retryable error then success: emits a Warning retry-attempt and
+        // an Info retry-succeeded diagnostic, which must aggregate into counts.
+        let provider = MockProvider::new_with_errors(
+            "mock",
+            vec![
+                MockResponse::Error(ProviderError::RateLimited {
+                    retry_after_ms: Some(1),
+                }),
+                MockResponse::Events(test_support::text_response("ok")),
+            ],
+        );
+        let mut runner = runner_with_startup(Box::new(provider), Vec::new(), None);
+        let result = runner.run_json("hello").await;
+        assert_eq!(result.exit_code, ExitCode::Success as i32);
+
+        let summary_line = result
+            .stdout
+            .lines()
+            .find(|l| l.contains(r#""type":"session_summary""#))
+            .expect("session_summary line emitted");
+        let parsed: AgentSessionEvent = serde_json::from_str(summary_line).unwrap();
+        match parsed {
+            AgentSessionEvent::SessionSummary {
+                diagnostics: Some(counts),
+                ..
+            } => {
+                assert!(
+                    counts.warning >= 1,
+                    "expected >=1 warning (retry attempt), got {}",
+                    counts.warning
+                );
+                assert!(
+                    counts.info >= 1,
+                    "expected >=1 info (retry succeeded), got {}",
+                    counts.info
+                );
+            }
+            AgentSessionEvent::SessionSummary {
+                diagnostics: None, ..
+            } => {
+                panic!("run summary must carry diagnostic counts")
+            }
+            other => panic!("expected SessionSummary, got {other:?}"),
+        }
+    }
+
+    /// The requested trace envelope is versioned and does not leak the prompt
+    /// (clause 6; redaction applied at the trace emit boundary).
+    #[tokio::test]
+    async fn phase7_trace_envelope_versioned_and_no_prompt_leak() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let trace_path = dir.path().join("trace.jsonl");
+        let secret = "sk-ant-AAAAAAAAAAAAAAAAAAAAleak";
+        let prompt = format!("my secret plan {secret}");
+
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let mut runner =
+            runner_with_startup(Box::new(provider), Vec::new(), Some(trace_path.clone()));
+        let result = runner.run_json(&prompt).await;
+        assert_eq!(result.exit_code, ExitCode::Success as i32);
+
+        let contents =
+            std::fs::read_to_string(&trace_path).expect("trace file written for the run");
+        assert!(!contents.is_empty(), "trace envelope must be produced");
+        let records: Vec<serde_json::Value> = contents
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_str(l).expect("each line is a JSON record"))
+            .collect();
+        assert!(!records.is_empty(), "at least one trace record");
+        for record in &records {
+            assert_eq!(
+                record["schema_version"],
+                serde_json::json!(TRACE_SCHEMA_VERSION),
+                "every trace record carries the unstable schema version"
+            );
+        }
+        // No prompt leak: the prompt text and the secret-like token must not
+        // appear anywhere in the trace envelope.
+        assert!(
+            !contents.contains(&prompt),
+            "trace must not leak the prompt text"
+        );
+        assert!(
+            !contents.contains(secret),
+            "trace must not leak secret-like content"
+        );
+    }
+}

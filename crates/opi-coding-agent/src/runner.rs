@@ -14,13 +14,14 @@ use opi_agent::hooks::{
 use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
 use opi_agent::session_event::{AgentSessionEvent, SessionCostTotals, SessionTokenTotals};
+use opi_agent::{FileTraceSink, RedactionMode};
 use opi_ai::message::InputContent;
 use opi_ai::message::Message;
 use opi_ai::provider::Provider;
 use opi_ai::stream::AssistantStreamEvent;
 
 use crate::config::OpiConfig;
-use crate::harness::{CodingHarness, ResumeInfo};
+use crate::harness::{CodingHarness, ResumeInfo, TraceConfig};
 use crate::policy::{RunMode, ToolPolicyError, ToolRuntimeConfig, ToolSelection, is_mutating_tool};
 use crate::runtime_packages::RuntimePackageStartup;
 
@@ -115,11 +116,13 @@ impl NonInteractiveRunner {
             resume_info,
             tool_selection,
             None,
+            None,
         )
     }
 
     /// Create a non-interactive runner with installed package adapters already
-    /// started by runtime startup.
+    /// started by runtime startup. `trace_path`, when set, writes a versioned
+    /// redacted trace envelope to that file for the run (Phase 7 task 7.5).
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_resume_and_runtime_packages(
         provider: Box<dyn Provider>,
@@ -132,6 +135,7 @@ impl NonInteractiveRunner {
         resume_info: Option<ResumeInfo>,
         tool_selection: ToolSelection,
         runtime_startup: Option<RuntimePackageStartup>,
+        trace_path: Option<PathBuf>,
     ) -> Result<Self, ToolPolicyError> {
         let tool_config = ToolRuntimeConfig::resolve(
             RunMode::NonInteractive,
@@ -143,7 +147,10 @@ impl NonInteractiveRunner {
             .hooks(hooks)
             .initial_messages(initial_messages)
             .tool_selection(tool_selection)
-            .tool_config(tool_config);
+            .tool_config(tool_config)
+            // Record runtime diagnostics so the JSON run summary can carry
+            // structured severity counts (Phase 7 task 7.5).
+            .record_diagnostics(true);
         if let Some(prompt) = user_system_prompt {
             builder = builder.user_system_prompt(prompt);
         }
@@ -155,6 +162,12 @@ impl NonInteractiveRunner {
                 .extension_registry(runtime_startup.extension_registry)
                 .installed_packages(runtime_startup.installed_packages)
                 .startup_diagnostics(runtime_startup.diagnostics);
+        }
+        if let Some(path) = trace_path {
+            builder = builder.trace(Some(TraceConfig {
+                sink: Arc::new(FileTraceSink::new(path)),
+                mode: RedactionMode::Summary,
+            }));
         }
         let harness = builder.build();
         Ok(Self { harness })
@@ -173,6 +186,20 @@ impl NonInteractiveRunner {
             let mut out = output.lock().unwrap();
             out.push_str(&header.to_string());
             out.push('\n');
+        }
+
+        // Phase 7 task 7.5: surface startup diagnostics BEFORE accepted prompt
+        // output (the first agent event is AgentStart). Additive NDJSON line.
+        {
+            let startup = AgentSessionEvent::StartupDiagnostics {
+                diagnostics: self.harness.resource_metadata().diagnostics.clone(),
+            };
+            if let Ok(json) = serde_json::to_string(&startup)
+                && let Ok(mut guard) = output.lock()
+            {
+                guard.push_str(&json);
+                guard.push('\n');
+            }
         }
 
         let out = output.clone();
@@ -250,6 +277,7 @@ impl NonInteractiveRunner {
                     cache_write: usage.total_cache_write_tokens(),
                 },
                 cost_usd: cost,
+                diagnostics: self.harness.diagnostic_counts(),
             };
             if let Ok(json) = serde_json::to_string(&summary_event)
                 && let Ok(mut guard) = output.lock()
@@ -302,6 +330,11 @@ impl NonInteractiveRunner {
             Err(AgentError::MaxTurnsExceeded(n)) => NonInteractiveResult {
                 stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
                 stderr: format!("max turns exceeded ({n})"),
+                exit_code: ExitCode::RuntimeFailure as i32,
+            },
+            Err(AgentError::TraceSetup(e)) => NonInteractiveResult {
+                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                stderr: format!("trace setup failed: {e}"),
                 exit_code: ExitCode::RuntimeFailure as i32,
             },
         }
@@ -383,6 +416,11 @@ impl NonInteractiveRunner {
                 stderr: format!("max turns exceeded ({n}){persist_stderr}"),
                 exit_code: ExitCode::RuntimeFailure as i32,
             },
+            Err(AgentError::TraceSetup(e)) => NonInteractiveResult {
+                stdout: String::new(),
+                stderr: format!("trace setup failed: {e}{persist_stderr}"),
+                exit_code: ExitCode::RuntimeFailure as i32,
+            },
         }
     }
 
@@ -401,6 +439,20 @@ impl NonInteractiveRunner {
             let mut out = output.lock().unwrap();
             out.push_str(&header.to_string());
             out.push('\n');
+        }
+
+        // Phase 7 task 7.5: surface startup diagnostics BEFORE accepted prompt
+        // output (the first agent event is AgentStart). Additive NDJSON line.
+        {
+            let startup = AgentSessionEvent::StartupDiagnostics {
+                diagnostics: self.harness.resource_metadata().diagnostics.clone(),
+            };
+            if let Ok(json) = serde_json::to_string(&startup)
+                && let Ok(mut guard) = output.lock()
+            {
+                guard.push_str(&json);
+                guard.push('\n');
+            }
         }
 
         let out = output.clone();
@@ -475,6 +527,7 @@ impl NonInteractiveRunner {
                     cache_write: usage.total_cache_write_tokens(),
                 },
                 cost_usd: cost,
+                diagnostics: self.harness.diagnostic_counts(),
             };
             if let Ok(json) = serde_json::to_string(&summary_event)
                 && let Ok(mut guard) = output.lock()
@@ -527,6 +580,11 @@ impl NonInteractiveRunner {
             Err(AgentError::MaxTurnsExceeded(n)) => NonInteractiveResult {
                 stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
                 stderr: format!("max turns exceeded ({n})"),
+                exit_code: ExitCode::RuntimeFailure as i32,
+            },
+            Err(AgentError::TraceSetup(e)) => NonInteractiveResult {
+                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
+                stderr: format!("trace setup failed: {e}"),
                 exit_code: ExitCode::RuntimeFailure as i32,
             },
         }
@@ -621,6 +679,11 @@ impl NonInteractiveRunner {
             Err(AgentError::MaxTurnsExceeded(n)) => NonInteractiveResult {
                 stdout: String::new(),
                 stderr: format!("max turns exceeded ({n}){persist_stderr}"),
+                exit_code: ExitCode::RuntimeFailure as i32,
+            },
+            Err(AgentError::TraceSetup(e)) => NonInteractiveResult {
+                stdout: String::new(),
+                stderr: format!("trace setup failed: {e}{persist_stderr}"),
                 exit_code: ExitCode::RuntimeFailure as i32,
             },
         }

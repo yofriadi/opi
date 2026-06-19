@@ -177,6 +177,7 @@ async fn runner_installed_adapter_tool_succeeds() {
         None,
         opi_coding_agent::policy::ToolSelection::Default,
         Some(runtime_startup),
+        None,
     )
     .unwrap();
 
@@ -222,6 +223,7 @@ async fn runner_installed_adapter_hook_blocks_mutating_tool() {
         None,
         opi_coding_agent::policy::ToolSelection::Default,
         Some(runtime_startup),
+        None,
     )
     .unwrap();
 

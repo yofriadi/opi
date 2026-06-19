@@ -32,6 +32,7 @@
 //! | `compact`         | Trigger manual compaction                        |
 //! | `session_info`    | Query session metadata                           |
 //! | `extension_command` | Dispatch a command to registered extensions    |
+//! | `trace`           | Request the versioned redacted trace envelope    |
 //! | `quit`            | Shut down the RPC session                        |
 //!
 //! # Responses and Errors
@@ -56,10 +57,11 @@ use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
 use opi_agent::sdk::{SDK_SCHEMA_VERSION, SdkCommand, SdkResponse, agent_event_to_value};
 use opi_agent::session_event::CompactionReason;
+use opi_agent::{RecordingTraceSink, RedactionMode, TRACE_SCHEMA_VERSION};
 use opi_ai::provider::Provider;
 
 use crate::config::OpiConfig;
-use crate::harness::CodingHarness;
+use crate::harness::{CodingHarness, TraceConfig};
 use crate::policy::{RunMode, ToolSelection};
 use crate::runner::ExitCode;
 use crate::runtime_packages::RuntimePackageStartup;
@@ -89,6 +91,10 @@ pub struct RpcRunner {
     harness: Option<CodingHarness>,
     control: AgentControl,
     running: bool,
+    /// Optional recording trace sink. When set, runs are traced and the
+    /// `trace` command returns the accumulated versioned redacted envelope;
+    /// when unset, `trace` returns a structured unsupported error.
+    trace_sink: Option<Arc<RecordingTraceSink>>,
 }
 
 impl RpcRunner {
@@ -116,6 +122,39 @@ impl RpcRunner {
             None,
             None,
             Vec::new(),
+            None,
+        )
+    }
+
+    /// Create a new RPC runner with an optional recording trace sink (Phase 7
+    /// task 7.5). When set, runs are traced and the `trace` command returns the
+    /// versioned redacted envelope; when `None`, `trace` returns a structured
+    /// unsupported error.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_trace(
+        provider: Box<dyn Provider>,
+        model: String,
+        config: OpiConfig,
+        workspace_root: PathBuf,
+        allow_mutating: bool,
+        tool_selection: ToolSelection,
+        user_system_prompt: Option<String>,
+        initial_messages: Vec<AgentMessage>,
+        trace_sink: Option<Arc<RecordingTraceSink>>,
+    ) -> Result<Self, crate::policy::ToolPolicyError> {
+        Self::new_with_optional_extension_registry(
+            provider,
+            model,
+            config,
+            workspace_root,
+            allow_mutating,
+            tool_selection,
+            user_system_prompt,
+            initial_messages,
+            None,
+            None,
+            Vec::new(),
+            trace_sink,
         )
     }
 
@@ -144,6 +183,7 @@ impl RpcRunner {
             Some(extension_registry),
             None,
             Vec::new(),
+            None,
         )
     }
 
@@ -177,6 +217,7 @@ impl RpcRunner {
             Some(extension_registry),
             Some(installed_packages),
             diagnostics,
+            None,
         )
     }
 
@@ -193,6 +234,7 @@ impl RpcRunner {
         extension_registry: Option<ExtensionRegistry>,
         installed_packages: Option<Vec<crate::package_discovery::PackageResource>>,
         startup_diagnostics: Vec<String>,
+        trace_sink: Option<Arc<RecordingTraceSink>>,
     ) -> Result<Self, crate::policy::ToolPolicyError> {
         let tool_config = crate::policy::ToolRuntimeConfig::resolve(
             RunMode::NonInteractive,
@@ -205,7 +247,10 @@ impl RpcRunner {
             .initial_messages(initial_messages)
             .tool_selection(tool_selection)
             .tool_config(tool_config)
-            .startup_diagnostics(startup_diagnostics);
+            .startup_diagnostics(startup_diagnostics)
+            // Record runtime diagnostics so run summaries can carry structured
+            // severity counts (Phase 7 task 7.5).
+            .record_diagnostics(true);
         if let Some(installed_packages) = installed_packages {
             builder = builder.installed_packages(installed_packages);
         }
@@ -215,12 +260,19 @@ impl RpcRunner {
         if let Some(registry) = extension_registry {
             builder = builder.extension_registry(registry);
         }
+        if let Some(sink) = trace_sink.clone() {
+            builder = builder.trace(Some(TraceConfig {
+                sink,
+                mode: RedactionMode::Summary,
+            }));
+        }
         let harness = builder.build();
         let control = harness.control_handle();
         Ok(Self {
             harness: Some(harness),
             control,
             running: false,
+            trace_sink,
         })
     }
 
@@ -405,10 +457,13 @@ impl RpcRunner {
                     }
                 }, if run_task.is_some() => {
                     let _ = run_task.take();
+                    // Flush the run's queued events (incl. AgentEnd) BEFORE
+                    // emitting the run_summary so the on-wire order is
+                    // ...events, AgentEnd, run_summary (Phase 7 task 7.5).
+                    drain_events(&mut event_rx, &mut emit);
                     if !self.complete_run_task(joined, &mut emit) {
                         return ExitCode::RuntimeFailure as i32;
                     }
-                    drain_events(&mut event_rx, &mut emit);
                 }
                 else => {
                     if !self
@@ -451,9 +506,10 @@ impl RpcRunner {
 
         match tokio::time::timeout(ACTIVE_RUN_SHUTDOWN_TIMEOUT, &mut task).await {
             Ok(joined) => {
-                let ok = self.complete_run_task(joined, emit);
+                // Drain queued events (incl. AgentEnd) before the run_summary
+                // so ordering is preserved on a clean shutdown too.
                 drain_events(event_rx, emit);
-                ok
+                self.complete_run_task(joined, emit)
             }
             Err(_) => {
                 task.abort();
@@ -478,6 +534,21 @@ impl RpcRunner {
         match joined {
             Ok((harness, result)) => {
                 self.harness = Some(harness);
+                // Phase 7 task 7.5: emit a run-summary event with structured
+                // diagnostic counts after the run completes. Additive event.
+                if let Some(harness) = self.harness.as_ref()
+                    && let Some(counts) = harness.diagnostic_counts()
+                {
+                    let event = serde_json::json!({
+                        "type": "run_summary",
+                        "diagnostics": {
+                            "info": counts.info,
+                            "warning": counts.warning,
+                            "error": counts.error,
+                        },
+                    });
+                    let _ = emit(&event);
+                }
                 self.handle_agent_result(result);
                 true
             }
@@ -694,6 +765,32 @@ impl RpcRunner {
                     Err(e) => emit(&response_error(cmd_id.as_deref(), cmd_name, &e)),
                 }
             }
+            SdkCommand::trace { .. } => match &self.trace_sink {
+                Some(sink) => {
+                    // Supported path: return the versioned redacted envelope.
+                    // Records are already redacted at emit time (Summary mode).
+                    let records: Vec<serde_json::Value> = sink
+                        .snapshot()
+                        .iter()
+                        .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Null))
+                        .collect();
+                    let data = serde_json::json!({
+                        "schema_version": TRACE_SCHEMA_VERSION,
+                        "records": records,
+                    });
+                    emit(&response_success_with_data(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        data,
+                    ))
+                }
+                None => emit(&response_error_with_code(
+                    cmd_id.as_deref(),
+                    cmd_name,
+                    "unsupported_trace_request",
+                    "trace is not enabled for this RPC session",
+                )),
+            },
             SdkCommand::quit { .. } => true,
         }
     }
@@ -759,6 +856,17 @@ fn response_success_with_data(
 
 fn response_error(id: Option<&str>, command: &str, message: &str) -> serde_json::Value {
     serde_json::to_value(SdkResponse::error(id, command, message)).unwrap()
+}
+
+/// Build a structured error response carrying a stable machine-readable code
+/// (Phase 7 task 7.5), e.g. for an unsupported trace request.
+fn response_error_with_code(
+    id: Option<&str>,
+    command: &str,
+    code: &str,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::to_value(SdkResponse::error_with_code(id, command, code, message)).unwrap()
 }
 
 /// Write a JSON value as a single line to the writer.

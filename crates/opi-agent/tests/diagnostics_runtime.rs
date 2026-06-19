@@ -407,6 +407,7 @@ mod runtime_emission {
             steering_queue: None,
             follow_up_queue: None,
             diagnostic_sink: Some(sink as Arc<dyn DiagnosticSink>),
+            trace: None,
         }
     }
 

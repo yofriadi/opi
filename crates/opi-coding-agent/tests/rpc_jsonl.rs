@@ -3070,3 +3070,292 @@ async fn rpc_adapter_backed_commands_dispatch_consistently_through_shared_abstra
     let _quit = recv_response(&mut output_rx, "quit").await;
     assert_eq!(task.await.unwrap(), 0);
 }
+
+// ===========================================================================
+// Phase 7 task 7.5 — RPC exposure: startup diagnostics + run-summary counts,
+// and the versioned redacted trace envelope (supported + unsupported paths).
+// ===========================================================================
+
+mod phase7 {
+    use super::{recv_response, recv_rpc_line, recv_until_agent_end};
+    use std::sync::Arc;
+
+    use opi_agent::extension::ExtensionRegistry;
+    use opi_agent::{RecordingTraceSink, TRACE_SCHEMA_VERSION};
+    use opi_ai::provider::ProviderError;
+    use opi_ai::test_support::{self, MockProvider, MockResponse};
+    use opi_coding_agent::config::OpiConfig;
+    use opi_coding_agent::policy::ToolSelection;
+    use opi_coding_agent::rpc::{RpcCommand, RpcRunner};
+    use opi_coding_agent::runtime_packages::RuntimePackageStartup;
+
+    use tokio::sync::mpsc::unbounded_channel;
+
+    /// rpc_ready carries startup diagnostics before any prompt output, and a
+    /// run with a retryable error surfaces structured diagnostic counts in a
+    /// run_summary event (clauses 1 + 2).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_startup_diagnostics_and_counts() {
+        let provider = MockProvider::new_with_errors(
+            "mock",
+            vec![
+                MockResponse::Error(ProviderError::RateLimited {
+                    retry_after_ms: Some(1),
+                }),
+                MockResponse::Events(test_support::text_response("ok")),
+            ],
+        );
+        let runtime = RuntimePackageStartup {
+            extension_registry: ExtensionRegistry::new(),
+            installed_packages: Vec::new(),
+            diagnostics: vec!["phase7 rpc startup".into()],
+        };
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner = RpcRunner::new_with_runtime_packages(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            runtime,
+        )
+        .expect("rpc runner");
+
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        // rpc_ready is the first line and carries startup_diagnostics.
+        let ready = recv_rpc_line(&mut output_rx).await;
+        assert_eq!(ready["type"], "rpc_ready", "first line is rpc_ready");
+        let startup = ready["startup_diagnostics"]
+            .as_array()
+            .expect("startup_diagnostics array");
+        assert!(
+            startup.iter().any(|d| d == "phase7 rpc startup"),
+            "startup diagnostic present before any prompt output: {startup:?}"
+        );
+
+        command_tx
+            .send(RpcCommand::prompt {
+                id: None,
+                message: "hi".into(),
+            })
+            .unwrap();
+        let accepted = recv_response(&mut output_rx, "prompt").await;
+        assert_eq!(accepted["success"], true, "prompt accepted");
+
+        // The run produces a run_summary event carrying structured counts after
+        // the turn completes. Drain lines until we see it.
+        let mut saw_counts = false;
+        for _ in 0..64 {
+            let line = recv_rpc_line(&mut output_rx).await;
+            if line["type"] == "run_summary" {
+                let diags = line["diagnostics"]
+                    .as_object()
+                    .expect("run_summary diagnostics object");
+                assert!(diags.contains_key("info"), "info count present");
+                assert!(diags.contains_key("warning"), "warning count present");
+                assert!(diags.contains_key("error"), "error count present");
+                let warning = diags["warning"].as_u64().unwrap();
+                assert!(
+                    warning >= 1,
+                    "expected >=1 warning (retry attempt), got {warning}"
+                );
+                saw_counts = true;
+                break;
+            }
+        }
+        assert!(
+            saw_counts,
+            "expected a run_summary event with structured diagnostic counts"
+        );
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
+    }
+
+    /// The trace command returns a versioned redacted envelope when tracing is
+    /// enabled, and a structured unsupported_trace_request error otherwise
+    /// (clauses 3, 4, 6).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_trace_request_supported_and_unsupported_paths() {
+        // --- Supported path: runner built WITH a recording trace sink. ---
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner = RpcRunner::new_with_trace(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            Some(trace_sink.clone()),
+        )
+        .expect("rpc runner with trace");
+
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        let _ready = recv_rpc_line(&mut output_rx).await; // rpc_ready
+        command_tx
+            .send(RpcCommand::prompt {
+                id: None,
+                message: "hi".into(),
+            })
+            .unwrap();
+        let _ = recv_response(&mut output_rx, "prompt").await;
+        recv_until_agent_end(&mut output_rx).await;
+
+        // The run was traced into the shared sink.
+        assert!(
+            !trace_sink.snapshot().is_empty(),
+            "a traced run must produce trace records"
+        );
+
+        // Supported trace request returns a versioned envelope.
+        command_tx
+            .send(RpcCommand::trace {
+                id: Some("t1".into()),
+            })
+            .unwrap();
+        let resp = recv_response(&mut output_rx, "trace").await;
+        assert_eq!(resp["success"], true, "trace request succeeds when enabled");
+        assert_eq!(
+            resp["data"]["schema_version"],
+            serde_json::json!(TRACE_SCHEMA_VERSION),
+            "envelope carries the unstable schema version"
+        );
+        let records = resp["data"]["records"]
+            .as_array()
+            .expect("envelope records array");
+        assert!(!records.is_empty(), "envelope carries trace records");
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
+
+        // --- Unsupported path: runner built WITHOUT a trace sink. ---
+        let provider2 = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let workspace2 = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner2 = RpcRunner::new_with_trace(
+            Box::new(provider2),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace2.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            None,
+        )
+        .expect("rpc runner without trace");
+
+        let (command_tx2, command_rx2) = unbounded_channel();
+        let (output_tx2, mut output_rx2) = unbounded_channel();
+        let task2 =
+            tokio::spawn(async move { runner2.run_with_channels(command_rx2, output_tx2).await });
+
+        let _ready2 = recv_rpc_line(&mut output_rx2).await; // rpc_ready
+        command_tx2
+            .send(RpcCommand::trace {
+                id: Some("t2".into()),
+            })
+            .unwrap();
+        let resp2 = recv_response(&mut output_rx2, "trace").await;
+        assert_eq!(resp2["success"], false, "trace fails when not enabled");
+        assert_eq!(
+            resp2["error_code"], "unsupported_trace_request",
+            "structured error code for unsupported trace"
+        );
+
+        command_tx2.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task2.await;
+    }
+
+    /// Across multiple RPC runs in one session, run_summary counts are scoped
+    /// per run (not cumulative) and each run_summary is preceded by AgentEnd.
+    /// Pins the two evaluator-confirmed fixes for Phase 7 task 7.5.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_run_summary_per_run_counts_and_after_agent_end() {
+        // Two prompt runs; each consumes a retryable error then a success.
+        let provider = MockProvider::new_with_errors(
+            "mock",
+            vec![
+                MockResponse::Error(ProviderError::RateLimited {
+                    retry_after_ms: Some(1),
+                }),
+                MockResponse::Events(test_support::text_response("r1")),
+                MockResponse::Error(ProviderError::RateLimited {
+                    retry_after_ms: Some(1),
+                }),
+                MockResponse::Events(test_support::text_response("r2")),
+            ],
+        );
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner = RpcRunner::new(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+        )
+        .expect("rpc runner");
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        let _ready = recv_rpc_line(&mut output_rx).await; // rpc_ready
+
+        for run in 1..=2u32 {
+            command_tx
+                .send(RpcCommand::prompt {
+                    id: None,
+                    message: format!("p{run}"),
+                })
+                .unwrap();
+            let _accepted = recv_response(&mut output_rx, "prompt").await;
+
+            // Collect lines until the run_summary; AgentEnd must precede it,
+            // and the per-run warning count must be exactly 1 (not accumulated
+            // across the two runs).
+            let mut saw_agent_end = false;
+            let mut summary_warning: Option<u64> = None;
+            for _ in 0..64 {
+                let line = recv_rpc_line(&mut output_rx).await;
+                match line["type"].as_str() {
+                    Some("AgentEnd") => saw_agent_end = true,
+                    Some("run_summary") => {
+                        summary_warning = line["diagnostics"]["warning"].as_u64();
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                saw_agent_end,
+                "run {run}: AgentEnd must precede run_summary on the wire"
+            );
+            let warning = summary_warning.expect("run_summary emitted");
+            assert_eq!(
+                warning, 1,
+                "run {run}: per-run warning count must be 1 (not cumulative), got {warning}"
+            );
+        }
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
+    }
+}

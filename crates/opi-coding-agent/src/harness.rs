@@ -4,14 +4,18 @@
 //! single entry point for the interactive coding agent.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use opi_agent::Agent;
+use opi_agent::diagnostic::{Diagnostic, RedactionMode, SOURCE_SESSION, Severity, code};
 use opi_agent::event::AgentEvent;
 use opi_agent::extension::ExtensionRegistry;
 use opi_agent::hooks::AgentHooks;
 use opi_agent::loop_types::{AgentError, AgentLoopConfig};
 use opi_agent::message::AgentMessage;
+use opi_agent::session_event::SessionDiagnosticCounts;
 use opi_agent::tool::Tool;
+use opi_agent::trace::TraceKind;
+use opi_agent::{Agent, DiagnosticSink, RecordingSink, TraceCollector, TraceSink};
 use opi_ai::message::Message;
 use opi_ai::provider::{EventStream, ModelInfo, Provider, ThinkingConfig};
 
@@ -35,6 +39,19 @@ pub struct ResumeInfo {
     pub original_cwd: PathBuf,
 }
 
+/// Opt-in trace configuration handed to the harness (Phase 7 task 7.5).
+///
+/// When set, the harness builds a fresh [`TraceCollector`] per run over the
+/// shared `sink`, prepares it before the run (fail-closed), and finishes it
+/// after. The sink is reused across runs in a session (e.g. RPC) so a
+/// `RecordingTraceSink` accumulates and a `FileTraceSink` is opened once per
+/// run. `mode` controls redaction of record details (Summary by default).
+#[derive(Clone)]
+pub struct TraceConfig {
+    pub sink: Arc<dyn TraceSink>,
+    pub mode: RedactionMode,
+}
+
 /// Harness wiring config, tools, system prompt, hooks, and Agent.
 pub struct CodingHarness {
     agent: Agent,
@@ -51,6 +68,18 @@ pub struct CodingHarness {
     /// Extension state loaded from a resumed session and restored before the
     /// next async agent operation.
     pending_extension_state: Option<serde_json::Value>,
+    /// Optional recording sink that captures runtime diagnostics (retry,
+    /// cancellation, provider/tool failures) emitted during a run, so a run
+    /// summary can report severity counts. `None` (the default) leaves the
+    /// diagnostic sink unset, preserving pre-7.5 behavior.
+    diagnostics: Option<Arc<RecordingSink>>,
+    /// Opt-in trace configuration. When set, each prompt run is traced.
+    trace: Option<TraceConfig>,
+    /// The collector prepared for the run in progress, shared with the agent
+    /// (loop records) and the harness (compaction record). `None` between runs.
+    active_trace: Option<Arc<TraceCollector>>,
+    /// Monotonic counter minting per-run trace run ids.
+    run_seq: u64,
 }
 
 pub struct RuntimeThinkingState {
@@ -230,6 +259,8 @@ pub struct CodingHarnessBuilder {
     resource_metadata: Option<DiscoveredResourceMetadata>,
     installed_packages: Option<Vec<PackageResource>>,
     startup_diagnostics: Vec<String>,
+    record_diagnostics: bool,
+    trace: Option<TraceConfig>,
 }
 
 impl CodingHarnessBuilder {
@@ -256,6 +287,8 @@ impl CodingHarnessBuilder {
             resource_metadata: None,
             installed_packages: None,
             startup_diagnostics: Vec::new(),
+            record_diagnostics: false,
+            trace: None,
         }
     }
 
@@ -319,6 +352,23 @@ impl CodingHarnessBuilder {
         self
     }
 
+    /// Record runtime diagnostics during runs so a run summary can report
+    /// severity counts (Phase 7 task 7.5). Off by default; enabling installs a
+    /// [`RecordingSink`] on the agent with no other behavior change.
+    pub fn record_diagnostics(mut self, enabled: bool) -> Self {
+        self.record_diagnostics = enabled;
+        self
+    }
+
+    /// Enable per-run tracing (Phase 7 task 7.5). When set, each prompt run
+    /// emits a versioned redacted trace envelope to `config.sink`. Tracing is
+    /// opt-in and fail-open; a sink prepare failure is fail-closed (the run
+    /// aborts rather than running untraced when tracing was requested).
+    pub fn trace(mut self, config: Option<TraceConfig>) -> Self {
+        self.trace = config;
+        self
+    }
+
     pub fn build(self) -> CodingHarness {
         let tool_selection = self.tool_selection;
         let tool_config = self.tool_config.unwrap_or_else(|| {
@@ -343,6 +393,8 @@ impl CodingHarnessBuilder {
                 installed_packages: self.installed_packages,
                 startup_diagnostics: self.startup_diagnostics,
                 tool_selection,
+                record_diagnostics: self.record_diagnostics,
+                trace: self.trace,
             },
         )
     }
@@ -355,6 +407,8 @@ struct HarnessBuildOptions {
     installed_packages: Option<Vec<PackageResource>>,
     startup_diagnostics: Vec<String>,
     tool_selection: ToolSelection,
+    record_diagnostics: bool,
+    trace: Option<TraceConfig>,
 }
 
 impl Default for HarnessBuildOptions {
@@ -366,6 +420,8 @@ impl Default for HarnessBuildOptions {
             installed_packages: None,
             startup_diagnostics: Vec::new(),
             tool_selection: ToolSelection::Default,
+            record_diagnostics: false,
+            trace: None,
         }
     }
 }
@@ -731,6 +787,18 @@ impl CodingHarness {
             SessionCoordinator::new(&session_dir, &cwd, compaction_config, model.clone()).ok()
         };
 
+        // Opt-in diagnostic recording: install a RecordingSink on the agent so
+        // runtime diagnostics (retry/cancel/provider/tool failures) are captured
+        // for run-summary severity counts. Off by default -> no behavior change.
+        let diagnostics = if build_options.record_diagnostics {
+            let sink = Arc::new(RecordingSink::new());
+            agent.set_diagnostic_sink(Some(sink.clone() as Arc<dyn DiagnosticSink>));
+            Some(sink)
+        } else {
+            None
+        };
+        let trace = build_options.trace;
+
         Self {
             agent,
             config,
@@ -742,6 +810,10 @@ impl CodingHarness {
             turn_offset: initial_len,
             pending_images: Vec::new(),
             pending_extension_state: resume_extension_state,
+            diagnostics,
+            trace,
+            active_trace: None,
+            run_seq: 0,
         }
     }
 
@@ -993,10 +1065,18 @@ impl CodingHarness {
     /// Send a user prompt and run the agent loop.
     pub async fn prompt(&mut self, text: &str) -> Result<Vec<AgentMessage>, AgentError> {
         self.restore_pending_extension_state().await;
+        self.prepare_trace_run()?;
         let offset = self.turn_offset;
-        let messages = self.agent.prompt(text).await?;
+        let messages = match self.agent.prompt(text).await {
+            Ok(m) => m,
+            Err(e) => {
+                self.finish_trace_run();
+                return Err(e);
+            }
+        };
         let new = &messages[offset..];
         self.persist_turn(new, offset).await;
+        self.finish_trace_run();
         let final_messages = self.current_messages();
         self.turn_offset = final_messages.len();
         Ok(final_messages)
@@ -1009,10 +1089,18 @@ impl CodingHarness {
         content: Vec<opi_ai::message::InputContent>,
     ) -> Result<Vec<AgentMessage>, AgentError> {
         self.restore_pending_extension_state().await;
+        self.prepare_trace_run()?;
         let offset = self.turn_offset;
-        let messages = self.agent.prompt_with_content(content).await?;
+        let messages = match self.agent.prompt_with_content(content).await {
+            Ok(m) => m,
+            Err(e) => {
+                self.finish_trace_run();
+                return Err(e);
+            }
+        };
         let new = &messages[offset..];
         self.persist_turn(new, offset).await;
+        self.finish_trace_run();
         let final_messages = self.current_messages();
         self.turn_offset = final_messages.len();
         Ok(final_messages)
@@ -1021,10 +1109,18 @@ impl CodingHarness {
     /// Continue the conversation with an additional message.
     pub async fn continue_(&mut self, text: &str) -> Result<Vec<AgentMessage>, AgentError> {
         self.restore_pending_extension_state().await;
+        self.prepare_trace_run()?;
         let offset = self.turn_offset;
-        let messages = self.agent.continue_(text).await?;
+        let messages = match self.agent.continue_(text).await {
+            Ok(m) => m,
+            Err(e) => {
+                self.finish_trace_run();
+                return Err(e);
+            }
+        };
         let new = &messages[offset..];
         self.persist_turn(new, offset).await;
+        self.finish_trace_run();
         let final_messages = self.current_messages();
         self.turn_offset = final_messages.len();
         Ok(final_messages)
@@ -1079,6 +1175,21 @@ impl CodingHarness {
                 match session.execute_compaction(reason) {
                     Ok(Some(out)) => {
                         let wire = to_wire_result(&out);
+                        // Mirror compaction into the active trace as a
+                        // diagnostic-linked record (scenario 3: compaction
+                        // represented in diagnostics and trace). Fail-open.
+                        self.trace_diagnostic(
+                            &Diagnostic::new(
+                                Severity::Info,
+                                code::CODE_SESSION_COMPACTED,
+                                SOURCE_SESSION,
+                                "session context compacted",
+                            )
+                            .details(serde_json::json!({
+                                "tokens_before": wire.tokens_before,
+                                "tokens_after": wire.tokens_after,
+                            })),
+                        );
                         self.agent.replace_messages(out.new_agent_messages);
                         self.agent.emit_event(AgentEvent::CompactionEnd {
                             reason,
@@ -1153,6 +1264,89 @@ impl CodingHarness {
         // by the loop plus any post-loop mutation. Simplest correct option:
         // ask the Agent via a new getter.
         self.agent.messages_snapshot()
+    }
+
+    // -- Phase 7 task 7.5: per-run trace bracketing + diagnostic counts -----
+
+    fn next_run_id(&mut self) -> String {
+        let id = format!("run-{}", self.run_seq);
+        self.run_seq += 1;
+        id
+    }
+
+    /// Build and prepare (fail-closed) a per-run trace collector when tracing
+    /// is configured, and hand it to the agent so the loop emits records.
+    /// Fail-closed: a prepare error aborts the run as `AgentError::TraceSetup`
+    /// rather than running untraced. No-op when tracing is not configured.
+    fn prepare_trace_run(&mut self) -> Result<(), AgentError> {
+        // Reset the per-run diagnostic buffer so run-summary counts reflect
+        // only the current run. RPC shares one harness (and one recording
+        // sink) across multiple prompt/continue runs in a session.
+        if let Some(sink) = &self.diagnostics {
+            sink.clear();
+        }
+        let Some(config) = self.trace.clone() else {
+            // Clear any stale collector left on the agent from a prior run.
+            self.agent.set_trace_collector(None);
+            return Ok(());
+        };
+        let run_id = self.next_run_id();
+        let diagnostics = self
+            .diagnostics
+            .clone()
+            .map(|sink| sink as Arc<dyn DiagnosticSink>);
+        let collector = TraceCollector::new(run_id, config.mode, config.sink, diagnostics);
+        collector
+            .prepare()
+            .map_err(|e| AgentError::TraceSetup(e.to_string()))?;
+        let collector = Arc::new(collector);
+        self.agent.set_trace_collector(Some(collector.clone()));
+        self.active_trace = Some(collector);
+        Ok(())
+    }
+
+    /// Finish the active run's collector (best-effort) and detach it from the
+    /// agent. Safe to call when no collector is active.
+    fn finish_trace_run(&mut self) {
+        if let Some(collector) = self.active_trace.take() {
+            collector.finish();
+        }
+        self.agent.set_trace_collector(None);
+    }
+
+    /// Mirror a diagnostic into the active run's trace as a diagnostic-linked
+    /// record (fail-open). Used by harness-owned events (e.g. compaction) that
+    /// do not flow through the agent loop's own observe() path.
+    fn trace_diagnostic(&self, diagnostic: &Diagnostic) {
+        if let Some(collector) = &self.active_trace {
+            collector
+                .record(diagnostic.source, TraceKind::DiagnosticLinked)
+                .severity(diagnostic.severity)
+                .diagnostic_code(diagnostic.code)
+                .emit();
+        }
+    }
+
+    /// Severity counts captured during the most recent run, when diagnostic
+    /// recording is enabled. `None` when no recording sink is attached
+    /// (preserving pre-7.5 behavior for callers that do not opt in).
+    pub fn diagnostic_counts(&self) -> Option<SessionDiagnosticCounts> {
+        let sink = self.diagnostics.as_ref()?;
+        let mut counts = SessionDiagnosticCounts::default();
+        for d in sink.snapshot() {
+            match d.severity {
+                Severity::Info => counts.info += 1,
+                Severity::Warning => counts.warning += 1,
+                Severity::Error => counts.error += 1,
+            }
+        }
+        Some(counts)
+    }
+
+    /// Whether diagnostic recording is attached (for runner/rpc summary
+    /// decisions). True when a recording sink was installed at build time.
+    pub fn records_diagnostics(&self) -> bool {
+        self.diagnostics.is_some()
     }
 
     /// Return the current model name.

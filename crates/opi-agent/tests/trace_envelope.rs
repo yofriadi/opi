@@ -638,3 +638,457 @@ fn file_sink_fail_open_when_written_before_prepare() {
     assert_eq!(diags[0].code, CODE_TRACE_SINK_FAILED);
     assert!(!path.exists(), "no file created without prepare");
 }
+
+// ===========================================================================
+// Phase 7 task 7.5 — agent_loop trace wiring
+//
+// Drives the real `agent_loop` with a MockProvider and a `TraceCollector`
+// threaded through `AgentLoopContext.trace`, then asserts the run/turn/
+// provider/tool/diagnostic-linked records the loop emits. Pins fail-open (a
+// trace write error never aborts the run) and the untraced `None` path (no
+// behavior change). These exercise the production call site
+// `opi_agent::agent_loop trace sink integration`.
+// ===========================================================================
+
+mod wiring {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use opi_agent::agent_loop;
+    use opi_agent::diagnostic::code::*;
+    use opi_agent::diagnostic::{RedactionMode, Severity};
+    use opi_agent::diagnostic_sink::RecordingSink;
+    use opi_agent::event::{AgentEvent, AgentEventSink};
+    use opi_agent::hooks::AgentHooks;
+    use opi_agent::loop_types::{AgentLoopConfig, AgentLoopContext};
+    use opi_agent::message::AgentMessage;
+    use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
+    use opi_agent::{
+        DiagnosticSink, RecordingTraceSink, TraceCollector, TraceError, TraceKind, TraceRecord,
+        TraceSink,
+    };
+    use opi_ai::message::{InputContent, Message, OutputContent, ToolDef, UserMessage};
+    use opi_ai::provider::ProviderError;
+    use opi_ai::retry::RetryConfig;
+    use opi_ai::test_support::{self, MockProvider, MockResponse};
+
+    /// Hooks that forward LLM messages unchanged and otherwise do nothing.
+    struct NoopHooks;
+    impl AgentHooks for NoopHooks {
+        fn convert_to_llm(
+            &self,
+            messages: &[AgentMessage],
+        ) -> Result<Vec<Message>, opi_agent::loop_types::AgentError> {
+            Ok(messages
+                .iter()
+                .filter_map(|m| {
+                    if let AgentMessage::Llm(m) = m {
+                        Some(m.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect())
+        }
+    }
+
+    fn user_msg(text: &str) -> AgentMessage {
+        AgentMessage::Llm(Message::User(UserMessage {
+            content: vec![InputContent::Text { text: text.into() }],
+            timestamp_ms: 0,
+        }))
+    }
+
+    fn collector(
+        trace_sink: Arc<dyn TraceSink>,
+        diag_sink: Arc<RecordingSink>,
+    ) -> Arc<TraceCollector> {
+        let c = TraceCollector::new(
+            "run-wiring",
+            RedactionMode::default(),
+            trace_sink,
+            Some(diag_sink as Arc<dyn DiagnosticSink>),
+        );
+        c.prepare().expect("recording sink prepare is infallible");
+        Arc::new(c)
+    }
+
+    fn ctx(
+        provider: MockProvider,
+        sink: Arc<RecordingSink>,
+        trace: Option<Arc<TraceCollector>>,
+        tools: Vec<Box<dyn Tool>>,
+    ) -> AgentLoopContext {
+        AgentLoopContext {
+            provider: Box::new(provider),
+            tools,
+            messages: vec![user_msg("hello")],
+            model: "mock-model".into(),
+            system: None,
+            steering_queue: None,
+            follow_up_queue: None,
+            diagnostic_sink: Some(sink as Arc<dyn DiagnosticSink>),
+            trace,
+        }
+    }
+
+    fn config(retry: Option<RetryConfig>) -> AgentLoopConfig {
+        AgentLoopConfig {
+            max_turns: 10,
+            max_tokens: None,
+            temperature: None,
+            retry,
+            ..Default::default()
+        }
+    }
+
+    fn fast_retry() -> RetryConfig {
+        RetryConfig {
+            max_attempts: 3,
+            initial_delay_ms: 1,
+            max_delay_ms: 10,
+        }
+    }
+
+    fn null_event_sink() -> AgentEventSink {
+        Box::new(|_: AgentEvent| {})
+    }
+
+    fn kinds_of(sink: &RecordingTraceSink) -> Vec<TraceKind> {
+        sink.snapshot().iter().map(|r| r.kind).collect()
+    }
+
+    /// A minimal tool that always succeeds, used to exercise the
+    /// ToolCallStarted/Completed records.
+    struct EchoTool;
+    impl Tool for EchoTool {
+        fn definition(&self) -> ToolDef {
+            ToolDef {
+                name: "echo".into(),
+                description: "echo the call".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        fn execute(
+            &self,
+            _call_id: &str,
+            _arguments: serde_json::Value,
+            _signal: tokio_util::sync::CancellationToken,
+            _on_update: Option<opi_agent::tool::UpdateCallback>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<ToolResult, opi_agent::tool::ToolError>>
+                    + Send,
+            >,
+        > {
+            Box::pin(async move {
+                Ok(ToolResult {
+                    content: vec![OutputContent::Text { text: "ok".into() }],
+                    details: None,
+                    is_error: false,
+                    terminate: false,
+                })
+            })
+        }
+        fn execution_mode(&self) -> ExecutionMode {
+            ExecutionMode::Sequential
+        }
+    }
+
+    #[tokio::test]
+    async fn phase7_run_emits_boundary_and_provider_records() {
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(provider, diag.clone(), Some(trace), vec![]),
+            config(None),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(kinds.contains(&TraceKind::RunStarted), "missing RunStarted");
+        assert!(
+            kinds.contains(&TraceKind::TurnStarted),
+            "missing TurnStarted"
+        );
+        assert!(
+            kinds.contains(&TraceKind::ProviderRequest),
+            "missing ProviderRequest"
+        );
+        assert!(
+            kinds.contains(&TraceKind::ProviderStreamCompletion),
+            "missing ProviderStreamCompletion"
+        );
+        assert!(kinds.contains(&TraceKind::TurnEnded), "missing TurnEnded");
+        assert!(kinds.contains(&TraceKind::RunEnded), "missing RunEnded");
+
+        // RunStarted must precede RunEnded (run boundary ordering).
+        let seqs: Vec<TraceKind> = trace_sink.snapshot().iter().map(|r| r.kind).collect();
+        let start = seqs
+            .iter()
+            .position(|k| *k == TraceKind::RunStarted)
+            .unwrap();
+        let end = seqs.iter().position(|k| *k == TraceKind::RunEnded).unwrap();
+        assert!(start < end, "RunStarted must precede RunEnded");
+    }
+
+    #[tokio::test]
+    async fn phase7_provider_failure_emits_provider_failure_and_diagnostic_linked() {
+        // Non-retryable provider error: the loop classifies it (RequestFailed ->
+        // error) and must emit a ProviderFailure record plus a DiagnosticLinked
+        // mirror carrying the provider failure code.
+        let provider = MockProvider::new_with_errors(
+            "mock",
+            vec![MockResponse::Error(ProviderError::RequestFailed(
+                "boom".into(),
+            ))],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(provider, diag.clone(), Some(trace), vec![]),
+            config(None),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_err(), "provider failure must propagate");
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(
+            kinds.contains(&TraceKind::ProviderFailure),
+            "missing ProviderFailure"
+        );
+        // The classified diagnostic is mirrored as DiagnosticLinked.
+        let snap = trace_sink.snapshot();
+        let linked = snap
+            .iter()
+            .filter(|r| r.kind == TraceKind::DiagnosticLinked)
+            .count();
+        assert!(linked > 0, "expected at least one DiagnosticLinked");
+        assert!(
+            snap.iter().any(|r| {
+                r.kind == TraceKind::DiagnosticLinked && r.severity == Some(Severity::Error)
+            }),
+            "provider failure diagnostic should be Error severity"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase7_retry_emits_provider_retry_and_diagnostic_linked() {
+        // One retryable error then success: a ProviderRetry record and a
+        // DiagnosticLinked mirror of the retry-attempt diagnostic, followed by a
+        // successful stream completion. No ProviderFailure on the success path.
+        let provider = MockProvider::new_with_errors(
+            "mock",
+            vec![
+                MockResponse::Error(ProviderError::RateLimited {
+                    retry_after_ms: Some(1),
+                }),
+                MockResponse::Events(test_support::text_response("ok")),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(provider, diag.clone(), Some(trace), vec![]),
+            config(Some(fast_retry())),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(
+            kinds.contains(&TraceKind::ProviderRetry),
+            "missing ProviderRetry"
+        );
+        assert!(
+            kinds.contains(&TraceKind::ProviderStreamCompletion),
+            "missing ProviderStreamCompletion after retry success"
+        );
+        assert!(
+            !kinds.contains(&TraceKind::ProviderFailure),
+            "successful retry must not emit ProviderFailure"
+        );
+        // The retry-attempt diagnostic is mirrored as DiagnosticLinked with the
+        // provider retry-attempt code.
+        let retry_linked = trace_sink.snapshot().iter().any(|r| {
+            r.kind == TraceKind::DiagnosticLinked
+                && r.diagnostic_code == Some(CODE_PROVIDER_RETRY_ATTEMPT)
+        });
+        assert!(retry_linked, "retry attempt diagnostic must be mirrored");
+    }
+
+    #[tokio::test]
+    async fn phase7_tool_call_started_and_completed() {
+        // Turn 0 emits a tool call to "echo" (registered); turn 1 emits text.
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("tc-1", "echo", r#"{"arg":"x"}"#),
+                test_support::text_response("done"),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(
+                provider,
+                diag.clone(),
+                Some(trace),
+                vec![Box::new(EchoTool)],
+            ),
+            config(None),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(
+            kinds.contains(&TraceKind::ToolCallStarted),
+            "missing ToolCallStarted"
+        );
+        assert!(
+            kinds.contains(&TraceKind::ToolCallCompleted),
+            "missing ToolCallCompleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase7_tool_call_failed_for_unknown_tool() {
+        // The model calls a tool that is not registered: the loop records an
+        // unknown-tool diagnostic (mirrored as DiagnosticLinked) and a
+        // ToolCallFailed record.
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("tc-1", "missing", r#"{}"#),
+                test_support::text_response("done"),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(provider, diag.clone(), Some(trace), vec![]),
+            config(None),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(
+            kinds.contains(&TraceKind::ToolCallStarted),
+            "ToolCallStarted"
+        );
+        assert!(kinds.contains(&TraceKind::ToolCallFailed), "ToolCallFailed");
+        assert!(
+            trace_sink.snapshot().iter().any(|r| {
+                r.kind == TraceKind::DiagnosticLinked
+                    && r.diagnostic_code == Some(CODE_TOOL_UNKNOWN)
+            }),
+            "unknown-tool diagnostic must be mirrored as DiagnosticLinked"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase7_trace_none_runs_untraced_with_no_behavior_change() {
+        // No collector: the loop runs normally and emits no trace records.
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        // trace_sink is intentionally NOT attached; nothing should reach it.
+        let _ = trace_sink.clone();
+
+        let result = agent_loop(
+            ctx(provider, diag.clone(), None, vec![]),
+            config(None),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+        assert!(trace_sink.is_empty(), "untraced run must emit no records");
+    }
+
+    #[tokio::test]
+    async fn phase7_trace_write_failure_is_fail_open() {
+        // A trace sink whose write always fails: the run must still complete
+        // (fail-open); tracing must never abort the agent loop.
+        struct FailingWriteSink {
+            writes: AtomicU64,
+        }
+        impl TraceSink for FailingWriteSink {
+            fn prepare(&self) -> Result<(), TraceError> {
+                Ok(())
+            }
+            fn write(&self, _record: &TraceRecord) -> Result<(), TraceError> {
+                self.writes.fetch_add(1, Ordering::SeqCst);
+                Err(TraceError::Write(std::io::Error::other("disk full")))
+            }
+            fn finish(&self) -> Result<(), TraceError> {
+                Ok(())
+            }
+        }
+
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let diag = Arc::new(RecordingSink::new());
+        let failing = Arc::new(FailingWriteSink {
+            writes: AtomicU64::new(0),
+        });
+        let c = TraceCollector::new(
+            "run-fo-wiring",
+            RedactionMode::default(),
+            failing.clone() as Arc<dyn TraceSink>,
+            Some(diag.clone() as Arc<dyn DiagnosticSink>),
+        );
+        c.prepare().unwrap();
+        let trace = Arc::new(c);
+
+        let result = agent_loop(
+            ctx(provider, diag.clone(), Some(trace), vec![]),
+            config(None),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "a trace write failure must not abort the run, got {:?}",
+            result.err()
+        );
+        // The first failing write disables the sink; the fail-open diagnostic
+        // is observable on the diagnostic sink.
+        let codes: Vec<&'static str> = diag.snapshot().iter().map(|d| d.code).collect();
+        assert!(
+            codes.contains(&CODE_TRACE_SINK_FAILED),
+            "expected trace_sink_failed diagnostic, got {codes:?}"
+        );
+    }
+}

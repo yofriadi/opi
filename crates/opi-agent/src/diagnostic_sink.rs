@@ -72,6 +72,15 @@ impl RecordingSink {
     pub fn snapshot(&self) -> Vec<Diagnostic> {
         self.lock().clone()
     }
+
+    /// Clear all recorded diagnostics (Phase 7 task 7.5).
+    ///
+    /// Used by the coding harness to scope run-summary diagnostic counts to the
+    /// current run when a single sink is shared across runs (e.g. an RPC
+    /// session issues multiple prompt runs against one harness).
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
 }
 
 impl DiagnosticSink for RecordingSink {

@@ -115,6 +115,13 @@ pub enum SdkCommand {
         name: String,
         args: serde_json::Value,
     },
+    /// Request the versioned redacted trace envelope for a run (Phase 7
+    /// task 7.5). Unsupported when tracing is not enabled for the session;
+    /// the runner returns a structured `unsupported_trace_request` error then.
+    trace {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     /// Shut down the session.
     quit {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,6 +143,7 @@ impl SdkCommand {
             | Self::compact { id }
             | Self::session_info { id }
             | Self::extension_command { id, .. }
+            | Self::trace { id }
             | Self::quit { id } => id.as_deref(),
         }
     }
@@ -153,6 +161,7 @@ impl SdkCommand {
             Self::compact { .. } => "compact",
             Self::session_info { .. } => "session_info",
             Self::extension_command { .. } => "extension_command",
+            Self::trace { .. } => "trace",
             Self::quit { .. } => "quit",
         }
     }
@@ -198,6 +207,11 @@ pub struct SdkResponse {
     /// Error message (only when `success` is false).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Stable machine-readable error code (Phase 7 task 7.5), present only for
+    /// structured errors such as an unsupported trace request. Additive:
+    /// `#[serde(default)]` keeps older payloads deserializing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
     /// Response data payload (only when `success` is true).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
@@ -212,6 +226,7 @@ impl SdkResponse {
             success: true,
             id: id.map(|s| s.to_owned()),
             error: None,
+            error_code: None,
             data: None,
         }
     }
@@ -224,6 +239,7 @@ impl SdkResponse {
             success: true,
             id: id.map(|s| s.to_owned()),
             error: None,
+            error_code: None,
             data: Some(data),
         }
     }
@@ -236,6 +252,21 @@ impl SdkResponse {
             success: false,
             id: id.map(|s| s.to_owned()),
             error: Some(message.to_owned()),
+            error_code: None,
+            data: None,
+        }
+    }
+
+    /// Build a structured error response carrying a stable machine-readable
+    /// `code` (Phase 7 task 7.5), e.g. for an unsupported trace request.
+    pub fn error_with_code(id: Option<&str>, command: &str, code: &str, message: &str) -> Self {
+        Self {
+            r#type: response_type(),
+            command: command.to_owned(),
+            success: false,
+            id: id.map(|s| s.to_owned()),
+            error: Some(message.to_owned()),
+            error_code: Some(code.to_owned()),
             data: None,
         }
     }

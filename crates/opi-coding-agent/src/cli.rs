@@ -83,6 +83,11 @@ pub struct Cli {
     #[arg(short = 'v', long)]
     pub verbose: bool,
 
+    /// Write a versioned, redacted trace envelope to PATH for the run
+    /// (non-interactive / `--json` only; 0.x unstable, opt-in).
+    #[arg(long, value_name = "PATH")]
+    pub trace: Option<PathBuf>,
+
     /// Tool allowlist (comma-separated, e.g. "read,glob").
     #[arg(long, value_delimiter = ',')]
     pub tools: Option<Vec<String>>,

@@ -305,6 +305,7 @@ async fn run_non_interactive(
         resume_info,
         tool_selection,
         Some(runtime_startup),
+        cli.trace.clone(),
     ) {
         Ok(runner) => runner,
         Err(e) => {

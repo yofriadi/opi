@@ -403,6 +403,7 @@ fn make_context(provider: Box<dyn Provider>, tools: Vec<Box<dyn Tool>>) -> Agent
         steering_queue: None,
         follow_up_queue: None,
         diagnostic_sink: None,
+        trace: None,
     }
 }
 

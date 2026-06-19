@@ -51,6 +51,7 @@ fn make_context(provider: MockProvider) -> AgentLoopContext {
         steering_queue: None,
         follow_up_queue: None,
         diagnostic_sink: None,
+        trace: None,
     }
 }
 

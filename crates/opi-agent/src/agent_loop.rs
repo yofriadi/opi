@@ -18,6 +18,7 @@ use crate::hooks::{
 use crate::loop_types::{AgentError, AgentLoopConfig, AgentLoopContext};
 use crate::message::AgentMessage;
 use crate::tool::{ExecutionMode, Tool, ToolResult};
+use crate::trace::{TraceCollector, TraceKind};
 use crate::validation;
 
 /// Run the agent loop until completion or cancellation.
@@ -25,6 +26,12 @@ use crate::validation;
 /// The loop iterates: provider request, stream response, detect tool calls,
 /// validate and execute tools, send tool results back, and repeat until no
 /// tool calls or stop condition.
+///
+/// When `context.trace` is `Some`, the loop emits versioned, redacted trace
+/// records (run/turn/provider/tool/diagnostic-linked). Tracing is fail-open: a
+/// trace sink write failure never aborts the run. The collector must be
+/// prepared by the caller before the loop runs (fail-closed is the caller's
+/// responsibility).
 pub async fn agent_loop(
     context: AgentLoopContext,
     config: AgentLoopConfig,
@@ -32,10 +39,12 @@ pub async fn agent_loop(
     events: AgentEventSink,
     cancel: CancellationToken,
 ) -> Result<Vec<AgentMessage>, AgentError> {
-    // Clone the sink handle up front (before any partial move out of `context`)
-    // so every failure path below can record an observation. `None` means
-    // emission is disabled and nothing below observes any behavior change.
+    // Clone the sink/collector handles up front (before any partial move out
+    // of `context`) so every failure path below can record an observation.
+    // `None` means emission is disabled and nothing below observes any
+    // behavior change.
     let diagnostic_sink = context.diagnostic_sink.clone();
+    let trace = context.trace.clone();
     let tools_map: HashMap<String, &dyn Tool> = context
         .tools
         .iter()
@@ -46,18 +55,23 @@ pub async fn agent_loop(
     let mut messages = context.messages;
 
     events(AgentEvent::AgentStart);
+    trace_run(&trace, TraceKind::RunStarted);
 
     let mut has_tools_pending;
     for turn_idx in 0..config.max_turns {
+        let turn_id = format!("t{turn_idx}");
         if cancel.is_cancelled() {
-            record(&diagnostic_sink, cancelled_diagnostic("before_turn"));
-            events(AgentEvent::AgentEnd {
-                messages: messages.clone(),
-            });
+            observe(
+                &diagnostic_sink,
+                &trace,
+                cancelled_diagnostic("before_turn"),
+            );
+            emit_agent_end(&events, &trace, &messages);
             return Err(AgentError::Cancelled);
         }
 
         events(AgentEvent::TurnStart);
+        trace_turn(&trace, TraceKind::TurnStarted, &turn_id);
 
         let transformed = hooks
             .transform_context(messages.clone(), cancel.clone())
@@ -84,8 +98,9 @@ pub async fn agent_loop(
                 cancel: cancel.clone(),
             };
             if let Err(e) = validate_request_capabilities(context.provider.as_ref(), &request) {
-                record(
+                observe(
                     &diagnostic_sink,
+                    &trace,
                     Diagnostic::new(
                         Severity::Error,
                         CODE_PROVIDER_CAPABILITY_INVALID,
@@ -93,11 +108,11 @@ pub async fn agent_loop(
                         e.to_string(),
                     ),
                 );
-                events(AgentEvent::AgentEnd {
-                    messages: messages.clone(),
-                });
+                trace_provider(&trace, TraceKind::ProviderFailure, &turn_id);
+                emit_agent_end(&events, &trace, &messages);
                 return Err(AgentError::Provider(e.to_string()));
             }
+            trace_provider(&trace, TraceKind::ProviderRequest, &turn_id);
             let mut stream = context.provider.stream(request);
             assistant_content.clear();
 
@@ -105,13 +120,12 @@ pub async fn agent_loop(
                 tokio::select! {
                     biased;
                     _ = cancel.cancelled() => {
-                        record(
+                        observe(
                             &diagnostic_sink,
+                            &trace,
                             cancelled_diagnostic("during_stream"),
                         );
-                        events(AgentEvent::AgentEnd {
-                            messages: messages.clone(),
-                        });
+                        emit_agent_end(&events, &trace, &messages);
                         return Err(AgentError::Cancelled);
                     }
                     item = stream.next() => item,
@@ -129,6 +143,7 @@ pub async fn agent_loop(
                             events(AgentEvent::MessageEnd {
                                 message: agent_msg.clone(),
                             });
+                            trace_provider(&trace, TraceKind::ProviderStreamCompletion, &turn_id);
 
                             messages.push(agent_msg.clone());
 
@@ -179,6 +194,8 @@ pub async fn agent_loop(
                                             &messages,
                                             cancel.clone(),
                                             &diagnostic_sink,
+                                            &trace,
+                                            &turn_id,
                                         )
                                         .await;
 
@@ -227,6 +244,8 @@ pub async fn agent_loop(
                                             let messages = &messages;
                                             let cancel = cancel.clone();
                                             let diagnostic_sink = diagnostic_sink.clone();
+                                            let trace = trace.clone();
+                                            let turn_id = turn_id.clone();
                                             let tc_id = tc.id.clone();
                                             let tc_name = tc.name.clone();
                                             let args = args.clone();
@@ -240,6 +259,8 @@ pub async fn agent_loop(
                                                     messages,
                                                     cancel,
                                                     &diagnostic_sink,
+                                                    &trace,
+                                                    &turn_id,
                                                 )
                                                 .await;
                                                 (tc_id, tc_name, result)
@@ -278,11 +299,10 @@ pub async fn agent_loop(
                                     message: agent_msg,
                                     tool_results: tool_results.clone(),
                                 });
+                                trace_turn(&trace, TraceKind::TurnEnded, &turn_id);
 
                                 if all_terminate {
-                                    events(AgentEvent::AgentEnd {
-                                        messages: messages.clone(),
-                                    });
+                                    emit_agent_end(&events, &trace, &messages);
                                     return Ok(messages);
                                 }
 
@@ -291,9 +311,7 @@ pub async fn agent_loop(
                                     tool_results,
                                 };
                                 if hooks.should_stop_after_turn(stop_ctx).await {
-                                    events(AgentEvent::AgentEnd {
-                                        messages: messages.clone(),
-                                    });
+                                    emit_agent_end(&events, &trace, &messages);
                                     return Ok(messages);
                                 }
 
@@ -304,15 +322,14 @@ pub async fn agent_loop(
                                 message: agent_msg.clone(),
                                 tool_results: vec![],
                             });
+                            trace_turn(&trace, TraceKind::TurnEnded, &turn_id);
 
                             let stop_ctx = ShouldStopAfterTurnContext {
                                 messages: messages.clone(),
                                 tool_results: vec![],
                             };
                             if hooks.should_stop_after_turn(stop_ctx).await {
-                                events(AgentEvent::AgentEnd {
-                                    messages: messages.clone(),
-                                });
+                                emit_agent_end(&events, &trace, &messages);
                                 return Ok(messages);
                             }
                         }
@@ -337,8 +354,10 @@ pub async fn agent_loop(
                                 delay_ms,
                                 error_message: e.to_string(),
                             });
-                            record(
+                            trace_provider(&trace, TraceKind::ProviderRetry, &turn_id);
+                            observe(
                                 &diagnostic_sink,
+                                &trace,
                                 Diagnostic::new(
                                     Severity::Warning,
                                     CODE_PROVIDER_RETRY_ATTEMPT,
@@ -355,13 +374,12 @@ pub async fn agent_loop(
                             tokio::select! {
                                 biased;
                                 _ = cancel.cancelled() => {
-                                    record(
+                                    observe(
                                         &diagnostic_sink,
+                                        &trace,
                                         cancelled_diagnostic("during_retry_sleep"),
                                     );
-                                    events(AgentEvent::AgentEnd {
-                                        messages: messages.clone(),
-                                    });
+                                    emit_agent_end(&events, &trace, &messages);
                                     return Err(AgentError::Cancelled);
                                 }
                                 _ = tokio::time::sleep(
@@ -377,8 +395,9 @@ pub async fn agent_loop(
                                 attempt: retry_attempt,
                                 final_error: Some(e.to_string()),
                             });
-                            record(
+                            observe(
                                 &diagnostic_sink,
+                                &trace,
                                 Diagnostic::new(
                                     Severity::Error,
                                     CODE_PROVIDER_RETRY_EXHAUSTED,
@@ -395,10 +414,9 @@ pub async fn agent_loop(
 
                         // The underlying provider error is classified regardless of whether
                         // retries were attempted, so callers see what actually failed.
-                        record(&diagnostic_sink, Diagnostic::from(&e));
-                        events(AgentEvent::AgentEnd {
-                            messages: messages.clone(),
-                        });
+                        observe(&diagnostic_sink, &trace, Diagnostic::from(&e));
+                        trace_provider(&trace, TraceKind::ProviderFailure, &turn_id);
+                        emit_agent_end(&events, &trace, &messages);
                         return Err(match &e {
                             opi_ai::provider::ProviderError::AuthFailed(msg) => {
                                 AgentError::AuthFailed(msg.clone())
@@ -415,8 +433,9 @@ pub async fn agent_loop(
                     attempt: retry_attempt,
                     final_error: None,
                 });
-                record(
+                observe(
                     &diagnostic_sink,
+                    &trace,
                     Diagnostic::new(
                         Severity::Info,
                         CODE_PROVIDER_RETRY_SUCCEEDED,
@@ -475,9 +494,7 @@ pub async fn agent_loop(
         let _ = turn_idx;
     }
 
-    events(AgentEvent::AgentEnd {
-        messages: messages.clone(),
-    });
+    emit_agent_end(&events, &trace, &messages);
     Ok(messages)
 }
 
@@ -534,7 +551,7 @@ fn process_stream_event(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // private helper threading diagnostic sink alongside existing call context
+#[allow(clippy::too_many_arguments)] // private helper threading sinks + turn id alongside existing call context
 async fn execute_tool(
     call_id: &str,
     tool_name: &str,
@@ -544,14 +561,22 @@ async fn execute_tool(
     messages: &[AgentMessage],
     cancel: CancellationToken,
     sink: &Option<Arc<dyn DiagnosticSink>>,
+    trace: &Option<Arc<TraceCollector>>,
+    turn_id: &str,
 ) -> ToolResult {
+    // Tool call boundary record; emitted for every path below (completed,
+    // failed, cancelled) so the trace always brackets a tool execution.
+    trace_tool(trace, TraceKind::ToolCallStarted, tool_name, turn_id);
+
     let tool = match tools_map.get(tool_name) {
         Some(t) => *t,
         None => {
-            record(
+            observe(
                 sink,
+                trace,
                 tool_diagnostic(CODE_TOOL_UNKNOWN, tool_name, "unknown tool requested"),
             );
+            trace_tool(trace, TraceKind::ToolCallFailed, tool_name, turn_id);
             return ToolResult {
                 content: vec![opi_ai::message::OutputContent::Text {
                     text: format!("unknown tool: {tool_name}"),
@@ -565,14 +590,16 @@ async fn execute_tool(
 
     let schema = &tool.definition().input_schema;
     if let Err(err) = validation::validate(schema, args) {
-        record(
+        observe(
             sink,
+            trace,
             tool_diagnostic(
                 CODE_TOOL_VALIDATION_FAILED,
                 tool_name,
                 "tool arguments failed schema validation",
             ),
         );
+        trace_tool(trace, TraceKind::ToolCallFailed, tool_name, turn_id);
         return ToolResult::from_validation_error(err);
     }
 
@@ -585,14 +612,16 @@ async fn execute_tool(
     match hooks.before_tool_call(ctx).await {
         BeforeToolCallResult::Allow => {}
         BeforeToolCallResult::Deny { reason } => {
-            record(
+            observe(
                 sink,
+                trace,
                 tool_diagnostic(
                     CODE_TOOL_EXECUTION_FAILED,
                     tool_name,
                     "tool call denied by hook",
                 ),
             );
+            trace_tool(trace, TraceKind::ToolCallFailed, tool_name, turn_id);
             return ToolResult {
                 content: vec![opi_ai::message::OutputContent::Text { text: reason }],
                 details: None,
@@ -602,27 +631,44 @@ async fn execute_tool(
         }
     }
 
-    match tool.execute(call_id, args.clone(), cancel, None).await {
+    match tool
+        .execute(call_id, args.clone(), cancel.clone(), None)
+        .await
+    {
         Ok(result) => {
             let ctx = AfterToolCallContext {
                 tool_call_id: call_id.to_owned(),
                 tool_name: tool_name.to_owned(),
                 result: result.clone(),
             };
-            match hooks.after_tool_call(ctx).await {
+            let final_result = match hooks.after_tool_call(ctx).await {
                 AfterToolCallResult::Keep => result,
                 AfterToolCallResult::Replace(replacement) => replacement,
-            }
+            };
+            // The tool call completed (execution finished; the result may still
+            // carry is_error, but the call itself did not fail/cancel).
+            trace_tool(trace, TraceKind::ToolCallCompleted, tool_name, turn_id);
+            final_result
         }
         Err(e) => {
-            record(
+            observe(
                 sink,
+                trace,
                 tool_diagnostic(
                     CODE_TOOL_EXECUTION_FAILED,
                     tool_name,
                     "tool execution failed",
                 ),
             );
+            // Distinguish a cancellation from a real failure when the token is
+            // set; otherwise this is a genuine tool error. Best-effort: the
+            // token may be set just after execute returned.
+            let kind = if cancel.is_cancelled() {
+                TraceKind::ToolCallCancelled
+            } else {
+                TraceKind::ToolCallFailed
+            };
+            trace_tool(trace, kind, tool_name, turn_id);
             ToolResult {
                 content: vec![opi_ai::message::OutputContent::Text {
                     text: e.to_string(),
@@ -665,12 +711,79 @@ fn user_text_message(text: String) -> AgentMessage {
     }))
 }
 
-/// Record a diagnostic into the optional sink. A `None` sink disables emission
-/// without any other observable effect.
-fn record(sink: &Option<Arc<dyn DiagnosticSink>>, diagnostic: Diagnostic) {
+/// Record a diagnostic into the optional sink AND mirror it as a
+/// diagnostic-linked trace record when a collector is attached. A `None` sink
+/// disables diagnostic emission without any other observable effect; the trace
+/// mirror is independent and fail-open. Routing every runtime diagnostic
+/// through here keeps the two surfaces in lockstep.
+fn observe(
+    sink: &Option<Arc<dyn DiagnosticSink>>,
+    trace: &Option<Arc<TraceCollector>>,
+    diagnostic: Diagnostic,
+) {
+    let source = diagnostic.source;
+    let code = diagnostic.code;
+    let severity = diagnostic.severity;
     if let Some(sink) = sink {
         sink.record(diagnostic);
     }
+    if let Some(trace) = trace {
+        trace
+            .record(source, TraceKind::DiagnosticLinked)
+            .severity(severity)
+            .diagnostic_code(code)
+            .emit();
+    }
+}
+
+/// Emit a run-scoped trace record (no turn id).
+fn trace_run(trace: &Option<Arc<TraceCollector>>, kind: TraceKind) {
+    if let Some(trace) = trace {
+        trace.record(SOURCE_AGENT, kind).emit();
+    }
+}
+
+/// Emit a turn-scoped agent trace record.
+fn trace_turn(trace: &Option<Arc<TraceCollector>>, kind: TraceKind, turn_id: &str) {
+    if let Some(trace) = trace {
+        trace.record(SOURCE_AGENT, kind).turn(turn_id).emit();
+    }
+}
+
+/// Emit a turn-scoped provider trace record.
+fn trace_provider(trace: &Option<Arc<TraceCollector>>, kind: TraceKind, turn_id: &str) {
+    if let Some(trace) = trace {
+        trace.record(SOURCE_PROVIDER, kind).turn(turn_id).emit();
+    }
+}
+
+/// Emit a turn-scoped tool trace record carrying the tool name in details.
+fn trace_tool(
+    trace: &Option<Arc<TraceCollector>>,
+    kind: TraceKind,
+    tool_name: &str,
+    turn_id: &str,
+) {
+    if let Some(trace) = trace {
+        trace
+            .record(SOURCE_TOOL, kind)
+            .turn(turn_id)
+            .details(json!({ "tool_name": tool_name }))
+            .emit();
+    }
+}
+
+/// Emit the run-ended trace record (fail-open) followed by the `AgentEnd`
+/// event, deduplicating the seven exit paths.
+fn emit_agent_end(
+    events: &AgentEventSink,
+    trace: &Option<Arc<TraceCollector>>,
+    messages: &[AgentMessage],
+) {
+    trace_run(trace, TraceKind::RunEnded);
+    events(AgentEvent::AgentEnd {
+        messages: messages.to_vec(),
+    });
 }
 
 /// Build an informational cancellation diagnostic tagged with the lifecycle
