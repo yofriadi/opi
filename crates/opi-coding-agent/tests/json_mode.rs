@@ -427,7 +427,10 @@ fn e2e_json_mode_schema_header_on_stdout() {
             header["type"], "session_header",
             "first line must be session_header"
         );
-        assert_eq!(header["schema_version"], 1, "schema_version must be 1");
+        assert_eq!(
+            header["schema_version"], NDJSON_SCHEMA_VERSION,
+            "schema_version must match NDJSON_SCHEMA_VERSION"
+        );
     }
 }
 
@@ -478,6 +481,7 @@ async fn json_mode_session_summary_roundtrips_through_agent_session_event() {
 mod phase7 {
     use super::parse_ndjson;
     use opi_agent::TRACE_SCHEMA_VERSION;
+    use opi_agent::diagnostic::{Diagnostic, SOURCE_PACKAGE, Severity, code};
     use opi_agent::extension::ExtensionRegistry;
     use opi_agent::session_event::AgentSessionEvent;
     use opi_ai::provider::{Provider, ProviderError};
@@ -493,7 +497,7 @@ mod phase7 {
 
     fn runner_with_startup(
         provider: Box<dyn Provider>,
-        diagnostics: Vec<String>,
+        diagnostics: Vec<Diagnostic>,
         trace_path: Option<std::path::PathBuf>,
     ) -> NonInteractiveRunner {
         NonInteractiveRunner::new_with_resume_and_runtime_packages(
@@ -520,8 +524,13 @@ mod phase7 {
     #[tokio::test]
     async fn phase7_startup_diagnostics_and_counts() {
         let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
-        let mut runner =
-            runner_with_startup(Box::new(provider), vec!["phase7 startup warn".into()], None);
+        let startup_diag = Diagnostic::new(
+            Severity::Warning,
+            code::CODE_PACKAGE_DIAGNOSTIC,
+            SOURCE_PACKAGE,
+            "phase7 startup warn",
+        );
+        let mut runner = runner_with_startup(Box::new(provider), vec![startup_diag], None);
         let result = runner.run_json("hello").await;
         assert_eq!(result.exit_code, ExitCode::Success as i32);
 
@@ -534,8 +543,12 @@ mod phase7 {
             "second line must be startup diagnostics"
         );
         assert_eq!(
-            lines[1]["diagnostics"][0], "phase7 startup warn",
-            "startup diagnostic carried verbatim"
+            lines[1]["diagnostics"][0]["message"], "phase7 startup warn",
+            "startup diagnostic carried as a structured payload"
+        );
+        assert_eq!(
+            lines[1]["diagnostics"][0]["code"],
+            code::CODE_PACKAGE_DIAGNOSTIC
         );
         let agent_idx = lines
             .iter()

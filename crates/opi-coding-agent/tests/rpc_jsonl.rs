@@ -24,6 +24,7 @@ use std::sync::{
 use std::time::Duration;
 
 use futures_util::stream;
+use opi_agent::diagnostic::{Diagnostic, SOURCE_PACKAGE, Severity, code};
 use opi_agent::extension::{Extension, ExtensionCommand, ExtensionError, ExtensionRegistry};
 use opi_ai::provider::{EventStream, ModelInfo, Provider, Request};
 use opi_ai::stream::{AssistantStreamEvent, StopReason};
@@ -2478,7 +2479,12 @@ async fn wait_for_idle_session_info(
     command_tx: &tokio::sync::mpsc::UnboundedSender<RpcCommand>,
     output_rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
 ) {
-    for attempt in 0..16 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut attempt = 0;
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            panic!("RPC runner did not become idle after active run completed");
+        }
         let id = format!("idle-{attempt}");
         command_tx
             .send(RpcCommand::session_info {
@@ -2496,8 +2502,9 @@ async fn wait_for_idle_session_info(
             response["error"],
             "cannot query session info while agent is running"
         );
+        attempt += 1;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    panic!("RPC runner did not become idle after active run completed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2885,9 +2892,9 @@ fn rpc_response_format_with_data() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn rpc_schema_version_is_2() {
-    // RPC mode uses schema version 2 (distinct from JSON mode's version 1).
-    assert_eq!(RPC_SCHEMA_VERSION, 2);
+fn rpc_schema_version_is_3() {
+    // RPC mode uses schema version 3 (distinct from JSON mode's version 2).
+    assert_eq!(RPC_SCHEMA_VERSION, 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -2903,7 +2910,7 @@ fn rpc_schema_version_is_2() {
 fn runner_with_runtime_packages<P>(
     provider: P,
     registry: ExtensionRegistry,
-    diagnostics: Vec<String>,
+    diagnostics: Vec<Diagnostic>,
 ) -> (
     tokio::sync::mpsc::UnboundedSender<RpcCommand>,
     tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
@@ -2942,11 +2949,16 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rpc_ready_header_carries_startup_diagnostics() {
-    let diagnostic = "package disabled at runtime: rpc demo diagnostic".to_string();
+    let diagnostic = Diagnostic::new(
+        Severity::Warning,
+        code::CODE_PACKAGE_DIAGNOSTIC,
+        SOURCE_PACKAGE,
+        "package disabled at runtime: rpc demo diagnostic",
+    );
     let (command_tx, mut output_rx, task) = runner_with_runtime_packages(
         MockProvider::new("mock", Vec::new()),
         ExtensionRegistry::new(),
-        vec![diagnostic.clone()],
+        vec![diagnostic],
     );
 
     let header = recv_rpc_line(&mut output_rx).await;
@@ -2955,7 +2967,10 @@ async fn rpc_ready_header_carries_startup_diagnostics() {
         .as_array()
         .expect("rpc_ready should carry a startup_diagnostics array");
     assert!(
-        diagnostics.iter().any(|d| d.as_str() == Some(&diagnostic)),
+        diagnostics
+            .iter()
+            .any(|d| d["code"] == code::CODE_PACKAGE_DIAGNOSTIC
+                && d["message"] == "package disabled at runtime: rpc demo diagnostic"),
         "rpc_ready startup_diagnostics must include the injected diagnostic: {diagnostics:?}"
     );
 
@@ -2966,11 +2981,16 @@ async fn rpc_ready_header_carries_startup_diagnostics() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rpc_session_info_surfaces_startup_diagnostics() {
-    let diagnostic = "package disabled at runtime: rpc demo diagnostic".to_string();
+    let diagnostic = Diagnostic::new(
+        Severity::Warning,
+        code::CODE_PACKAGE_DIAGNOSTIC,
+        SOURCE_PACKAGE,
+        "package disabled at runtime: rpc demo diagnostic",
+    );
     let (command_tx, mut output_rx, task) = runner_with_runtime_packages(
         MockProvider::new("mock", Vec::new()),
         ExtensionRegistry::new(),
-        vec![diagnostic.clone()],
+        vec![diagnostic],
     );
 
     let _header = recv_rpc_line(&mut output_rx).await;
@@ -2985,7 +3005,10 @@ async fn rpc_session_info_surfaces_startup_diagnostics() {
         .as_array()
         .expect("session_info resources.diagnostics");
     assert!(
-        diagnostics.iter().any(|d| d.as_str() == Some(&diagnostic)),
+        diagnostics
+            .iter()
+            .any(|d| d["code"] == code::CODE_PACKAGE_DIAGNOSTIC
+                && d["message"] == "package disabled at runtime: rpc demo diagnostic"),
         "session_info resources.diagnostics must include the injected diagnostic: {diagnostics:?}"
     );
 
@@ -3077,9 +3100,10 @@ async fn rpc_adapter_backed_commands_dispatch_consistently_through_shared_abstra
 // ===========================================================================
 
 mod phase7 {
-    use super::{recv_response, recv_rpc_line, recv_until_agent_end};
+    use super::{recv_response, recv_rpc_line, recv_until_agent_end, wait_for_idle_session_info};
     use std::sync::Arc;
 
+    use opi_agent::diagnostic::{Diagnostic, SOURCE_PACKAGE, Severity, code};
     use opi_agent::extension::ExtensionRegistry;
     use opi_agent::{RecordingTraceSink, TRACE_SCHEMA_VERSION};
     use opi_ai::provider::ProviderError;
@@ -3108,7 +3132,12 @@ mod phase7 {
         let runtime = RuntimePackageStartup {
             extension_registry: ExtensionRegistry::new(),
             installed_packages: Vec::new(),
-            diagnostics: vec!["phase7 rpc startup".into()],
+            diagnostics: vec![Diagnostic::new(
+                Severity::Warning,
+                code::CODE_PACKAGE_DIAGNOSTIC,
+                SOURCE_PACKAGE,
+                "phase7 rpc startup",
+            )],
         };
         let workspace = tempfile::tempdir().expect("workspace tempdir");
         let mut runner = RpcRunner::new_with_runtime_packages(
@@ -3136,7 +3165,8 @@ mod phase7 {
             .as_array()
             .expect("startup_diagnostics array");
         assert!(
-            startup.iter().any(|d| d == "phase7 rpc startup"),
+            startup.iter().any(|d| d["message"] == "phase7 rpc startup"
+                && d["code"] == code::CODE_PACKAGE_DIAGNOSTIC),
             "startup diagnostic present before any prompt output: {startup:?}"
         );
 
@@ -3279,6 +3309,127 @@ mod phase7 {
 
         command_tx2.send(RpcCommand::quit { id: None }).unwrap();
         let _ = task2.await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_runtime_package_rpc_enables_trace_by_default() {
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let runtime = RuntimePackageStartup {
+            extension_registry: ExtensionRegistry::new(),
+            installed_packages: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner = RpcRunner::new_with_runtime_packages(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            runtime,
+        )
+        .expect("rpc runner");
+
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        let _ready = recv_rpc_line(&mut output_rx).await;
+        command_tx
+            .send(RpcCommand::prompt {
+                id: None,
+                message: "hi".into(),
+            })
+            .unwrap();
+        let _ = recv_response(&mut output_rx, "prompt").await;
+        recv_until_agent_end(&mut output_rx).await;
+
+        command_tx
+            .send(RpcCommand::trace {
+                id: Some("trace-default".into()),
+            })
+            .unwrap();
+        let resp = recv_response(&mut output_rx, "trace").await;
+        assert_eq!(
+            resp["success"], true,
+            "production runtime-package RPC path should support trace"
+        );
+        assert!(
+            resp["data"]["records"]
+                .as_array()
+                .is_some_and(|records| !records.is_empty()),
+            "trace response should carry records"
+        );
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_rpc_trace_response_is_per_run_not_accumulated() {
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::text_response("first"),
+                test_support::text_response("second"),
+            ],
+        );
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner = RpcRunner::new_with_trace(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            Some(trace_sink),
+        )
+        .expect("rpc runner with trace");
+
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        let _ready = recv_rpc_line(&mut output_rx).await;
+        for (id, message) in [("p1", "first"), ("p2", "second")] {
+            command_tx
+                .send(RpcCommand::prompt {
+                    id: Some(id.into()),
+                    message: message.into(),
+                })
+                .unwrap();
+            let accepted = recv_response(&mut output_rx, "prompt").await;
+            assert_eq!(accepted["success"], true, "prompt should be accepted");
+            recv_until_agent_end(&mut output_rx).await;
+            wait_for_idle_session_info(&command_tx, &mut output_rx).await;
+        }
+
+        command_tx
+            .send(RpcCommand::trace {
+                id: Some("trace-current".into()),
+            })
+            .unwrap();
+        let resp = recv_response(&mut output_rx, "trace").await;
+        assert_eq!(resp["success"], true);
+        let records = resp["data"]["records"]
+            .as_array()
+            .expect("trace records array");
+        assert!(!records.is_empty(), "second run should produce records");
+        assert!(
+            records.iter().all(|record| record["run_id"] == "run-1"),
+            "trace response should contain only current run records: {records:?}"
+        );
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
     }
 
     /// DoD SC6 (RPC trace surface): a requested trace envelope over a run whose

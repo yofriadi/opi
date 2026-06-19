@@ -314,7 +314,7 @@ opi --delete-session <session-id>
 
 ## RPC、SDK 与扩展
 
-`opi --rpc` 会通过 stdin/stdout 启动一个持久 JSONL 命令/事件会话。启动时会输出 `schema_version = 2` 的 `rpc_ready` 头；命令包括 `prompt`、`continue`、`abort`、`steer`、`follow_up`、`set_model`、`set_thinking_level`、`compact`、`session_info`、`extension_command` 和 `quit`。响应可用可选的 `id` 关联；已接受的 prompt 输出会作为异步 agent 事件流式返回。
+`opi --rpc` 会通过 stdin/stdout 启动一个持久 JSONL 命令/事件会话。启动时会输出 `schema_version = 3` 的 `rpc_ready` 头；命令包括 `prompt`、`continue`、`abort`、`steer`、`follow_up`、`set_model`、`set_thinking_level`、`compact`、`session_info`、`extension_command` 和 `quit`。响应可用可选的 `id` 关联；已接受的 prompt 输出会作为异步 agent 事件流式返回。
 
 共享 SDK 类型位于 `opi_agent::sdk`。`opi-agent` 的 extension API 面向嵌入方支持生命周期 hook、自定义工具、自定义命令、自定义 agent message/state，以及自定义 provider/model 注册。CLI 会从用户、项目、package 和显式路径发现已配置的资源元数据，并把它暴露到 prompt/RPC metadata 中。它不会从磁盘动态加载任意 Rust 代码。
 

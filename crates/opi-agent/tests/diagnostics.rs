@@ -307,6 +307,46 @@ fn phase7_redacts_sensitive_values() {
     assert_eq!(verbose["prompt"], "system prompt text");
 }
 
+#[test]
+fn diagnostic_redacts_hyphenated_provider_keys_in_details() {
+    let details = json!({
+        "anthropic": "sk-ant-api03-1234567890abcdefghijklmnopqrstuv",
+        "openai": "sk-proj-1234567890abcdefghijklmnopqrstuv",
+        "ordinary": "kept"
+    });
+
+    let redacted = redact(&details, RedactionMode::Summary);
+
+    assert_eq!(redacted["anthropic"], "[REDACTED]");
+    assert_eq!(redacted["openai"], "[REDACTED]");
+    assert_eq!(redacted["ordinary"], "kept");
+}
+
+#[test]
+fn redacted_payload_scrubs_message_action_and_details() {
+    let diag = Diagnostic::new(
+        Severity::Warning,
+        "provider_request_failed",
+        "provider",
+        "HTTP 500: token sk-proj-1234567890abcdefghijklmnopqrstuv at /Users/alice/body",
+    )
+    .action("inspect /Users/alice/.config/opi/config.toml")
+    .details(json!({
+        "provider_error": "raw body with sk-ant-api03-1234567890abcdefghijklmnopqrstuv",
+        "ordinary": "kept"
+    }));
+
+    let payload = diag.redacted_payload(RedactionMode::Summary);
+
+    assert_eq!(payload.message, "[REDACTED]");
+    assert_eq!(payload.action.as_deref(), Some("[REDACTED]"));
+    assert_eq!(
+        payload.details.as_ref().unwrap()["provider_error"],
+        "[REDACTED]"
+    );
+    assert_eq!(payload.details.as_ref().unwrap()["ordinary"], "kept");
+}
+
 // ---------------------------------------------------------------------------
 // Display: stable one-line form, no CLI/color formatting in the model
 // ---------------------------------------------------------------------------

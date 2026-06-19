@@ -342,7 +342,7 @@ fn parse_rpc_response_error() {
 fn parse_rpc_ready_event() {
     let raw = serde_json::json!({
         "type": "rpc_ready",
-        "schema_version": 2,
+        "schema_version": 3,
         "mode": "rpc",
         "version": "0.4.0"
     });
@@ -1087,7 +1087,7 @@ fn session_lifecycle_across_prompts() {
 
     // First prompt
     state.process(WebUiEvent::RpcReady {
-        schema_version: 2,
+        schema_version: 3,
         version: "0.4.0".to_owned(),
     });
     state.process(WebUiEvent::SessionInfo {

@@ -31,6 +31,7 @@ pub struct CompactionResultOutput {
     pub tokens_before: u64,
     pub tokens_after: u64,
     pub first_kept_entry_id: String,
+    pub diagnostic: opi_agent::Diagnostic,
 }
 
 pub struct SessionCoordinator {
@@ -320,6 +321,7 @@ impl SessionCoordinator {
         let hooks = DefaultCompactionHooks;
         match self.compaction.compact(&self.entries, reason, &hooks) {
             Ok(output) => {
+                let diagnostic = output.diagnostic();
                 let split = self.entries.len() - output.kept_entries.len();
                 let kept_indices: Vec<usize> = self
                     .agent_message_indices
@@ -379,7 +381,6 @@ impl SessionCoordinator {
                 let mut new_agent_messages = Vec::with_capacity(1 + kept_messages.len());
                 new_agent_messages.push(AgentMessage::CompactionSummary(summary.clone()));
                 new_agent_messages.extend(kept_messages);
-
                 Ok(Some(CompactionResultOutput {
                     summary,
                     new_agent_messages,
@@ -387,6 +388,7 @@ impl SessionCoordinator {
                     tokens_before: output.tokens_before,
                     tokens_after: output.tokens_after,
                     first_kept_entry_id: output.first_kept_entry_id,
+                    diagnostic,
                 }))
             }
             Err(_) => {

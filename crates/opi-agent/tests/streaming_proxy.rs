@@ -686,6 +686,29 @@ fn redactor_preserves_short_secret_like_prefixes() {
     );
 }
 
+#[test]
+fn redactor_redacts_hyphenated_provider_key_values() {
+    let redactor = SecretRedactor::default();
+    let samples = [
+        "sk-ant-api03-1234567890abcdefghijklmnopqrstuv",
+        "sk-ant-api06-1234567890abcdefghijklmnopqrstuv",
+        "sk-proj-1234567890abcdefghijklmnopqrstuv",
+        "sk-live-1234567890abcdefghijklmnopqrstuv",
+        "sk-svcacct-1234567890abcdefghijklmnopqrstuv",
+    ];
+
+    for sample in samples {
+        let event = json!({ "message": format!("credential {sample}") });
+        let redacted = redactor.redact(&event);
+        let text = redacted["message"].as_str().unwrap();
+        assert!(
+            !text.contains(sample),
+            "hyphenated provider key leaked: {text}"
+        );
+        assert_eq!(text, "[REDACTED]");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 12. ProxyConfig defaults
 // ---------------------------------------------------------------------------

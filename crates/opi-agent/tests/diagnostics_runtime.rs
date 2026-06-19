@@ -59,7 +59,11 @@ fn request_failed_classifies_as_error_diagnostic() {
     assert_eq!(diag.severity, Severity::Error);
     assert_eq!(diag.code, CODE_PROVIDER_REQUEST_FAILED);
     assert_eq!(diag.source, SOURCE_PROVIDER);
-    assert_eq!(diag.message, "internal error");
+    assert_eq!(diag.message, "provider request failed");
+    assert_eq!(
+        diag.details.as_ref().unwrap()["provider_error"],
+        "internal error"
+    );
 }
 
 #[test]
@@ -68,7 +72,11 @@ fn stream_error_classifies_as_error_diagnostic() {
     assert_eq!(diag.severity, Severity::Error);
     assert_eq!(diag.code, CODE_PROVIDER_STREAM_ERROR);
     assert_eq!(diag.source, SOURCE_PROVIDER);
-    assert_eq!(diag.message, "connection reset");
+    assert_eq!(diag.message, "provider stream failed");
+    assert_eq!(
+        diag.details.as_ref().unwrap()["provider_error"],
+        "connection reset"
+    );
 }
 
 #[test]
@@ -84,6 +92,29 @@ fn auth_failed_classifies_as_error_with_action() {
     assert!(
         action.to_lowercase().contains("credential") || action.to_lowercase().contains("api key"),
         "action should guide credential fix: {action}"
+    );
+}
+
+#[test]
+fn provider_error_diagnostic_uses_static_message_and_redacted_body_details() {
+    let err = ProviderError::RequestFailed(
+        "HTTP 500: body carried sk-proj-1234567890abcdefghijklmnopqrstuv".into(),
+    );
+    let diag = Diagnostic::from(&err);
+
+    assert_eq!(diag.message, "provider request failed");
+    assert_eq!(
+        diag.details.as_ref().unwrap()["provider_error"]
+            .as_str()
+            .unwrap(),
+        "HTTP 500: body carried sk-proj-1234567890abcdefghijklmnopqrstuv"
+    );
+
+    let payload = diag.redacted_payload(opi_agent::diagnostic::RedactionMode::Summary);
+    assert_eq!(payload.message, "provider request failed");
+    assert_eq!(
+        payload.details.as_ref().unwrap()["provider_error"],
+        "[REDACTED]"
     );
 }
 

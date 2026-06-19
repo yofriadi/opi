@@ -315,7 +315,7 @@ opi --rpc
 启动时，`opi` 会输出 `rpc_ready` 头：
 
 ```json
-{"type":"rpc_ready","schema_version":2,"mode":"rpc","version":"0.5.2"}
+{"type":"rpc_ready","schema_version":3,"mode":"rpc","version":"0.5.2"}
 ```
 
 命令是以 JSON 对象形式发送到 stdin（每行一个）。响应和事件是以 JSON 对象形式输出到 stdout（每行一个）。诊断信息输出到 stderr。

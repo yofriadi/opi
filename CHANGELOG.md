@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-(No notable changes yet.)
+### Changed
+
+- `opi-agent` / `opi-coding-agent`: SDK/RPC schema version is now `3` and NDJSON schema version is now `2` because startup diagnostics now cross public JSON boundaries as structured diagnostic payloads.
+
+### Fixed
+
+- `opi-agent` / `opi-coding-agent`: Phase 7 observability diagnostics are now typed and redacted across startup, package/adapter, session recovery, compaction, tool-error, and RPC trace paths.
 
 ## [0.5.2] - 2026-06-17
 

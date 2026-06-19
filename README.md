@@ -314,7 +314,7 @@ The coding harness discovers `AGENTS.md` and `CLAUDE.md` from the workspace dire
 
 ## RPC, SDK, and Extensions
 
-`opi --rpc` starts a persistent JSONL command/event session over stdin/stdout. It emits an initial `rpc_ready` header with `schema_version = 2`; commands include `prompt`, `continue`, `abort`, `steer`, `follow_up`, `set_model`, `set_thinking_level`, `compact`, `session_info`, `extension_command`, and `quit`. Responses are correlated by optional `id`, while accepted prompt output streams as async agent events.
+`opi --rpc` starts a persistent JSONL command/event session over stdin/stdout. It emits an initial `rpc_ready` header with `schema_version = 3`; commands include `prompt`, `continue`, `abort`, `steer`, `follow_up`, `set_model`, `set_thinking_level`, `compact`, `session_info`, `extension_command`, and `quit`. Responses are correlated by optional `id`, while accepted prompt output streams as async agent events.
 
 The shared SDK types live in `opi_agent::sdk`. The extension API in `opi-agent` supports lifecycle hooks, custom tools, custom commands, custom agent messages/state, and custom provider/model registration for embedders. The CLI discovers configured resource metadata from user, project, package, and explicit paths and exposes it in prompts/RPC metadata. It does not dynamically load arbitrary Rust code from disk.
 

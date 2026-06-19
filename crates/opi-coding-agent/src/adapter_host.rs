@@ -32,10 +32,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, oneshot};
 
+use opi_agent::Diagnostic;
+
 use crate::adapter_protocol::{
     AdapterCommandCapability, AdapterHostMessage, AdapterModelOverride, AdapterProcessMessage,
     AdapterToolCapability, PROTOCOL_VERSION,
 };
+use crate::diagnostic_bridge::diagnostic_for_adapter_host_message;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -129,7 +132,7 @@ pub struct AdapterHost {
     capabilities: AdapterCapabilities,
     stdin_writer: Arc<Mutex<ChildStdin>>,
     pending: PendingMap,
-    diagnostics: Arc<std::sync::Mutex<Vec<String>>>,
+    diagnostics: Arc<std::sync::Mutex<Vec<Diagnostic>>>,
     child: Option<Child>,
     reader_handle: Option<tokio::task::JoinHandle<()>>,
     id_counter: AtomicU64,
@@ -321,7 +324,7 @@ impl AdapterHost {
         self.child.as_ref().and_then(|c| c.id()).unwrap_or(0)
     }
 
-    pub fn take_diagnostics(&self) -> Vec<String> {
+    pub fn take_diagnostics(&self) -> Vec<Diagnostic> {
         std::mem::take(&mut *self.diagnostics.lock().unwrap())
     }
 
@@ -499,7 +502,13 @@ impl AdapterHost {
     }
 
     fn record_diagnostic(&self, message: impl Into<String>) {
-        self.diagnostics.lock().unwrap().push(message.into());
+        self.diagnostics
+            .lock()
+            .unwrap()
+            .push(diagnostic_for_adapter_host_message(
+                &self.package_name,
+                message.into(),
+            ));
     }
 }
 

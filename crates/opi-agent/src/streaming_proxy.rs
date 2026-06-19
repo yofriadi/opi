@@ -54,7 +54,7 @@
 //! # Protocol Sequence
 //!
 //! ```text
-//! → {"type":"proxy_ready","schema_version":2}     // first output
+//! → {"type":"proxy_ready","schema_version":3}     // first output
 //! ← {"type":"session_info"}                       // command from client
 //! → {"type":"response","command":"session_info","success":true,"data":{...}}
 //! → {"type":"AgentStart"}                         // async event
@@ -333,7 +333,7 @@ impl Default for SecretRedactor {
     fn default() -> Self {
         let value_patterns = vec![
             // Anthropic API keys
-            r"sk-ant-[a-zA-Z0-9]{20,}".to_owned(),
+            r"sk-ant-[a-zA-Z0-9-]{20,}".to_owned(),
             // GitHub tokens (classic PATs, OAuth, app/server, refresh, and
             // fine-grained PATs). Phase 7 task 7.6 closes the doctor
             // package_source credentialed-URL leak deferred by the 7.4
@@ -345,7 +345,7 @@ impl Default for SecretRedactor {
             // when the credential is not a recognized token prefix.
             r"[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s@]+:[^/\s@]+@".to_owned(),
             // OpenAI-style API keys
-            r"sk-[a-zA-Z0-9]{20,}".to_owned(),
+            r"sk-[a-zA-Z0-9-]{20,}".to_owned(),
             // JWT/Bearer tokens (eyJ header plus two token segments)
             r"eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+".to_owned(),
         ];

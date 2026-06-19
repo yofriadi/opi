@@ -12,7 +12,7 @@
 //! the shared diagnostic carries a stable `package_diagnostic` code.
 
 use opi_agent::diagnostic::code::*;
-use opi_agent::diagnostic::{Diagnostic, SOURCE_CONFIG, SOURCE_PACKAGE, Severity};
+use opi_agent::diagnostic::{Diagnostic, SOURCE_ADAPTER, SOURCE_CONFIG, SOURCE_PACKAGE, Severity};
 
 use crate::config::ConfigError;
 use crate::package_resolver::{
@@ -37,12 +37,181 @@ pub fn diagnostic_from_package(pd: &PackageDiagnostic) -> Diagnostic {
         severity,
         CODE_PACKAGE_DIAGNOSTIC,
         SOURCE_PACKAGE,
-        pd.message.clone(),
+        "installed package diagnostic",
     )
     .details(serde_json::json!({
         "package_code": pd.code,
+        "package_message": pd.message,
         "package_source": pd.source,
         "scope": scope,
+    }))
+}
+
+/// Map a fatal installed-package resolution error into the shared vocabulary.
+pub fn diagnostic_from_package_resolution_error(error: impl std::fmt::Display) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Error,
+        CODE_PACKAGE_RESOLUTION_FAILED,
+        SOURCE_PACKAGE,
+        "installed package resolution failed",
+    )
+    .details(serde_json::json!({ "package_error": error.to_string() }))
+}
+
+pub fn diagnostic_for_package_discovery_error(error: impl std::fmt::Display) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Error,
+        CODE_PACKAGE_DIAGNOSTIC,
+        SOURCE_PACKAGE,
+        "package discovery failed",
+    )
+    .details(serde_json::json!({ "package_error": error.to_string() }))
+}
+
+pub fn diagnostic_for_resource_discovery_error(
+    resource_kind: &'static str,
+    error: impl std::fmt::Display,
+) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Error,
+        CODE_PACKAGE_DIAGNOSTIC,
+        SOURCE_PACKAGE,
+        "resource discovery failed",
+    )
+    .details(serde_json::json!({
+        "resource_kind": resource_kind,
+        "package_error": error.to_string(),
+    }))
+}
+
+pub fn diagnostic_for_resource_layer_message(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Warning,
+        CODE_PACKAGE_DIAGNOSTIC,
+        SOURCE_PACKAGE,
+        "package resource composition diagnostic",
+    )
+    .details(serde_json::json!({ "package_message": message.into() }))
+}
+
+pub fn diagnostic_for_model_registry_error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Warning,
+        CODE_PACKAGE_DIAGNOSTIC,
+        SOURCE_PACKAGE,
+        "model registry diagnostic",
+    )
+    .details(serde_json::json!({ "package_message": message.into() }))
+}
+
+pub fn diagnostic_for_unsupported_adapter_protocol(
+    package_name: &str,
+    actual_protocol: &str,
+    adapter_command: &str,
+) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Error,
+        CODE_ADAPTER_PROTOCOL_UNSUPPORTED,
+        SOURCE_ADAPTER,
+        "unsupported adapter protocol",
+    )
+    .details(serde_json::json!({
+        "package_name": package_name,
+        "actual_protocol": actual_protocol,
+        "expected_protocol": "opi-extension-jsonl-v1",
+        "adapter_command": adapter_command,
+        "disabled_at_runtime": true,
+    }))
+}
+
+pub fn diagnostic_for_unsupported_adapter_kind(
+    package_name: &str,
+    actual_kind: &str,
+    adapter_command: &str,
+) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Error,
+        CODE_ADAPTER_KIND_UNSUPPORTED,
+        SOURCE_ADAPTER,
+        "unsupported adapter kind",
+    )
+    .details(serde_json::json!({
+        "package_name": package_name,
+        "actual_kind": actual_kind,
+        "expected_kind": "process-jsonl",
+        "adapter_command": adapter_command,
+        "disabled_at_runtime": true,
+    }))
+}
+
+pub fn diagnostic_for_adapter_command_invalid(
+    package_name: &str,
+    adapter_command: &str,
+    error: impl std::fmt::Display,
+) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Error,
+        CODE_ADAPTER_COMMAND_INVALID,
+        SOURCE_ADAPTER,
+        "adapter command invalid",
+    )
+    .details(serde_json::json!({
+        "package_name": package_name,
+        "adapter_command": adapter_command,
+        "adapter_error": error.to_string(),
+        "disabled_at_runtime": true,
+    }))
+}
+
+pub fn diagnostic_for_adapter_startup_failed(
+    package_name: &str,
+    adapter_command: &str,
+    error: impl std::fmt::Display,
+) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Error,
+        CODE_ADAPTER_STARTUP_FAILED,
+        SOURCE_ADAPTER,
+        "adapter startup failed",
+    )
+    .details(serde_json::json!({
+        "package_name": package_name,
+        "adapter_command": adapter_command,
+        "adapter_error": error.to_string(),
+        "disabled_at_runtime": true,
+    }))
+}
+
+pub fn diagnostic_for_adapter_registration_failed(
+    package_name: &str,
+    error: impl std::fmt::Display,
+) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Error,
+        CODE_ADAPTER_REGISTRATION_FAILED,
+        SOURCE_ADAPTER,
+        "adapter registration failed",
+    )
+    .details(serde_json::json!({
+        "package_name": package_name,
+        "adapter_error": error.to_string(),
+        "disabled_at_runtime": true,
+    }))
+}
+
+pub fn diagnostic_for_adapter_host_message(
+    package_name: &str,
+    message: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic::new(
+        Severity::Warning,
+        CODE_ADAPTER_HOST_DIAGNOSTIC,
+        SOURCE_ADAPTER,
+        "adapter host diagnostic",
+    )
+    .details(serde_json::json!({
+        "package_name": package_name,
+        "adapter_error": message.into(),
     }))
 }
 

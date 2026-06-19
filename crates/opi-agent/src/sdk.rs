@@ -37,9 +37,9 @@ use crate::event::AgentEvent;
 /// SDK/RPC protocol schema version. Clients and embedders MUST check this
 /// before processing commands or events.
 ///
-/// This is an **unstable 0.x** protocol. The version will remain at 2 until
+/// This is an **unstable 0.x** protocol. The version will remain at 3 until
 /// the SDK surface stabilises; breaking changes bump the major version.
-pub const SDK_SCHEMA_VERSION: u32 = 2;
+pub const SDK_SCHEMA_VERSION: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // Command types

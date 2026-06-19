@@ -317,7 +317,7 @@ fn sdk_response_error_without_id() {
 
 #[test]
 fn sdk_schema_version_matches_rpc() {
-    assert_eq!(SDK_SCHEMA_VERSION, 2);
+    assert_eq!(SDK_SCHEMA_VERSION, 3);
 }
 
 // ---------------------------------------------------------------------------

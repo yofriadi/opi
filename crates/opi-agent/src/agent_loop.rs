@@ -490,8 +490,6 @@ pub async fn agent_loop(
             }
             break;
         }
-
-        let _ = turn_idx;
     }
 
     emit_agent_end(&events, &trace, &messages);
@@ -645,9 +643,20 @@ async fn execute_tool(
                 AfterToolCallResult::Keep => result,
                 AfterToolCallResult::Replace(replacement) => replacement,
             };
-            // The tool call completed (execution finished; the result may still
-            // carry is_error, but the call itself did not fail/cancel).
-            trace_tool(trace, TraceKind::ToolCallCompleted, tool_name, turn_id);
+            if final_result.is_error {
+                observe(
+                    sink,
+                    trace,
+                    tool_diagnostic(
+                        CODE_TOOL_EXECUTION_FAILED,
+                        tool_name,
+                        "tool returned an error result",
+                    ),
+                );
+                trace_tool(trace, TraceKind::ToolCallFailed, tool_name, turn_id);
+            } else {
+                trace_tool(trace, TraceKind::ToolCallCompleted, tool_name, turn_id);
+            }
             final_result
         }
         Err(e) => {

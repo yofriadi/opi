@@ -260,6 +260,56 @@ fn provider_scope_never_emits_credential_value() {
     );
 }
 
+#[test]
+fn provider_scope_bedrock_requires_access_key_and_secret() {
+    let config = test_config("bedrock:anthropic.claude-test");
+    let dir = tempfile::tempdir().unwrap();
+
+    let only_access_key: HashMap<&str, String> =
+        [("AWS_ACCESS_KEY_ID", "akid".into())].into_iter().collect();
+    let only_access_key_env = |n: &str| only_access_key.get(n).cloned();
+    let missing_secret = run_doctor(
+        &[DoctorScope::Provider],
+        &ctx(&config, dir.path(), &only_access_key_env),
+    );
+    assert!(
+        missing_secret
+            .entries
+            .iter()
+            .any(|e| e.diagnostic.severity == Severity::Warning
+                && e.diagnostic
+                    .details
+                    .as_ref()
+                    .is_some_and(|details| details["credentials_present"] == false)),
+        "bedrock should warn when only AWS_ACCESS_KEY_ID is present: {:?}",
+        missing_secret.entries
+    );
+
+    let complete: HashMap<&str, String> = [
+        ("AWS_ACCESS_KEY_ID", "akid".into()),
+        ("AWS_SECRET_ACCESS_KEY", "secret".into()),
+    ]
+    .into_iter()
+    .collect();
+    let complete_env = |n: &str| complete.get(n).cloned();
+    let present = run_doctor(
+        &[DoctorScope::Provider],
+        &ctx(&config, dir.path(), &complete_env),
+    );
+    assert!(
+        present
+            .entries
+            .iter()
+            .any(|e| e.diagnostic.severity == Severity::Info
+                && e.diagnostic
+                    .details
+                    .as_ref()
+                    .is_some_and(|details| details["credentials_present"] == true)),
+        "bedrock should report credentials present when access key and secret are present: {:?}",
+        present.entries
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Session scope
 // ---------------------------------------------------------------------------

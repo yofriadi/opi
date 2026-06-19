@@ -71,7 +71,8 @@ impl Default for RedactionMode {
 ///
 /// `code` and `source` are `&'static str` because they are stable identifiers
 /// by design; a diagnostic is constructed from known literals, not dynamic
-/// strings. `message` is human-readable and may be dynamic.
+/// strings. `message` is human-readable and may be dynamic inside the runtime;
+/// use [`Diagnostic::redacted_payload`] before crossing public boundaries.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Diagnostic {
     /// Severity of the observation.
@@ -86,6 +87,25 @@ pub struct Diagnostic {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
     /// Optional suggested next step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+/// Public diagnostic representation after applying the selected redaction mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagnosticPayload {
+    /// Severity of the observation.
+    pub severity: Severity,
+    /// Stable snake_case identifier suitable for tests and matching.
+    pub code: String,
+    /// Owning subsystem, e.g. one of the `SOURCE_*` constants.
+    pub source: String,
+    /// Redacted short human-readable explanation.
+    pub message: String,
+    /// Optional redacted structured metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+    /// Optional redacted suggested next step.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
 }
@@ -122,14 +142,44 @@ impl Diagnostic {
 
     /// Return the details redacted for the given mode, or `None` if unset.
     ///
-    /// Redaction never touches the severity, code, source, message, or action
-    /// fields.
+    /// This helper preserves the legacy internal behavior: it only touches
+    /// `details`. Use [`Self::redacted_payload`] before exposing diagnostics
+    /// outside the runtime.
     pub fn redacted_details(&self, mode: RedactionMode) -> Option<serde_json::Value> {
         self.details.as_ref().map(|value| redact(value, mode))
+    }
+
+    /// Return a public diagnostic payload with all dynamic fields redacted.
+    pub fn redacted_payload(&self, mode: RedactionMode) -> DiagnosticPayload {
+        DiagnosticPayload {
+            severity: self.severity,
+            code: self.code.to_owned(),
+            source: self.source.to_owned(),
+            message: redact_text(&self.message, mode),
+            details: self.redacted_details(mode),
+            action: self.action.as_ref().map(|action| redact_text(action, mode)),
+        }
     }
 }
 
 impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.action {
+            Some(action) => write!(
+                f,
+                "[{}] {}::{}: {} (action: {})",
+                self.severity, self.source, self.code, self.message, action
+            ),
+            None => write!(
+                f,
+                "[{}] {}::{}: {}",
+                self.severity, self.source, self.code, self.message
+            ),
+        }
+    }
+}
+
+impl fmt::Display for DiagnosticPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.action {
             Some(action) => write!(
@@ -198,8 +248,15 @@ pub mod code {
     // opi-coding-agent bridges (package/config). Package diagnostics carry a
     // dynamic granular code in `details.package_code`; the shared code is stable.
     pub const CODE_PACKAGE_DIAGNOSTIC: &str = "package_diagnostic";
+    pub const CODE_PACKAGE_RESOLUTION_FAILED: &str = "package_resolution_failed";
     pub const CODE_CONFIG_PARSE_FAILED: &str = "config_parse_failed";
     pub const CODE_CONFIG_READ_FAILED: &str = "config_read_failed";
+    pub const CODE_ADAPTER_PROTOCOL_UNSUPPORTED: &str = "adapter_protocol_unsupported";
+    pub const CODE_ADAPTER_KIND_UNSUPPORTED: &str = "adapter_kind_unsupported";
+    pub const CODE_ADAPTER_COMMAND_INVALID: &str = "adapter_command_invalid";
+    pub const CODE_ADAPTER_STARTUP_FAILED: &str = "adapter_startup_failed";
+    pub const CODE_ADAPTER_REGISTRATION_FAILED: &str = "adapter_registration_failed";
+    pub const CODE_ADAPTER_HOST_DIAGNOSTIC: &str = "adapter_host_diagnostic";
     /// A local trace sink failed mid-run and was disabled (fail-open).
     pub const CODE_TRACE_SINK_FAILED: &str = "trace_sink_failed";
     /// A requested trace could not be prepared before the run (fail-closed).
@@ -221,6 +278,19 @@ const CONTENT_SENSITIVE_KEYS: &[&str] = &[
     "command",
     "args",
     "cwd",
+    "body",
+    "request_body",
+    "response_body",
+    "provider_error",
+    "headers",
+    "stdout",
+    "stderr",
+    "tool_error",
+    "hook_error",
+    "trace_error",
+    "package_error",
+    "package_message",
+    "adapter_error",
 ];
 
 /// Heuristic absolute-path detector used in summary mode. Matches Windows drive
@@ -246,6 +316,14 @@ pub fn redact(value: &serde_json::Value, mode: RedactionMode) -> serde_json::Val
     match mode {
         RedactionMode::Summary => redact_summary(&scrubbed),
         RedactionMode::Verbose => scrubbed,
+    }
+}
+
+/// Redact a single string using the same policy as structured details.
+pub fn redact_text(text: &str, mode: RedactionMode) -> String {
+    match redact(&serde_json::Value::String(text.to_owned()), mode) {
+        serde_json::Value::String(redacted) => redacted,
+        _ => REDACTED.to_owned(),
     }
 }
 
@@ -320,20 +398,23 @@ impl From<&opi_ai::provider::ProviderError> for Diagnostic {
                 Severity::Error,
                 code::CODE_PROVIDER_REQUEST_FAILED,
                 SOURCE_PROVIDER,
-                message.clone(),
-            ),
+                "provider request failed",
+            )
+            .details(serde_json::json!({ "provider_error": message })),
             ProviderError::StreamError(message) => Diagnostic::new(
                 Severity::Error,
                 code::CODE_PROVIDER_STREAM_ERROR,
                 SOURCE_PROVIDER,
-                message.clone(),
-            ),
+                "provider stream failed",
+            )
+            .details(serde_json::json!({ "provider_error": message })),
             ProviderError::AuthFailed(message) => Diagnostic::new(
                 Severity::Error,
                 code::CODE_PROVIDER_AUTH_FAILED,
                 SOURCE_PROVIDER,
-                message.clone(),
+                "provider authentication failed",
             )
+            .details(serde_json::json!({ "provider_error": message }))
             .action(ACTION_CHECK_CREDENTIALS),
         }
     }
@@ -352,27 +433,31 @@ impl From<&crate::loop_types::AgentError> for Diagnostic {
                 Severity::Error,
                 code::CODE_PROVIDER_ERROR,
                 SOURCE_PROVIDER,
-                message.clone(),
-            ),
+                "provider error",
+            )
+            .details(serde_json::json!({ "provider_error": message })),
             AgentError::AuthFailed(message) => Diagnostic::new(
                 Severity::Error,
                 code::CODE_PROVIDER_AUTH_FAILED,
                 SOURCE_PROVIDER,
-                message.clone(),
+                "provider authentication failed",
             )
+            .details(serde_json::json!({ "provider_error": message }))
             .action(ACTION_CHECK_CREDENTIALS),
             AgentError::Tool(message) => Diagnostic::new(
                 Severity::Error,
                 code::CODE_TOOL_FAILED,
                 SOURCE_TOOL,
-                message.clone(),
-            ),
+                "tool failed",
+            )
+            .details(serde_json::json!({ "tool_error": message })),
             AgentError::Hook(message) => Diagnostic::new(
                 Severity::Error,
                 code::CODE_HOOK_FAILED,
                 SOURCE_AGENT,
-                message.clone(),
-            ),
+                "hook failed",
+            )
+            .details(serde_json::json!({ "hook_error": message })),
             AgentError::Cancelled => Diagnostic::new(
                 Severity::Info,
                 code::CODE_AGENT_CANCELLED,
@@ -391,8 +476,9 @@ impl From<&crate::loop_types::AgentError> for Diagnostic {
                 Severity::Error,
                 code::CODE_TRACE_SETUP_FAILED,
                 SOURCE_AGENT,
-                message.clone(),
+                "trace setup failed",
             )
+            .details(serde_json::json!({ "trace_error": message }))
             .action("check the trace path is writable and its parent directory exists"),
         }
     }

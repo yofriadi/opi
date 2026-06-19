@@ -88,9 +88,9 @@ Compaction support includes:
 
 ## SDK, Extensions, and Proxy
 
-- `sdk` defines the unstable schema-versioned command and response types shared by RPC JSONL mode and embedders. `SDK_SCHEMA_VERSION` is `2`, and commands are `prompt`, `continue`, `steer`, `follow_up`, `abort`, `set_model`, `set_thinking_level`, `compact`, `session_info`, `extension_command`, and `quit`.
+- `sdk` defines the unstable schema-versioned command and response types shared by RPC JSONL mode and embedders. `SDK_SCHEMA_VERSION` is `3`, and commands are `prompt`, `continue`, `steer`, `follow_up`, `abort`, `set_model`, `set_thinking_level`, `compact`, `session_info`, `extension_command`, and `quit`.
 - `extension` provides `Extension` and `ExtensionRegistry` for lifecycle hooks, custom tools, custom commands, event observers, per-extension state serialization/restoration, custom providers, and model overrides.
-- `streaming_proxy` forwards JSONL commands/events over arbitrary `BufRead`/`Write` transports, emits a `proxy_ready` header with schema version `2`, applies bounded event buffering, supports cancellation, and redacts common secret patterns by default.
+- `streaming_proxy` forwards JSONL commands/events over arbitrary `BufRead`/`Write` transports, emits a `proxy_ready` header with schema version `3`, applies bounded event buffering, supports cancellation, and redacts common secret patterns by default.
 
 ## Quick Example
 

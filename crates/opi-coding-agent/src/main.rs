@@ -81,6 +81,7 @@ fn main() {
                 session_id: session.header.id,
                 entries: session.entries,
                 original_cwd,
+                diagnostics: session.diagnostics,
             };
             (Some(msgs), Some(info))
         }

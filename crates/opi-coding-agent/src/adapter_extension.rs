@@ -50,6 +50,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use opi_agent::Diagnostic;
 use opi_agent::event::AgentEvent;
 use opi_agent::extension::{
     Extension, ExtensionCommand, ExtensionError, ExtensionHookResult, ExtensionRegistry,
@@ -65,6 +66,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adapter_host::{AdapterCapabilities, AdapterHost, AdapterProcessConfig};
 use crate::adapter_protocol::{AdapterHostMessage, AdapterProcessMessage};
+use crate::diagnostic_bridge::{
+    diagnostic_for_adapter_command_invalid, diagnostic_for_adapter_registration_failed,
+    diagnostic_for_adapter_startup_failed, diagnostic_for_unsupported_adapter_kind,
+    diagnostic_for_unsupported_adapter_protocol,
+};
 
 /// Default timeout for adapter tool calls and command dispatch.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -760,7 +766,7 @@ pub async fn start_adapters_from_packages(
     packages: &[crate::package_discovery::PackageResource],
     working_dir: &Path,
     mut registry: ExtensionRegistry,
-) -> (ExtensionRegistry, Vec<String>) {
+) -> (ExtensionRegistry, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
 
     // Filter and sort packages with adapter manifests
@@ -779,20 +785,20 @@ pub async fn start_adapters_from_packages(
 
         // Validate protocol
         if adapter.protocol != "opi-extension-jsonl-v1" {
-            diagnostics.push(format!(
-                "package '{}': unsupported adapter protocol '{}' (expected 'opi-extension-jsonl-v1'); \
-                 adapter command '{}'; package is disabled at runtime",
-                package.manifest.name, adapter.protocol, adapter.command
+            diagnostics.push(diagnostic_for_unsupported_adapter_protocol(
+                &package.manifest.name,
+                &adapter.protocol,
+                &adapter.command,
             ));
             continue;
         }
 
         // Validate kind
         if adapter.kind != "process-jsonl" {
-            diagnostics.push(format!(
-                "package '{}': unsupported adapter kind '{}' (expected 'process-jsonl'); \
-                 adapter command '{}'; package is disabled at runtime",
-                package.manifest.name, adapter.kind, adapter.command
+            diagnostics.push(diagnostic_for_unsupported_adapter_kind(
+                &package.manifest.name,
+                &adapter.kind,
+                &adapter.command,
             ));
             continue;
         }
@@ -803,9 +809,10 @@ pub async fn start_adapters_from_packages(
             {
                 Ok(command) => command,
                 Err(e) => {
-                    diagnostics.push(format!(
-                        "package '{}': adapter command invalid: {e}",
-                        package.manifest.name
+                    diagnostics.push(diagnostic_for_adapter_command_invalid(
+                        &package.manifest.name,
+                        &adapter.command,
+                        e,
                     ));
                     continue;
                 }
@@ -827,22 +834,22 @@ pub async fn start_adapters_from_packages(
             Ok(host) => {
                 let caps = host.capabilities().clone();
                 for diagnostic in host.take_diagnostics() {
-                    diagnostics.push(format!("package '{}': {diagnostic}", package.manifest.name));
+                    diagnostics.push(diagnostic);
                 }
                 let host = Arc::new(host);
                 let process_adapter = ProcessAdapter::from_host(&package.manifest.name, host, caps);
                 if let Err(e) = registry.register(Box::new(process_adapter)) {
-                    diagnostics.push(format!(
-                        "package '{}': adapter registration failed: {e}",
-                        package.manifest.name
+                    diagnostics.push(diagnostic_for_adapter_registration_failed(
+                        &package.manifest.name,
+                        e,
                     ));
                 }
             }
             Err(e) => {
-                diagnostics.push(format!(
-                    "package '{}': adapter startup failed: {e}; adapter command '{}'; \
-                     package is disabled at runtime",
-                    package.manifest.name, adapter.command
+                diagnostics.push(diagnostic_for_adapter_startup_failed(
+                    &package.manifest.name,
+                    &adapter.command,
+                    e,
                 ));
             }
         }
