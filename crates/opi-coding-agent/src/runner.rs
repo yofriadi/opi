@@ -14,7 +14,7 @@ use opi_agent::hooks::{
 use opi_agent::loop_types::AgentError;
 use opi_agent::message::AgentMessage;
 use opi_agent::session_event::{AgentSessionEvent, SessionCostTotals, SessionTokenTotals};
-use opi_agent::{FileTraceSink, RedactionMode};
+use opi_agent::{Diagnostic, FileTraceSink, RedactionMode, redact_text};
 use opi_ai::message::InputContent;
 use opi_ai::message::Message;
 use opi_ai::provider::Provider;
@@ -305,40 +305,10 @@ impl NonInteractiveRunner {
                     exit_code: ExitCode::Success as i32,
                 }
             }
-            Err(AgentError::Cancelled) => NonInteractiveResult {
+            Err(error) => NonInteractiveResult {
                 stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: "cancelled".into(),
-                exit_code: ExitCode::Interrupted as i32,
-            },
-            Err(AgentError::AuthFailed(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("authentication error: {e}"),
-                exit_code: ExitCode::AuthFailure as i32,
-            },
-            Err(AgentError::Provider(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("provider error: {e}"),
-                exit_code: ExitCode::ProviderFailure as i32,
-            },
-            Err(AgentError::Tool(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("tool error: {e}"),
-                exit_code: ExitCode::ToolFailure as i32,
-            },
-            Err(AgentError::Hook(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("hook error: {e}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
-            },
-            Err(AgentError::MaxTurnsExceeded(n)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("max turns exceeded ({n})"),
-                exit_code: ExitCode::RuntimeFailure as i32,
-            },
-            Err(AgentError::TraceSetup(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("trace setup failed: {e}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
+                stderr: stderr_for_agent_error(&error, ""),
+                exit_code: exit_code_for_agent_error(&error),
             },
         }
     }
@@ -389,40 +359,10 @@ impl NonInteractiveRunner {
                     exit_code: ExitCode::Success as i32,
                 }
             }
-            Err(AgentError::Cancelled) => NonInteractiveResult {
+            Err(error) => NonInteractiveResult {
                 stdout: String::new(),
-                stderr: format!("cancelled{persist_stderr}"),
-                exit_code: ExitCode::Interrupted as i32,
-            },
-            Err(AgentError::AuthFailed(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("authentication error: {e}{persist_stderr}"),
-                exit_code: ExitCode::AuthFailure as i32,
-            },
-            Err(AgentError::Provider(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("provider error: {e}{persist_stderr}"),
-                exit_code: ExitCode::ProviderFailure as i32,
-            },
-            Err(AgentError::Tool(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("tool error: {e}{persist_stderr}"),
-                exit_code: ExitCode::ToolFailure as i32,
-            },
-            Err(AgentError::Hook(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("hook error: {e}{persist_stderr}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
-            },
-            Err(AgentError::MaxTurnsExceeded(n)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("max turns exceeded ({n}){persist_stderr}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
-            },
-            Err(AgentError::TraceSetup(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("trace setup failed: {e}{persist_stderr}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
+                stderr: stderr_for_agent_error(&error, &persist_stderr),
+                exit_code: exit_code_for_agent_error(&error),
             },
         }
     }
@@ -558,40 +498,10 @@ impl NonInteractiveRunner {
                     exit_code: ExitCode::Success as i32,
                 }
             }
-            Err(AgentError::Cancelled) => NonInteractiveResult {
+            Err(error) => NonInteractiveResult {
                 stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: "cancelled".into(),
-                exit_code: ExitCode::Interrupted as i32,
-            },
-            Err(AgentError::AuthFailed(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("authentication error: {e}"),
-                exit_code: ExitCode::AuthFailure as i32,
-            },
-            Err(AgentError::Provider(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("provider error: {e}"),
-                exit_code: ExitCode::ProviderFailure as i32,
-            },
-            Err(AgentError::Tool(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("tool error: {e}"),
-                exit_code: ExitCode::ToolFailure as i32,
-            },
-            Err(AgentError::Hook(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("hook error: {e}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
-            },
-            Err(AgentError::MaxTurnsExceeded(n)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("max turns exceeded ({n})"),
-                exit_code: ExitCode::RuntimeFailure as i32,
-            },
-            Err(AgentError::TraceSetup(e)) => NonInteractiveResult {
-                stdout: output.lock().map(|g| g.clone()).unwrap_or_default(),
-                stderr: format!("trace setup failed: {e}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
+                stderr: stderr_for_agent_error(&error, ""),
+                exit_code: exit_code_for_agent_error(&error),
             },
         }
     }
@@ -657,40 +567,10 @@ impl NonInteractiveRunner {
                     exit_code: ExitCode::Success as i32,
                 }
             }
-            Err(AgentError::Cancelled) => NonInteractiveResult {
+            Err(error) => NonInteractiveResult {
                 stdout: String::new(),
-                stderr: format!("cancelled{persist_stderr}"),
-                exit_code: ExitCode::Interrupted as i32,
-            },
-            Err(AgentError::AuthFailed(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("authentication error: {e}{persist_stderr}"),
-                exit_code: ExitCode::AuthFailure as i32,
-            },
-            Err(AgentError::Provider(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("provider error: {e}{persist_stderr}"),
-                exit_code: ExitCode::ProviderFailure as i32,
-            },
-            Err(AgentError::Tool(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("tool error: {e}{persist_stderr}"),
-                exit_code: ExitCode::ToolFailure as i32,
-            },
-            Err(AgentError::Hook(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("hook error: {e}{persist_stderr}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
-            },
-            Err(AgentError::MaxTurnsExceeded(n)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("max turns exceeded ({n}){persist_stderr}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
-            },
-            Err(AgentError::TraceSetup(e)) => NonInteractiveResult {
-                stdout: String::new(),
-                stderr: format!("trace setup failed: {e}{persist_stderr}"),
-                exit_code: ExitCode::RuntimeFailure as i32,
+                stderr: stderr_for_agent_error(&error, &persist_stderr),
+                exit_code: exit_code_for_agent_error(&error),
             },
         }
     }
@@ -706,10 +586,42 @@ fn find_error_message(messages: &[AgentMessage]) -> Option<String> {
         if let AgentMessage::Llm(Message::Assistant(asst)) = msg
             && let Some(err) = &asst.error_message
         {
-            return Some(err.clone());
+            return Some(provider_error_stderr(err));
         }
     }
     None
+}
+
+fn provider_error_stderr(error: &str) -> String {
+    let error = AgentError::Provider(error.to_owned());
+    Diagnostic::from(&error)
+        .redacted_payload(RedactionMode::Summary)
+        .message
+}
+
+fn stderr_for_agent_error(error: &AgentError, suffix: &str) -> String {
+    let mut stderr = match error {
+        AgentError::Cancelled => "cancelled".to_owned(),
+        _ => {
+            Diagnostic::from(error)
+                .redacted_payload(RedactionMode::Summary)
+                .message
+        }
+    };
+    stderr.push_str(suffix);
+    stderr
+}
+
+fn exit_code_for_agent_error(error: &AgentError) -> i32 {
+    match error {
+        AgentError::Cancelled => ExitCode::Interrupted as i32,
+        AgentError::AuthFailed(_) => ExitCode::AuthFailure as i32,
+        AgentError::Provider(_) => ExitCode::ProviderFailure as i32,
+        AgentError::Tool(_) => ExitCode::ToolFailure as i32,
+        AgentError::Hook(_) | AgentError::MaxTurnsExceeded(_) | AgentError::TraceSetup(_) => {
+            ExitCode::RuntimeFailure as i32
+        }
+    }
 }
 
 /// Format any captured session persist errors into a stderr suffix.
@@ -721,7 +633,7 @@ pub fn format_persist_errors(errors: &Arc<Mutex<Vec<String>>>) -> String {
     let mut out = String::new();
     for e in guard.iter() {
         out.push_str("\nsession persist error: ");
-        out.push_str(e);
+        out.push_str(&redact_text(e, RedactionMode::Summary));
     }
     out
 }

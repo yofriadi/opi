@@ -11,7 +11,7 @@
 
 Current workspace version: `0.5.2` from `[workspace.package]` in `Cargo.toml`.
 
-`opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, RPC JSONL mode, eight built-in tools, image attachments, model/session/branch/tree pickers, session fork/clone flows, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, package add/remove/list/doctor commands, token usage accumulation, best-effort cost summaries, shared runtime diagnostics, an opt-in local trace envelope, and a top-level `opi doctor` health command.
+`opi` is a working terminal coding agent. It includes an interactive ratatui TUI, text and NDJSON non-interactive modes, RPC JSONL mode, eight built-in tools, image attachments, model/session/branch/tree pickers, session fork/clone flows, shell completion generation, layered TOML config, per-provider proxy config, multi-provider streaming, JSONL session persistence, context compaction, retry/backoff, configurable keybindings/themes, package add/remove/list/doctor commands, token usage accumulation, best-effort cost summaries, shared runtime diagnostics, an opt-in local trace envelope (`--trace` plus RPC `trace` for the latest run), and a top-level `opi doctor` health command.
 
 Observability is local and explicit: shared diagnostics, the trace envelope, and `opi doctor` run against local state only, never phone home, and stay an unstable 0.x surface. opi does not collect telemetry or analytics and does not share sessions automatically.
 
@@ -314,7 +314,7 @@ The coding harness discovers `AGENTS.md` and `CLAUDE.md` from the workspace dire
 
 ## RPC, SDK, and Extensions
 
-`opi --rpc` starts a persistent JSONL command/event session over stdin/stdout. It emits an initial `rpc_ready` header with `schema_version = 3`; commands include `prompt`, `continue`, `abort`, `steer`, `follow_up`, `set_model`, `set_thinking_level`, `compact`, `session_info`, `extension_command`, and `quit`. Responses are correlated by optional `id`, while accepted prompt output streams as async agent events.
+`opi --rpc` starts a persistent JSONL command/event session over stdin/stdout. It emits an initial `rpc_ready` header with `schema_version = 3`; commands include `prompt`, `continue`, `abort`, `steer`, `follow_up`, `set_model`, `set_thinking_level`, `compact`, `session_info`, `extension_command`, `trace`, and `quit`. Responses are correlated by optional `id`, while accepted prompt output streams as async agent events.
 
 The shared SDK types live in `opi_agent::sdk`. The extension API in `opi-agent` supports lifecycle hooks, custom tools, custom commands, custom agent messages/state, and custom provider/model registration for embedders. The CLI discovers configured resource metadata from user, project, package, and explicit paths and exposes it in prompts/RPC metadata. It does not dynamically load arbitrary Rust code from disk.
 

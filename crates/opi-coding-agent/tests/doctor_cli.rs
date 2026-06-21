@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use opi_agent::Severity;
+use opi_agent::{Diagnostic, Severity};
 use opi_coding_agent::config::{ConfigError, OpiConfig};
 use opi_coding_agent::diagnostic_bridge::{diagnostic_from_config, diagnostic_from_package};
 use opi_coding_agent::doctor::{
@@ -198,6 +198,35 @@ fn doctor_json_redacts_absolute_path_in_config_details() {
     );
 }
 
+#[test]
+fn doctor_outputs_redact_diagnostic_message_and_action() {
+    let secret = "sk-proj-1234567890abcdefghijklmnopqrstuv";
+    let report = DoctorReport {
+        entries: vec![DoctorEntry {
+            scope: DoctorScope::Package,
+            diagnostic: Diagnostic::new(
+                Severity::Warning,
+                "package_diagnostic",
+                "package",
+                format!("read C:\\Users\\alice\\.config\\opi\\packages\\p\\package.toml: {secret}"),
+            )
+            .action("open C:\\Users\\alice\\.config\\opi\\config.toml"),
+        }],
+    };
+
+    let json = format_json(&report);
+    let text = format_text(&report);
+
+    for output in [&json, &text] {
+        assert!(!output.contains("alice"), "OS username leaked: {output}");
+        assert!(!output.contains(secret), "provider key leaked: {output}");
+        assert!(
+            output.contains("[REDACTED]"),
+            "expected redaction marker in output: {output}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Provider scope (network-free; credential presence only)
 // ---------------------------------------------------------------------------
@@ -307,6 +336,75 @@ fn provider_scope_bedrock_requires_access_key_and_secret() {
                     .is_some_and(|details| details["credentials_present"] == true)),
         "bedrock should report credentials present when access key and secret are present: {:?}",
         present.entries
+    );
+}
+
+#[test]
+fn provider_scope_bedrock_accepts_config_access_key_with_custom_secret_env() {
+    let mut config = test_config("bedrock:anthropic.claude-test");
+    config.providers.bedrock.access_key_id = Some("CONFIG_AKID".into());
+    config.providers.bedrock.secret_access_key_env = Some("BEDROCK_SECRET".into());
+    let dir = tempfile::tempdir().unwrap();
+    let env_values: HashMap<&str, String> =
+        [("BEDROCK_SECRET", "secret".into())].into_iter().collect();
+    let env = |n: &str| env_values.get(n).cloned();
+
+    let report = run_doctor(&[DoctorScope::Provider], &ctx(&config, dir.path(), &env));
+
+    assert!(
+        report.entries.iter().any(|e| {
+            e.diagnostic.severity == Severity::Info
+                && e.diagnostic.details.as_ref().is_some_and(|details| {
+                    details["credentials_present"] == true
+                        && details["credential_probe"]
+                            == "config access_key_id + env BEDROCK_SECRET"
+                })
+        }),
+        "bedrock should report config access_key_id plus custom secret env as present: {:?}",
+        report.entries
+    );
+}
+
+#[test]
+fn provider_scope_bedrock_accepts_configured_profile() {
+    let mut config = test_config("bedrock:anthropic.claude-test");
+    config.providers.bedrock.profile = Some("dev".into());
+    let dir = tempfile::tempdir().unwrap();
+
+    let report = run_doctor(&[DoctorScope::Provider], &ctx(&config, dir.path(), &no_env));
+
+    assert!(
+        report.entries.iter().any(|e| {
+            e.diagnostic.severity == Severity::Info
+                && e.diagnostic.details.as_ref().is_some_and(|details| {
+                    details["credentials_present"] == true
+                        && details["credential_probe"] == "profile dev"
+                })
+        }),
+        "bedrock should report configured AWS profile as present: {:?}",
+        report.entries
+    );
+}
+
+#[test]
+fn provider_scope_bedrock_accepts_aws_profile_env() {
+    let config = test_config("bedrock:anthropic.claude-test");
+    let dir = tempfile::tempdir().unwrap();
+    let env_values: HashMap<&str, String> = [("AWS_PROFILE", "dev".into())].into_iter().collect();
+    let env = |n: &str| env_values.get(n).cloned();
+
+    let report = run_doctor(&[DoctorScope::Provider], &ctx(&config, dir.path(), &env));
+
+    assert!(
+        report.entries.iter().any(|e| {
+            e.diagnostic.severity == Severity::Info
+                && e.diagnostic.details.as_ref().is_some_and(|details| {
+                    details["credentials_present"] == true
+                        && details["credential_probe"] == "env AWS_PROFILE dev"
+                })
+        }),
+        "bedrock should report AWS_PROFILE as present: {:?}",
+        report.entries
     );
 }
 

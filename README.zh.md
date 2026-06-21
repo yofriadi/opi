@@ -11,7 +11,7 @@
 
 当前 workspace 版本：`0.5.2`，来源于 `Cargo.toml` 的 `[workspace.package]`。
 
-`opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、RPC JSONL 模式、8 个内置工具、图片附件、模型/会话/分支/会话树选择器、会话 fork/clone 流程、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、package add/remove/list/doctor 命令、token 用量累计、尽力而为的费用摘要、共享运行时诊断、可选的本地 trace envelope，以及顶层 `opi doctor` 健康检查命令。
+`opi` 已经是可用的终端编程 Agent。它包含交互式 ratatui TUI、文本与 NDJSON 非交互模式、RPC JSONL 模式、8 个内置工具、图片附件、模型/会话/分支/会话树选择器、会话 fork/clone 流程、shell 补全生成、分层 TOML 配置、按 Provider 配置代理、多 Provider 流式接入、JSONL 会话持久化、上下文压缩、retry/backoff、可配置按键与主题、package add/remove/list/doctor 命令、token 用量累计、尽力而为的费用摘要、共享运行时诊断、可选的本地 trace envelope（`--trace` 加 RPC `trace` 读取最新一次运行），以及顶层 `opi doctor` 健康检查命令。
 
 可观测性是本地且显式的：共享诊断、trace envelope 与 `opi doctor` 仅针对本地状态运行，从不回传，并保持为不稳定 0.x 表面。opi 不收集 telemetry 或 analytics，也不会自动共享会话。
 
@@ -314,7 +314,7 @@ opi --delete-session <session-id>
 
 ## RPC、SDK 与扩展
 
-`opi --rpc` 会通过 stdin/stdout 启动一个持久 JSONL 命令/事件会话。启动时会输出 `schema_version = 3` 的 `rpc_ready` 头；命令包括 `prompt`、`continue`、`abort`、`steer`、`follow_up`、`set_model`、`set_thinking_level`、`compact`、`session_info`、`extension_command` 和 `quit`。响应可用可选的 `id` 关联；已接受的 prompt 输出会作为异步 agent 事件流式返回。
+`opi --rpc` 会通过 stdin/stdout 启动一个持久 JSONL 命令/事件会话。启动时会输出 `schema_version = 3` 的 `rpc_ready` 头；命令包括 `prompt`、`continue`、`abort`、`steer`、`follow_up`、`set_model`、`set_thinking_level`、`compact`、`session_info`、`extension_command`、`trace` 和 `quit`。响应可用可选的 `id` 关联；已接受的 prompt 输出会作为异步 agent 事件流式返回。
 
 共享 SDK 类型位于 `opi_agent::sdk`。`opi-agent` 的 extension API 面向嵌入方支持生命周期 hook、自定义工具、自定义命令、自定义 agent message/state，以及自定义 provider/model 注册。CLI 会从用户、项目、package 和显式路径发现已配置的资源元数据，并把它暴露到 prompt/RPC metadata 中。它不会从磁盘动态加载任意 Rust 代码。
 

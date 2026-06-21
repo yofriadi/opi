@@ -993,6 +993,38 @@ mod wiring {
     }
 
     #[tokio::test]
+    async fn provider_failure_trace_may_leave_turn_open() {
+        let provider = MockProvider::new_with_errors(
+            "mock",
+            vec![MockResponse::Error(ProviderError::RequestFailed(
+                "boom".into(),
+            ))],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(provider, diag, Some(trace), vec![]),
+            config(None),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+
+        assert!(result.is_err(), "provider failure must propagate");
+        let kinds = kinds_of(&trace_sink);
+        assert!(kinds.contains(&TraceKind::TurnStarted));
+        assert!(kinds.contains(&TraceKind::ProviderFailure));
+        assert!(kinds.contains(&TraceKind::RunEnded));
+        assert!(
+            !kinds.contains(&TraceKind::TurnEnded),
+            "provider failure exits mid-turn; trace consumers must tolerate an open turn"
+        );
+    }
+
+    #[tokio::test]
     async fn phase7_retry_emits_provider_retry_and_diagnostic_linked() {
         // One retryable error then success: a ProviderRetry record and a
         // DiagnosticLinked mirror of the retry-attempt diagnostic, followed by a

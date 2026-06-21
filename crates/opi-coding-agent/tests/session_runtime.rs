@@ -3,6 +3,7 @@
 //! Tests the full lifecycle: harness creates a session, persists messages as
 //! JSONL, and the session can be read back and reconstructed for resume.
 
+use opi_agent::diagnostic::{SOURCE_SESSION, code};
 use opi_agent::message::AgentMessage;
 use opi_agent::session::{MessageEntry, SessionEntry, SessionHeader, SessionReader, SessionWriter};
 use opi_ai::message::{InputContent, Message, UserMessage};
@@ -863,6 +864,53 @@ fn open_existing_preserves_kept_tail_after_compaction() {
     ));
     // Second entry is the kept tail.
     assert_eq!(kept[1].id, "msg-2");
+}
+
+#[test]
+fn resume_session_id_surfaces_recovery_diagnostics_in_resource_metadata() {
+    let _lock = session_lock();
+    let dir = tempfile::tempdir().unwrap();
+    set_sessions_dir(dir.path());
+
+    let path = dir.path().join("truncated-harness-resume.jsonl");
+    let header = make_header("truncated-harness-resume", "/repo");
+    let mut writer = SessionWriter::create(&path, header).unwrap();
+    writer
+        .append(&test_message_entry("msg-1", "hello"))
+        .unwrap();
+    drop(writer);
+
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    write!(file, "{{\"type\":\"message\"").unwrap();
+
+    let provider = MockProvider::new("mock", Vec::new());
+    let mut harness = CodingHarness::new(
+        Box::new(provider),
+        "mock-model".into(),
+        OpiConfig::default(),
+        std::env::current_dir().unwrap(),
+    );
+
+    let message_count = harness
+        .resume_session_id("truncated-harness-resume")
+        .expect("resume should recover preceding entries");
+
+    assert_eq!(message_count, 1);
+    assert!(
+        harness
+            .resource_metadata()
+            .diagnostics
+            .iter()
+            .any(|d| { d.code == code::CODE_SESSION_TRUNCATED_LINE && d.source == SOURCE_SESSION }),
+        "interactive resume should retain recovery diagnostics in resource metadata: {:?}",
+        harness.resource_metadata().diagnostics
+    );
+
+    clear_sessions_dir();
 }
 
 // ---------------------------------------------------------------------------

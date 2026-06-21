@@ -958,7 +958,7 @@ session_token（程序退出 / 重复 Ctrl+C）
 
 opi 的可观测性是**本地且显式**的。共享诊断、本地 trace envelope 与 `opi doctor` 命令仅针对本地状态运行——从不回传，不传输 telemetry 或 analytics，也不会自动共享会话。这是**不稳定 0.x** 表面：诊断 code、trace envelope 形状以及 `--json`/RPC 事件字段在次版本之间可能变更，直到后续阶段才将其稳定。
 
-`tracing` span 应当覆盖供应商调用、SSE 解析、代理轮次、工具执行、会话追加/加载、压缩和重试调度。密钥和原始供应商载荷必须默认脱敏。trace 仅在通过 `--trace` CLI 标志或 RPC `trace` 命令显式请求时生成，且从不自动永久持久化。
+`tracing` span 应当覆盖供应商调用、SSE 解析、代理轮次、工具执行、会话追加/加载、压缩和重试调度。密钥和原始供应商载荷必须默认脱敏。非交互 CLI trace 只会在通过 `--trace` CLI 标志显式请求时生成。RPC 会话只在本地内存中保留最新一次运行的已脱敏 trace envelope，并且只在客户端发送 `trace` 命令时暴露；trace 不会自动持久化。trace 消费方必须容忍取消、provider failure 或 trace setup failure 在轮次中途退出时出现只有 `TurnStarted`、没有对应 `TurnEnded` 的记录。
 
 ### 11.4 性能目标
 

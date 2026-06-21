@@ -8,7 +8,8 @@
 //! header round-trip through `AgentSessionEvent`.
 
 use opi_agent::session_event::AgentSessionEvent;
-use opi_ai::test_support::{self, MockProvider};
+use opi_ai::provider::ProviderError;
+use opi_ai::test_support::{self, MockProvider, MockResponse};
 use opi_coding_agent::config::OpiConfig;
 use opi_coding_agent::runner::{ExitCode, NDJSON_SCHEMA_VERSION, NonInteractiveRunner};
 
@@ -205,13 +206,52 @@ async fn json_mode_provider_error_exit_code() {
     );
     // Error info goes to stderr, not stdout
     assert!(
-        result.stderr.contains("rate limited"),
-        "stderr should contain error: {:?}",
+        result.stderr.contains("provider error"),
+        "stderr should contain a redacted provider error class: {:?}",
         result.stderr
     );
     // Still should have header even on error
     let lines = parse_ndjson(&result.stdout);
     assert_eq!(lines[0]["type"], "session_header");
+}
+
+#[tokio::test]
+async fn json_mode_provider_error_stderr_is_redacted() {
+    let secret = "sk-proj-1234567890abcdefghijklmnopqrstuv";
+    let provider = MockProvider::new_with_errors(
+        "mock",
+        vec![MockResponse::Error(ProviderError::RequestFailed(format!(
+            "HTTP 500: body contained {secret} at C:\\Users\\alice\\.config\\opi\\config.toml"
+        )))],
+    );
+    let mut runner = NonInteractiveRunner::new(
+        Box::new(provider),
+        "mock-model".into(),
+        OpiConfig::default(),
+        std::env::current_dir().unwrap(),
+        false,
+        None,
+        Vec::new(),
+    );
+
+    let result = runner.run_json("test").await;
+
+    assert_eq!(result.exit_code, ExitCode::ProviderFailure as i32);
+    assert!(
+        !result.stderr.contains(secret),
+        "stderr leaked provider secret: {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("alice"),
+        "stderr leaked absolute path user component: {}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("provider error"),
+        "stderr should retain a useful static error class: {}",
+        result.stderr
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -481,12 +521,13 @@ async fn json_mode_session_summary_roundtrips_through_agent_session_event() {
 mod phase7 {
     use super::parse_ndjson;
     use opi_agent::TRACE_SCHEMA_VERSION;
-    use opi_agent::diagnostic::{Diagnostic, SOURCE_PACKAGE, Severity, code};
+    use opi_agent::diagnostic::{Diagnostic, SOURCE_PACKAGE, SOURCE_SESSION, Severity, code};
     use opi_agent::extension::ExtensionRegistry;
     use opi_agent::session_event::AgentSessionEvent;
     use opi_ai::provider::{Provider, ProviderError};
     use opi_ai::test_support::{self, MockProvider, MockResponse};
     use opi_coding_agent::config::OpiConfig;
+    use opi_coding_agent::harness::ResumeInfo;
     use opi_coding_agent::policy::ToolSelection;
     use opi_coding_agent::runner::{ExitCode, NonInteractiveRunner};
     use opi_coding_agent::runtime_packages::RuntimePackageStartup;
@@ -557,6 +598,56 @@ mod phase7 {
         assert!(
             agent_idx > 1,
             "startup diagnostics must precede the first Agent event"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase7_resume_diagnostics_are_startup_diagnostics() {
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let resume_info = ResumeInfo {
+            path: workspace.path().join("resume.jsonl"),
+            session_id: "resume".into(),
+            entries: Vec::new(),
+            original_cwd: workspace.path().to_path_buf(),
+            diagnostics: vec![Diagnostic::new(
+                Severity::Warning,
+                code::CODE_SESSION_TRUNCATED_LINE,
+                SOURCE_SESSION,
+                "session file ended with a truncated line",
+            )],
+        };
+        let mut runner = NonInteractiveRunner::new_with_resume_and_runtime_packages(
+            Box::new(provider),
+            "mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            None,
+            Vec::new(),
+            Some(resume_info),
+            ToolSelection::Default,
+            Some(RuntimePackageStartup {
+                extension_registry: ExtensionRegistry::new(),
+                installed_packages: Vec::new(),
+                diagnostics: Vec::new(),
+            }),
+            None,
+        )
+        .expect("non-interactive runner");
+
+        let result = runner.run_json("hello").await;
+        assert_eq!(result.exit_code, ExitCode::Success as i32);
+        let lines = parse_ndjson(&result.stdout);
+        let diagnostics = lines[1]["diagnostics"]
+            .as_array()
+            .expect("startup diagnostics array");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d["code"] == code::CODE_SESSION_TRUNCATED_LINE
+                    && d["source"] == SOURCE_SESSION),
+            "resume recovery diagnostic should be emitted as startup diagnostics: {diagnostics:?}"
         );
     }
 

@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use opi_agent::Diagnostic;
+use opi_agent::{Diagnostic, RedactionMode};
 use thiserror::Error;
 
 /// Errors from session CLI operations.
@@ -39,6 +39,25 @@ pub struct ResumedSession {
     pub skipped_entries: usize,
     /// Structured recovery diagnostics produced while reading the session.
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Format redacted warning lines for degraded session recovery outcomes.
+pub fn format_resume_recovery_warnings(session: &ResumedSession) -> Vec<String> {
+    session
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let payload = diagnostic.redacted_payload(RedactionMode::Summary);
+            let mut line = format!(
+                "opi: warning: {}::{}: {}",
+                payload.source, payload.code, payload.message
+            );
+            if let Some(action) = payload.action {
+                line.push_str(&format!(" (action: {action})"));
+            }
+            line
+        })
+        .collect()
 }
 
 /// Return the platform-specific session storage directory (S9.2).
@@ -246,11 +265,8 @@ pub fn handle_session_cli(
                     session.entries.len(),
                     session.header.cwd,
                 );
-                if session.skipped_entries > 0 {
-                    eprintln!(
-                        "opi: warning: {} corrupt entry/entries skipped in session {}",
-                        session.skipped_entries, session.header.id,
-                    );
+                for warning in format_resume_recovery_warnings(&session) {
+                    eprintln!("{warning}");
                 }
                 Ok((true, Some(session)))
             }

@@ -9,7 +9,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use opi_agent::diagnostic::code::CODE_SESSION_CORRUPT_ENTRIES;
+use opi_agent::diagnostic::code::{CODE_SESSION_CORRUPT_ENTRIES, CODE_SESSION_TRUNCATED_LINE};
 use opi_agent::session::{MessageEntry, SessionEntry, SessionHeader, SessionWriter};
 use opi_ai::message::{InputContent, Message, UserMessage};
 use opi_coding_agent::session_cli::{
@@ -480,6 +480,46 @@ fn resume_session_reports_skipped_corrupt_entries() {
             .any(|d| d.code == CODE_SESSION_CORRUPT_ENTRIES
                 && d.details.as_ref().and_then(|v| v["corrupt_count"].as_u64()) == Some(1)),
         "resume should carry CrashRecovery diagnostics"
+    );
+}
+
+#[test]
+fn resume_session_recovery_warnings_include_truncated_tail() {
+    let dir = create_session_dir();
+    let header = make_header("truncated-sess", "/repo");
+    let path = dir.path().join("truncated-sess.jsonl");
+    let mut writer = SessionWriter::create(&path, header.clone()).unwrap();
+    writer.append(&test_message_entry("e1", "good")).unwrap();
+    drop(writer);
+
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(b"{\"type\":\"message\"").unwrap();
+    }
+
+    let result = resume_session(dir.path(), "truncated-sess").unwrap();
+    assert_eq!(result.entries.len(), 1, "truncated line should be skipped");
+    assert_eq!(
+        result.skipped_entries, 0,
+        "truncation is not a corrupt entry"
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == CODE_SESSION_TRUNCATED_LINE),
+        "resume should carry truncated-line recovery diagnostic"
+    );
+
+    let warnings = session_cli::format_resume_recovery_warnings(&result);
+    assert!(
+        warnings
+            .iter()
+            .any(|line| line.contains(CODE_SESSION_TRUNCATED_LINE)),
+        "text resume warnings should include truncated-line diagnostic: {warnings:?}"
     );
 }
 

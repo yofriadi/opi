@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use opi_agent::Diagnostic;
 use opi_agent::diagnostic::{SOURCE_ADAPTER, Severity, code};
 use opi_agent::extension::ExtensionRegistry;
 use opi_agent::session::{
@@ -129,6 +130,52 @@ fn harness_system_prompt_includes_configured_package_resource_metadata_only() {
         .resolve_theme("metadata-theme")
         .expect("configured package theme should resolve");
     assert_eq!(theme.name, "metadata-theme");
+}
+
+#[test]
+fn harness_system_prompt_redacts_startup_diagnostics() {
+    let workspace = tempfile::tempdir().unwrap();
+    let secret = "sk-proj-1234567890abcdefghijklmnopqrstuv";
+    let provider = MockProvider::new("mock", Vec::new());
+    let harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .startup_diagnostics(vec![
+        Diagnostic::new(
+            Severity::Warning,
+            "package_diagnostic",
+            "package",
+            format!("failed at C:\\Users\\alice\\.config\\opi\\package.toml with {secret}"),
+        )
+        .action("inspect C:\\Users\\alice\\.config\\opi\\config.toml")
+        .details(serde_json::json!({
+            "package_error": format!("raw package body {secret}"),
+            "adapter_command": "C:\\Users\\alice\\bin\\adapter.exe",
+        })),
+    ])
+    .build();
+
+    let prompt = harness.system_prompt();
+
+    assert!(
+        prompt.contains("Resource discovery diagnostics"),
+        "system prompt should mention diagnostic summaries: {prompt}"
+    );
+    assert!(
+        !prompt.contains(secret),
+        "system prompt leaked secret: {prompt}"
+    );
+    assert!(
+        !prompt.contains("alice"),
+        "system prompt leaked absolute path component: {prompt}"
+    );
+    assert!(
+        prompt.contains("[REDACTED]"),
+        "system prompt should include redaction marker: {prompt}"
+    );
 }
 
 #[test]

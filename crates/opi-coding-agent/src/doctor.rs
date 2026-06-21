@@ -41,7 +41,7 @@ use serde::Serialize;
 use opi_agent::diagnostic::{
     SOURCE_CONFIG, SOURCE_PACKAGE, SOURCE_PROVIDER, SOURCE_RPC, SOURCE_SESSION, SOURCE_TUI,
 };
-use opi_agent::{Diagnostic, RedactionMode, Severity};
+use opi_agent::{Diagnostic, DiagnosticPayload, RedactionMode, Severity};
 
 use crate::config::{ConfigError, OpiConfig};
 use crate::diagnostic_bridge::{diagnostic_from_config, diagnostic_from_package};
@@ -156,6 +156,13 @@ pub struct DoctorEntry {
     pub diagnostic: Diagnostic,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct RedactedDoctorEntry {
+    scope: DoctorScope,
+    #[serde(flatten)]
+    diagnostic: DiagnosticPayload,
+}
+
 /// The collected diagnostics from a doctor run.
 #[derive(Debug, Clone, Default)]
 pub struct DoctorReport {
@@ -233,7 +240,7 @@ pub fn run_doctor(scopes: &[DoctorScope], ctx: &DoctorContext) -> DoctorReport {
 pub fn format_text(report: &DoctorReport) -> String {
     let mut out = String::new();
     for entry in &report.entries {
-        let d = &entry.diagnostic;
+        let d = entry.diagnostic.redacted_payload(RedactionMode::Summary);
         out.push_str(&format!(
             "[{}] {}: {}::{}: {}\n",
             d.severity,
@@ -263,10 +270,11 @@ pub fn format_json(report: &DoctorReport) -> String {
         .entries
         .iter()
         .filter_map(|entry| {
-            let mut entry = entry.clone();
-            let redacted = entry.diagnostic.redacted_details(RedactionMode::Summary);
-            entry.diagnostic.details = redacted;
-            serde_json::to_string(&entry).ok()
+            let redacted = RedactedDoctorEntry {
+                scope: entry.scope,
+                diagnostic: entry.diagnostic.redacted_payload(RedactionMode::Summary),
+            };
+            serde_json::to_string(&redacted).ok()
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -629,15 +637,42 @@ fn bedrock_credential_probe(
         .filter(|name| !name.trim().is_empty())
         .unwrap_or("AWS_SECRET_ACCESS_KEY");
     let secret_present = env_value_present(env_var, secret_env);
-    let access_label = if config_access_present {
-        "config access_key_id"
-    } else {
-        "env AWS_ACCESS_KEY_ID"
-    };
+    if config_access_present && secret_present {
+        return CredentialProbe {
+            present: true,
+            label: format!("config access_key_id + env {secret_env}"),
+        };
+    }
+    if env_access_present && secret_present {
+        return CredentialProbe {
+            present: true,
+            label: format!("env AWS_ACCESS_KEY_ID + env {secret_env}"),
+        };
+    }
+    if let Some(profile) = bedrock
+        .profile
+        .as_deref()
+        .filter(|profile| !profile.trim().is_empty())
+    {
+        return CredentialProbe {
+            present: true,
+            label: format!("profile {profile}"),
+        };
+    }
+    if let Some(profile) = env_var("AWS_PROFILE").filter(|profile| !profile.trim().is_empty()) {
+        return CredentialProbe {
+            present: true,
+            label: format!("env AWS_PROFILE {profile}"),
+        };
+    }
 
     CredentialProbe {
-        present: (config_access_present || env_access_present) && secret_present,
-        label: format!("{access_label} + env {secret_env}"),
+        present: false,
+        label: if config_access_present {
+            format!("config access_key_id + env {secret_env}")
+        } else {
+            format!("env AWS_ACCESS_KEY_ID + env {secret_env}")
+        },
     }
 }
 

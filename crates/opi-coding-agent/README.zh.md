@@ -11,7 +11,7 @@
 
 当前 crate 版本：`0.5.2`，继承自 workspace package 版本。
 
-本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、RPC JSONL 模式、9 个内置 Provider 前缀加已配置的 OpenAI-compatible profile、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话/分支/会话树选择器、交互式会话 fork/clone、shell 补全生成、上下文文件加载、会话持久化、会话 resume/fork/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、packages/extensions/skills/fragments/themes 的渐进式资源发现、package add/remove/list/doctor 命令、process-jsonl package adapter、retry、token 用量统计、尽力而为的费用摘要、共享运行时诊断、可选的本地 trace envelope（`--trace`），以及顶层无网络的 `opi doctor` 命令。
+本 crate 产出 `opi` CLI，同时也把编程 harness 暴露为 Rust library。当前支持交互式 TUI、位置参数非交互模式、NDJSON 输出、RPC JSONL 模式、9 个内置 Provider 前缀加已配置的 OpenAI-compatible profile、8 个可用内置工具、pi 对齐的交互式默认工具、保守的非交互默认工具、图片附件、模型/会话/分支/会话树选择器、交互式会话 fork/clone、shell 补全生成、上下文文件加载、会话持久化、会话 resume/fork/list/delete、上下文压缩、可配置按键/主题、按 Provider 配置代理、packages/extensions/skills/fragments/themes 的渐进式资源发现、package add/remove/list/doctor 命令、process-jsonl package adapter、retry、token 用量统计、尽力而为的费用摘要、共享运行时诊断、可选的本地 trace envelope（`--trace` 加 RPC `trace` 读取最新一次运行），以及顶层无网络的 `opi doctor` 命令。
 
 可观测性是本地且显式的：共享诊断、trace envelope 与 `opi doctor` 仅针对本地状态运行，从不回传，并保持为不稳定 0.x 表面。opi 不收集 telemetry 或 analytics，也不会自动共享会话。
 
@@ -315,7 +315,7 @@ opi --rpc
 启动时，`opi` 会输出 `rpc_ready` 头：
 
 ```json
-{"type":"rpc_ready","schema_version":3,"mode":"rpc","version":"0.5.2"}
+{"type":"rpc_ready","schema_version":3,"mode":"rpc","version":"0.5.2","startup_diagnostics":[]}
 ```
 
 命令是以 JSON 对象形式发送到 stdin（每行一个）。响应和事件是以 JSON 对象形式输出到 stdout（每行一个）。诊断信息输出到 stderr。
@@ -334,6 +334,7 @@ opi --rpc
 | `compact` | 触发手动压缩 |
 | `session_info` | 查询会话元数据 |
 | `extension_command` | 向 extension registry 分发自定义命令 |
+| `trace` | 返回最新一次运行的已脱敏内存 trace envelope |
 | `quit` | 关闭 RPC 会话 |
 
 所有命令都支持可选的 `id` 字段用于请求/响应关联。

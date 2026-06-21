@@ -284,8 +284,13 @@ async fn runner_provider_error_stderr_exit4() {
         "should exit 4 on provider error"
     );
     assert!(
-        result.stderr.contains("connection refused"),
-        "stderr should contain error message, got: {:?}",
+        result.stderr.contains("provider error"),
+        "stderr should contain a redacted provider error class, got: {:?}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("connection refused"),
+        "stderr must not echo raw provider error text: {:?}",
         result.stderr
     );
 }

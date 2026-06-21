@@ -51,9 +51,9 @@ pub struct ResumeInfo {
 ///
 /// When set, the harness builds a fresh [`TraceCollector`] per run over the
 /// shared `sink`, prepares it before the run (fail-closed), and finishes it
-/// after. The sink is reused across runs in a session (e.g. RPC) so a
-/// `RecordingTraceSink` accumulates and a `FileTraceSink` is opened once per
-/// run. `mode` controls redaction of record details (Summary by default).
+/// after. `TraceSink::prepare` defines per-run reset semantics: file sinks
+/// truncate on each run, while recording sinks keep only the latest run.
+/// `mode` controls redaction of record details (Summary by default).
 #[derive(Clone)]
 pub struct TraceConfig {
     pub sink: Arc<dyn TraceSink>,
@@ -697,6 +697,10 @@ impl CodingHarness {
         let resume_extension_state = resume
             .as_ref()
             .and_then(|info| crate::session_coordinator::latest_extension_state(&info.entries));
+        let resume_diagnostics = resume
+            .as_ref()
+            .map(|info| info.diagnostics.clone())
+            .unwrap_or_default();
         let (model_registry, model_registry_diagnostics) =
             Self::build_model_registry(provider.as_ref(), extension_registry.as_ref());
         if let Some(registry) = extension_registry.as_ref() {
@@ -740,6 +744,7 @@ impl CodingHarness {
             .metadata
             .diagnostics
             .extend(build_options.startup_diagnostics);
+        resources.metadata.diagnostics.extend(resume_diagnostics);
         for name in injected_extension_names {
             resources.metadata.add_extension_name(name);
         }
@@ -804,10 +809,6 @@ impl CodingHarness {
             threshold_tokens: config.compaction.threshold_tokens,
         };
 
-        let resume_diagnostics = resume
-            .as_ref()
-            .map(|info| info.diagnostics.clone())
-            .unwrap_or_default();
         let session = if let Some(info) = resume {
             SessionCoordinator::open_existing(
                 info.path,
@@ -829,9 +830,6 @@ impl CodingHarness {
         let diagnostics = if build_options.record_diagnostics {
             let sink = Arc::new(RecordingSink::new());
             agent.set_diagnostic_sink(Some(sink.clone() as Arc<dyn DiagnosticSink>));
-            for diagnostic in resume_diagnostics {
-                sink.record(diagnostic);
-            }
             Some(sink)
         } else {
             None
@@ -983,6 +981,10 @@ impl CodingHarness {
         let message_count = messages.len();
         self.agent.replace_messages(messages);
         self.defer_extension_state_from_entries(&session.entries);
+        self.resources
+            .metadata
+            .diagnostics
+            .extend(session.diagnostics.clone());
 
         let compaction_config = opi_agent::compaction::CompactionConfig {
             enabled: self.config.compaction.enabled,
@@ -1500,13 +1502,18 @@ impl CodingHarness {
         self.session.as_ref()
     }
 
-    /// Execute manual compaction on the session, if one is active.
-    /// Returns the compaction result, or None if compaction produced no output
-    /// or no session exists.
-    pub fn compact(
+    /// Execute compaction on the session and return the public result plus the
+    /// diagnostic that describes the compaction outcome.
+    pub fn compact_with_diagnostic(
         &mut self,
         reason: opi_agent::session_event::CompactionReason,
-    ) -> Result<Option<opi_agent::session_event::CompactionResult>, String> {
+    ) -> Result<
+        (
+            Option<opi_agent::session_event::CompactionResult>,
+            Diagnostic,
+        ),
+        String,
+    > {
         let session = match &mut self.session {
             Some(s) => s,
             None => return Err("no active session".into()),
@@ -1514,11 +1521,32 @@ impl CodingHarness {
         let result = session
             .execute_compaction(reason)
             .map_err(|e| format!("compaction failed: {e}"))?;
-        if let Some(out) = &result {
-            self.record_harness_diagnostic(out.diagnostic.clone());
-            self.agent.replace_messages(out.new_agent_messages.clone());
+        match result {
+            Some(out) => {
+                let wire = crate::session_coordinator::to_wire_result(&out);
+                let diagnostic = out.diagnostic.clone();
+                self.record_harness_diagnostic(diagnostic.clone());
+                self.agent.replace_messages(out.new_agent_messages);
+                Ok((Some(wire), diagnostic))
+            }
+            None => {
+                let error = opi_agent::compaction::CompactionError::NothingToCompact;
+                let diagnostic = Diagnostic::from(&error);
+                self.record_harness_diagnostic(diagnostic.clone());
+                Ok((None, diagnostic))
+            }
         }
-        Ok(result.map(|out| crate::session_coordinator::to_wire_result(&out)))
+    }
+
+    /// Execute manual compaction on the session, if one is active.
+    /// Returns the compaction result, or None if compaction produced no output
+    /// or no session exists.
+    pub fn compact(
+        &mut self,
+        reason: opi_agent::session_event::CompactionReason,
+    ) -> Result<Option<opi_agent::session_event::CompactionResult>, String> {
+        self.compact_with_diagnostic(reason)
+            .map(|(result, _)| result)
     }
 
     fn build_tools(workspace_root: &Path, tool_config: &ToolRuntimeConfig) -> Vec<Box<dyn Tool>> {

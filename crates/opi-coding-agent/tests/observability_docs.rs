@@ -101,8 +101,8 @@ fn phase7_shared_diagnostics_used_by_surfaces() {
         "doctor entries must flatten the shared Diagnostic at the public boundary"
     );
     assert!(
-        doctor.contains("redacted_details(RedactionMode::Summary)"),
-        "doctor --json must route details through the shared Summary redaction"
+        doctor.contains("redacted_payload(RedactionMode::Summary)"),
+        "doctor --json must route diagnostics through the shared Summary redaction"
     );
 
     // Trace: the envelope has a diagnostic-linked record kind carrying shared
@@ -215,6 +215,33 @@ fn phase7_docs_state_local_explicit_observability() {
     assert!(
         spec_zh.contains("opi doctor") && spec_zh.contains("trace"),
         "opi-spec.zh must name the opi doctor command and the local trace envelope"
+    );
+    assert!(
+        contains_ci(&readme, "`trace`") && contains_ci(&coding_readme, "`trace`"),
+        "English RPC docs must list the trace command"
+    );
+    assert!(
+        readme_zh.contains("`trace`") && coding_readme_zh.contains("`trace`"),
+        "Chinese RPC docs must list the trace command"
+    );
+    assert!(
+        coding_readme.contains("startup_diagnostics")
+            && coding_readme_zh.contains("startup_diagnostics"),
+        "RPC ready-header docs must mention startup_diagnostics in EN and ZH"
+    );
+    assert!(
+        contains_ci(&spec, "latest run")
+            && contains_ci(&spec, "local memory")
+            && spec.contains("TurnStarted")
+            && spec.contains("TurnEnded"),
+        "opi-spec must document RPC trace latest-run in-memory semantics and open-turn tolerance"
+    );
+    assert!(
+        spec_zh.contains("最新一次运行")
+            && spec_zh.contains("本地内存")
+            && spec_zh.contains("TurnStarted")
+            && spec_zh.contains("TurnEnded"),
+        "opi-spec.zh must document RPC trace latest-run in-memory semantics and open-turn tolerance"
     );
 
     // EN/ZH posture is in sync (both carry the local+explicit claim).

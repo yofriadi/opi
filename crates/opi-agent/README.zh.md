@@ -88,7 +88,7 @@ agent_loop
 
 ## SDK、扩展与 Proxy
 
-- `sdk` 定义 RPC JSONL 模式和嵌入方共享的不稳定、带 schema version 的命令与响应类型。`SDK_SCHEMA_VERSION` 是 `3`，命令包括 `prompt`、`continue`、`steer`、`follow_up`、`abort`、`set_model`、`set_thinking_level`、`compact`、`session_info`、`extension_command` 和 `quit`。
+- `sdk` 定义 RPC JSONL 模式和嵌入方共享的不稳定、带 schema version 的命令与响应类型。`SDK_SCHEMA_VERSION` 是 `3`，命令包括 `prompt`、`continue`、`steer`、`follow_up`、`abort`、`set_model`、`set_thinking_level`、`compact`、`session_info`、`extension_command`、`trace` 和 `quit`。
 - `extension` 提供 `Extension` 与 `ExtensionRegistry`，支持生命周期 hooks、自定义工具、自定义命令、事件观察者、每个 extension 的状态序列化/恢复、自定义 Provider 和模型覆盖。
 - `streaming_proxy` 可以在任意 `BufRead`/`Write` 传输上转发 JSONL 命令/事件，输出 schema version 为 `3` 的 `proxy_ready` 头，提供有界事件缓冲，支持取消，并默认脱敏常见密钥模式。
 

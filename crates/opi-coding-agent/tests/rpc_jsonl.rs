@@ -2935,6 +2935,7 @@ where
         None,
         Vec::new(),
         runtime_startup,
+        None,
     )
     .expect("rpc runner should construct");
 
@@ -3103,12 +3104,13 @@ mod phase7 {
     use super::{recv_response, recv_rpc_line, recv_until_agent_end, wait_for_idle_session_info};
     use std::sync::Arc;
 
-    use opi_agent::diagnostic::{Diagnostic, SOURCE_PACKAGE, Severity, code};
+    use opi_agent::diagnostic::{Diagnostic, SOURCE_PACKAGE, SOURCE_SESSION, Severity, code};
     use opi_agent::extension::ExtensionRegistry;
     use opi_agent::{RecordingTraceSink, TRACE_SCHEMA_VERSION};
     use opi_ai::provider::ProviderError;
     use opi_ai::test_support::{self, MockProvider, MockResponse};
     use opi_coding_agent::config::OpiConfig;
+    use opi_coding_agent::harness::ResumeInfo;
     use opi_coding_agent::policy::ToolSelection;
     use opi_coding_agent::rpc::{RpcCommand, RpcRunner};
     use opi_coding_agent::runtime_packages::RuntimePackageStartup;
@@ -3150,6 +3152,7 @@ mod phase7 {
             None,
             Vec::new(),
             runtime,
+            None,
         )
         .expect("rpc runner");
 
@@ -3203,6 +3206,61 @@ mod phase7 {
         assert!(
             saw_counts,
             "expected a run_summary event with structured diagnostic counts"
+        );
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_rpc_resume_diagnostics_are_startup_diagnostics() {
+        let provider = MockProvider::new("mock", Vec::new());
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let resume_info = ResumeInfo {
+            path: workspace.path().join("resume.jsonl"),
+            session_id: "resume".into(),
+            entries: Vec::new(),
+            original_cwd: workspace.path().to_path_buf(),
+            diagnostics: vec![Diagnostic::new(
+                Severity::Warning,
+                code::CODE_SESSION_TRUNCATED_LINE,
+                SOURCE_SESSION,
+                "session file ended with a truncated line",
+            )],
+        };
+        let mut runner = RpcRunner::new_with_runtime_packages(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            RuntimePackageStartup {
+                extension_registry: ExtensionRegistry::new(),
+                installed_packages: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            Some(resume_info),
+        )
+        .expect("rpc runner");
+
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        let ready = recv_rpc_line(&mut output_rx).await;
+        let startup = ready["startup_diagnostics"]
+            .as_array()
+            .expect("startup diagnostics array");
+        assert!(
+            startup
+                .iter()
+                .any(|d| d["code"] == code::CODE_SESSION_TRUNCATED_LINE
+                    && d["source"] == SOURCE_SESSION),
+            "resume recovery diagnostic should be emitted in rpc_ready: {startup:?}"
         );
 
         command_tx.send(RpcCommand::quit { id: None }).unwrap();
@@ -3330,6 +3388,7 @@ mod phase7 {
             None,
             Vec::new(),
             runtime,
+            None,
         )
         .expect("rpc runner");
 
@@ -3363,6 +3422,124 @@ mod phase7 {
                 .as_array()
                 .is_some_and(|records| !records.is_empty()),
             "trace response should carry records"
+        );
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_rpc_manual_compaction_response_carries_diagnostic() {
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let runtime = RuntimePackageStartup {
+            extension_registry: ExtensionRegistry::new(),
+            installed_packages: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner = RpcRunner::new_with_runtime_packages(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            runtime,
+            None,
+        )
+        .expect("rpc runner");
+
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        let _ready = recv_rpc_line(&mut output_rx).await;
+        command_tx
+            .send(RpcCommand::prompt {
+                id: Some("p1".into()),
+                message: "hi".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            recv_response(&mut output_rx, "prompt").await["success"],
+            true
+        );
+        recv_until_agent_end(&mut output_rx).await;
+        wait_for_idle_session_info(&command_tx, &mut output_rx).await;
+
+        command_tx
+            .send(RpcCommand::compact {
+                id: Some("compact-1".into()),
+            })
+            .unwrap();
+        let compact = recv_response(&mut output_rx, "compact").await;
+        assert_eq!(compact["success"], true, "manual compaction should succeed");
+        let diagnostics = compact["data"]["diagnostics"]
+            .as_array()
+            .expect("compact response should include diagnostics");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d["code"] == code::CODE_SESSION_COMPACTED
+                    && d["source"] == SOURCE_SESSION),
+            "manual compaction diagnostic should be public: {diagnostics:?}"
+        );
+
+        command_tx.send(RpcCommand::quit { id: None }).unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase7_rpc_manual_compaction_noop_response_carries_diagnostic() {
+        let provider = MockProvider::new("mock", Vec::new());
+        let runtime = RuntimePackageStartup {
+            extension_registry: ExtensionRegistry::new(),
+            installed_packages: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut runner = RpcRunner::new_with_runtime_packages(
+            Box::new(provider),
+            "mock:mock-model".into(),
+            OpiConfig::default(),
+            workspace.path().to_path_buf(),
+            false,
+            ToolSelection::Disabled,
+            None,
+            Vec::new(),
+            runtime,
+            None,
+        )
+        .expect("rpc runner");
+
+        let (command_tx, command_rx) = unbounded_channel();
+        let (output_tx, mut output_rx) = unbounded_channel();
+        let task =
+            tokio::spawn(async move { runner.run_with_channels(command_rx, output_tx).await });
+
+        let _ready = recv_rpc_line(&mut output_rx).await;
+        command_tx
+            .send(RpcCommand::compact {
+                id: Some("compact-empty".into()),
+            })
+            .unwrap();
+        let compact = recv_response(&mut output_rx, "compact").await;
+        assert_eq!(
+            compact["success"], true,
+            "manual compaction no-op should succeed"
+        );
+        let diagnostics = compact["data"]["diagnostics"]
+            .as_array()
+            .expect("compact no-op response should include diagnostics");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d["code"] == code::CODE_COMPACTION_NOTHING_TO_COMPACT
+                    && d["source"] == SOURCE_SESSION),
+            "manual compaction no-op diagnostic should be public: {diagnostics:?}"
         );
 
         command_tx.send(RpcCommand::quit { id: None }).unwrap();

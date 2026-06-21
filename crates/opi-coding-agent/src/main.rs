@@ -124,8 +124,9 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        let exit_code =
-            rt.block_on(async { run_rpc(&cli, &config, resumed_messages, tool_selection).await });
+        let exit_code = rt.block_on(async {
+            run_rpc(&cli, &config, resumed_messages, resume_info, tool_selection).await
+        });
         std::process::exit(exit_code);
     } else if cli.non_interactive || cli.json || !prompt_text.is_empty() {
         let rt = match tokio::runtime::Runtime::new() {
@@ -361,6 +362,7 @@ async fn run_rpc(
     cli: &Cli,
     config: &opi_coding_agent::config::OpiConfig,
     resumed_messages: Option<Vec<opi_agent::message::AgentMessage>>,
+    resume_info: Option<ResumeInfo>,
     tool_selection: ToolSelection,
 ) -> i32 {
     use opi_coding_agent::rpc::RpcRunner;
@@ -398,7 +400,10 @@ async fn run_rpc(
                 }
             });
 
-    let workspace_root = std::env::current_dir().unwrap_or_default();
+    let workspace_root = resume_info
+        .as_ref()
+        .map(|info| info.original_cwd.clone())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let user_config_dir = opi_coding_agent::config::user_config_dir();
     let runtime_startup = opi_coding_agent::runtime_packages::start_installed_package_runtime(
         &workspace_root,
@@ -416,6 +421,7 @@ async fn run_rpc(
         user_system_prompt,
         resumed_messages.unwrap_or_default(),
         runtime_startup,
+        resume_info,
     ) {
         Ok(runner) => runner,
         Err(e) => {

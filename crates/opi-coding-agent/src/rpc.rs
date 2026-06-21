@@ -62,7 +62,7 @@ use opi_agent::{RecordingTraceSink, RedactionMode, TRACE_SCHEMA_VERSION};
 use opi_ai::provider::Provider;
 
 use crate::config::OpiConfig;
-use crate::harness::{CodingHarness, TraceConfig};
+use crate::harness::{CodingHarness, ResumeInfo, TraceConfig};
 use crate::policy::{RunMode, ToolSelection};
 use crate::runner::ExitCode;
 use crate::runtime_packages::RuntimePackageStartup;
@@ -122,6 +122,7 @@ impl RpcRunner {
             initial_messages,
             None,
             None,
+            None,
             Vec::new(),
             None,
         )
@@ -154,6 +155,7 @@ impl RpcRunner {
             initial_messages,
             None,
             None,
+            None,
             Vec::new(),
             trace_sink,
         )
@@ -181,6 +183,7 @@ impl RpcRunner {
             tool_selection,
             user_system_prompt,
             initial_messages,
+            None,
             Some(extension_registry),
             None,
             Vec::new(),
@@ -200,6 +203,7 @@ impl RpcRunner {
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
         runtime_startup: RuntimePackageStartup,
+        resume_info: Option<ResumeInfo>,
     ) -> Result<Self, crate::policy::ToolPolicyError> {
         let RuntimePackageStartup {
             extension_registry,
@@ -215,6 +219,7 @@ impl RpcRunner {
             tool_selection,
             user_system_prompt,
             initial_messages,
+            resume_info,
             Some(extension_registry),
             Some(installed_packages),
             diagnostics,
@@ -232,6 +237,7 @@ impl RpcRunner {
         tool_selection: ToolSelection,
         user_system_prompt: Option<String>,
         initial_messages: Vec<AgentMessage>,
+        resume_info: Option<ResumeInfo>,
         extension_registry: Option<ExtensionRegistry>,
         installed_packages: Option<Vec<crate::package_discovery::PackageResource>>,
         startup_diagnostics: Vec<Diagnostic>,
@@ -260,6 +266,9 @@ impl RpcRunner {
         }
         if let Some(registry) = extension_registry {
             builder = builder.extension_registry(registry);
+        }
+        if let Some(resume_info) = resume_info {
+            builder = builder.resume(resume_info);
         }
         if let Some(sink) = trace_sink.clone() {
             builder = builder.trace(Some(TraceConfig {
@@ -701,13 +710,15 @@ impl RpcRunner {
                         "agent harness is unavailable",
                     ));
                 };
-                match harness.compact(CompactionReason::Manual) {
-                    Ok(Some(result)) => {
+                match harness.compact_with_diagnostic(CompactionReason::Manual) {
+                    Ok((Some(result), diagnostic)) => {
+                        let diagnostic = diagnostic.redacted_payload(RedactionMode::Summary);
                         let data = serde_json::json!({
                             "summary": result.summary,
                             "first_kept_entry_id": result.first_kept_entry_id,
                             "tokens_before": result.tokens_before,
                             "tokens_after": result.tokens_after,
+                            "diagnostics": [diagnostic],
                         });
                         emit(&response_success_with_data(
                             cmd_id.as_deref(),
@@ -715,11 +726,18 @@ impl RpcRunner {
                             data,
                         ))
                     }
-                    Ok(None) => emit(&response_error(
-                        cmd_id.as_deref(),
-                        cmd_name,
-                        "compaction produced no output",
-                    )),
+                    Ok((None, diagnostic)) => {
+                        let diagnostic = diagnostic.redacted_payload(RedactionMode::Summary);
+                        let data = serde_json::json!({
+                            "compacted": false,
+                            "diagnostics": [diagnostic],
+                        });
+                        emit(&response_success_with_data(
+                            cmd_id.as_deref(),
+                            cmd_name,
+                            data,
+                        ))
+                    }
                     Err(e) => emit(&response_error(cmd_id.as_deref(), cmd_name, &e)),
                 }
             }
