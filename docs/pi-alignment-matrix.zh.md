@@ -70,7 +70,7 @@
 
 | 优先级 | 领域 | 原因 | 目标结果 |
 |---:|---|---|---|
-| P0 | 文档事实 | 版本和阶段状态必须匹配 `Cargo.toml` 与 `CHANGELOG.md`。 | 当前文档描述 `0.5.2` workspace，历史 `0.5.1` 行保持历史含义。 |
+| P0 | 文档事实 | 版本和阶段状态必须匹配 `Cargo.toml` 与 `CHANGELOG.md`。 | 当前文档描述 `0.5.3` workspace，历史 `0.5.2` 行保持历史含义。 |
 | P1 | Session tree | 同文件 branch continuation 现在已有运行时 `parent_id` 和 `leaf` 覆盖，但 `pi` 仍有更完整的 tree 产品工作流。 | 改善 branch metadata display 和更高层 package/workflow integration。 |
 | P1 | Extension/package execution | 通过 `opi-extension-jsonl-v1` 运行的 process-JSONL adapter 会把 package command、tool、hook、event、state 和 cancellation 桥接进 runtime。Adapter hosting 和 example packages 已存在。 | 稳定 adapter protocol；API 稳定后再增加更广的 adapter kind（gRPC 等）。 |
 | P1 | Provider profiles | OpenAI-compatible profiles 和 model metadata 已走 config + registry。 | 保持 profile expansion policy 文档化；OAuth providers 单独跟踪。 |

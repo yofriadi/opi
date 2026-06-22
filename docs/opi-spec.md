@@ -11,7 +11,7 @@
 | Last updated | 2026-06-17 |
 | Repository | `https://github.com/OdradekAI/opi` |
 | Upstream studied | `pi` 0.75.3 at `.repo/pi-0.75.3/` |
-| Current implementation | `opi` 0.5.2 workspace, Phase 6 alignment and reliability hardening complete; Phase 5 is a Rust-native package and process-adapter MVP |
+| Current implementation | `opi` 0.5.3 workspace, Phase 6 alignment and reliability hardening complete; Phase 5 is a Rust-native package and process-adapter MVP |
 | Next milestone | Phase 7 reliability/observability hardening, then Phase 8 runtime stabilization |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
@@ -150,12 +150,12 @@ permission popups, and background bash.
 
 ## 4. Current Baseline
 
-### 4.1 Version 0.5.2
+### 4.1 Version 0.5.3
 
 | Area | Current state |
 |---|---|
 | Workspace | four crates under one Cargo workspace |
-| Versioning | lockstep `0.5.2` |
+| Versioning | lockstep `0.5.3` |
 | Edition | Rust 2024 |
 | Internal dependencies | `opi-agent -> opi-ai`, `opi-coding-agent -> opi-ai + opi-agent + opi-tui` |
 | External dependencies | Rust-native async, HTTP/SSE, schema, config, TUI, search, tracing, and test stacks from workspace dependencies |
@@ -1254,7 +1254,7 @@ Exit criteria: enterprise providers work, image and terminal-image flows work, p
 
 ### Phase 4 - Extensibility Substrate
 
-Status: substrate implemented in the current `0.5.2` workspace.
+Status: substrate implemented in the current `0.5.3` workspace.
 
 Phase 4 is ordered so the reusable substrate lands before workflow-heavy
 features. Later tasks may depend on earlier tasks, but examples must not become
@@ -1277,7 +1277,7 @@ Exit criteria: third parties can compose and extend opi through RPC, SDK, extens
 
 ### Phase 5 - Rust-Native Package and Process-Adapter MVP
 
-Status: implemented in the current `0.5.2` workspace.
+Status: implemented in the current `0.5.3` workspace.
 
 Phase 5 adds package management and executable adapter hosting so that external packages can provide tools, commands, hooks, and events through child process adapters without patching core crates. It deliberately does not claim parity with pi's npm package ecosystem, TypeScript extension runtime, hot reload behavior, marketplace conventions, provider streaming adapters, custom TUI adapters, or package permission enforcement.
 

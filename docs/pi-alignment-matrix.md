@@ -70,7 +70,7 @@ The intended target is:
 
 | Priority | Area | Reason | Target outcome |
 |---:|---|---|---|
-| P0 | Documentation truth | Version and phase status must match `Cargo.toml` and `CHANGELOG.md`. | Current docs describe the `0.5.2` workspace and keep historical `0.5.1` rows historical. |
+| P0 | Documentation truth | Version and phase status must match `Cargo.toml` and `CHANGELOG.md`. | Current docs describe the `0.5.3` workspace and keep historical `0.5.2` rows historical. |
 | P1 | Session tree | Same-file branch continuation now has runtime `parent_id` and `leaf` coverage, but `pi` still has richer tree product workflows. | Improve branch metadata display and higher-level package/workflow integration. |
 | P1 | Extension/package execution | Process-JSONL adapters via `opi-extension-jsonl-v1` bridge package commands, tools, hooks, events, state, and cancellation into the runtime. Adapter hosting and example packages are present. | Stabilize adapter protocol; add broader adapter kinds (gRPC, etc.) after API stabilization. |
 | P1 | Provider profiles | OpenAI-compatible profiles and model metadata are config-driven and registry-backed. | Keep profile expansion policy documented; track OAuth providers separately. |
