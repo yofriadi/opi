@@ -118,6 +118,32 @@ tracing is enabled. The runtime pushes the per-run `TraceCollector` to every
 extension via `Extension::set_trace_collector` before each run (and clears it
 after), so adapters that short-circuit an undeclared hook can record the skip.
 
+## Tool Scheduling
+
+The scheduler batches the tool calls carried by one assistant message and runs
+each batch by these rules:
+
+- The global default execution mode is `Parallel`. A tool overrides it by
+  implementing `Tool::execution_mode` to return `Sequential`.
+- If any tool call in a batch reports `Sequential`, the entire batch runs
+  sequentially; otherwise the batch runs in parallel.
+- In a sequential batch, tool calls run strictly in assistant source order:
+  each call starts, executes, and finishes before the next begins.
+- In a parallel batch, every `ToolExecutionStart` is emitted before any result
+  is awaited, and results are gathered with `join_all`, which preserves source
+  order. `ToolExecutionEnd` events are therefore emitted in source order in the
+  current runtime; the contract permits completion-order emission, so observers
+  must not depend on a specific end-event ordering across parallel tools.
+- Persisted `ToolResult` messages follow assistant source order in both
+  sequential and parallel batches, independent of completion order.
+- The run terminates early only when every finalized tool result in the batch
+  sets `terminate`. A single non-terminating result lets the run continue.
+
+Argument validation runs before `before_tool_call` and before `Tool::execute`.
+A validation failure is a normal runtime outcome, not a loop error: an error
+`ToolResult` (`is_error = true`, `terminate = false`) is persisted and the run
+continues; the hook does not run and the tool does not execute.
+
 ## Sessions and Compaction
 
 Session storage is append-only JSONL:

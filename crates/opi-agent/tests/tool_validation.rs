@@ -4,10 +4,23 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
+use futures_util::stream;
 use opi_agent::ToolDef;
+use opi_agent::hooks::{
+    AfterToolCallContext, AfterToolCallResult, AgentHooks, BeforeToolCallContext,
+    BeforeToolCallResult, ShouldStopAfterTurnContext,
+};
+use opi_agent::loop_types::{AgentError, AgentLoopConfig, AgentLoopContext};
+use opi_agent::message::AgentMessage;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_agent::validation::{self, ValidationError};
+use opi_ai::message::{
+    AssistantContent, AssistantMessage, InputContent, Message, OutputContent, ToolCall,
+};
+use opi_ai::provider::{EventStream, Provider, ProviderError, Request};
+use opi_ai::stream::{AssistantStreamEvent, StopReason, Usage};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -247,4 +260,275 @@ async fn invalid_args_become_error_tool_result() {
     let result = ToolResult::from_validation_error(validation_result.unwrap_err());
     assert!(result.is_error);
     assert!(!result.terminate);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: tool validation failure contract (task 8.3)
+//
+// Drives opi_agent::agent_loop with a tool call whose arguments fail schema
+// validation and pins the contract: the failure is a normal runtime outcome
+// (Ok return, an error ToolResult persisted, run continues), and neither
+// before_tool_call nor Tool::execute runs because validation precedes them.
+// ---------------------------------------------------------------------------
+
+struct ScriptedProvider {
+    responses: Arc<Mutex<Vec<Vec<AssistantStreamEvent>>>>,
+    call_count: Arc<Mutex<usize>>,
+}
+
+impl ScriptedProvider {
+    fn new(responses: Vec<Vec<AssistantStreamEvent>>) -> Self {
+        Self {
+            responses: Arc::new(Mutex::new(responses)),
+            call_count: Arc::new(Mutex::new(0)),
+        }
+    }
+}
+
+impl Provider for ScriptedProvider {
+    fn id(&self) -> &str {
+        "scripted"
+    }
+    fn models(&self) -> &[opi_ai::provider::ModelInfo] {
+        &[]
+    }
+    fn stream(&self, _request: Request) -> EventStream {
+        *self.call_count.lock().unwrap() += 1;
+        let events = self.responses.lock().unwrap().remove(0);
+        Box::pin(stream::iter(events.into_iter().map(Ok::<_, ProviderError>)))
+    }
+}
+
+/// A tool that records whether `execute` was reached. Its schema requires a
+/// `name` string so an empty-args call fails validation before execute.
+struct ProbeTool {
+    executed: Arc<Mutex<bool>>,
+}
+
+impl Tool for ProbeTool {
+    fn definition(&self) -> ToolDef {
+        ToolDef {
+            name: "greet".into(),
+            description: "probe tool".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"]
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _call_id: &str,
+        _arguments: serde_json::Value,
+        _signal: CancellationToken,
+        _on_update: Option<opi_agent::tool::UpdateCallback>,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>> {
+        let executed = self.executed.clone();
+        Box::pin(async move {
+            *executed.lock().unwrap() = true;
+            Ok(ToolResult {
+                content: vec![OutputContent::Text {
+                    text: "execute must not run on validation failure".into(),
+                }],
+                details: None,
+                is_error: false,
+                terminate: false,
+            })
+        })
+    }
+}
+
+/// Hooks that record whether `before_tool_call` was reached.
+struct ProbeHooks {
+    before_called: Arc<Mutex<bool>>,
+}
+
+impl AgentHooks for ProbeHooks {
+    fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
+        Ok(messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::Llm(msg) => Some(msg.clone()),
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn should_stop_after_turn(
+        &self,
+        _: ShouldStopAfterTurnContext,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send>> {
+        Box::pin(async { false })
+    }
+
+    fn before_tool_call(
+        &self,
+        _: BeforeToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = BeforeToolCallResult> + Send>> {
+        let before_called = self.before_called.clone();
+        Box::pin(async move {
+            *before_called.lock().unwrap() = true;
+            BeforeToolCallResult::Allow
+        })
+    }
+
+    fn after_tool_call(
+        &self,
+        _: AfterToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = AfterToolCallResult> + Send>> {
+        Box::pin(async { AfterToolCallResult::Keep })
+    }
+}
+
+fn base_msg() -> AssistantMessage {
+    AssistantMessage {
+        content: vec![],
+        api: opi_ai::ApiKind::Anthropic,
+        provider: "scripted".into(),
+        model: "mock".into(),
+        response_model: None,
+        response_id: None,
+        usage: Usage::default(),
+        stop_reason: StopReason::Stop,
+        error_message: None,
+        timestamp_ms: 0,
+    }
+}
+
+fn text_response(text: &str) -> Vec<AssistantStreamEvent> {
+    let mut partial = base_msg();
+    partial
+        .content
+        .push(AssistantContent::Text { text: text.into() });
+    vec![
+        AssistantStreamEvent::Start {
+            partial: base_msg(),
+        },
+        AssistantStreamEvent::TextDelta {
+            content_index: 0,
+            delta: text.into(),
+            partial: partial.clone(),
+        },
+        AssistantStreamEvent::Done {
+            reason: StopReason::Stop,
+            message: partial,
+        },
+    ]
+}
+
+fn tool_call_response(call_id: &str, name: &str, args: &str) -> Vec<AssistantStreamEvent> {
+    let tool_call = ToolCall {
+        id: call_id.to_string(),
+        name: name.to_string(),
+        arguments: args.to_string(),
+    };
+    let mut partial = base_msg();
+    partial.content.push(AssistantContent::ToolCall {
+        tool_call: tool_call.clone(),
+    });
+    partial.stop_reason = StopReason::ToolUse;
+    vec![
+        AssistantStreamEvent::Start {
+            partial: base_msg(),
+        },
+        AssistantStreamEvent::ToolCallEnd {
+            content_index: 0,
+            tool_call,
+            partial: partial.clone(),
+        },
+        AssistantStreamEvent::Done {
+            reason: StopReason::ToolUse,
+            message: partial,
+        },
+    ]
+}
+
+// DoD: invalid arguments are surfaced through the production tool scheduler as
+// a normal runtime outcome: the run returns Ok, an error ToolResult is
+// persisted, the run continues to the next turn, and neither before_tool_call
+// nor Tool::execute runs.
+#[tokio::test]
+async fn phase8_tool_validation_failure_contract() {
+    let executed = Arc::new(Mutex::new(false));
+    let before_called = Arc::new(Mutex::new(false));
+
+    // greet requires `name`; this call omits it, so validation fails.
+    let provider = ScriptedProvider::new(vec![
+        tool_call_response("call-1", "greet", r#"{}"#),
+        text_response("done"),
+    ]);
+    let call_count = provider.call_count.clone();
+
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(ProbeTool {
+        executed: executed.clone(),
+    })];
+    let hooks = ProbeHooks {
+        before_called: before_called.clone(),
+    };
+
+    let context = AgentLoopContext {
+        provider: Box::new(provider),
+        tools,
+        messages: vec![AgentMessage::Llm(Message::User(
+            opi_ai::message::UserMessage {
+                content: vec![InputContent::Text { text: "hi".into() }],
+                timestamp_ms: 0,
+            },
+        ))],
+        model: "mock".into(),
+        system: None,
+        steering_queue: None,
+        follow_up_queue: None,
+        diagnostic_sink: None,
+        trace: None,
+    };
+
+    let messages = opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        Box::new(|_| {}),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("validation failure is a normal runtime outcome, not a loop error");
+
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        2,
+        "run continues past the validation failure to a second provider call"
+    );
+    assert!(
+        !*executed.lock().unwrap(),
+        "Tool::execute must not run when arguments fail validation"
+    );
+    assert!(
+        !*before_called.lock().unwrap(),
+        "before_tool_call must not run when arguments fail validation"
+    );
+
+    let error_result = messages
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::Llm(Message::ToolResult(trm)) if trm.tool_call_id == "call-1" => {
+                Some(trm.clone())
+            }
+            _ => None,
+        })
+        .expect("validation failure produces a persisted tool result");
+
+    assert!(
+        error_result.is_error,
+        "validation failure result is an error result"
+    );
+    let text = error_result.content.iter().find_map(|c| match c {
+        OutputContent::Text { text } => Some(text.clone()),
+        _ => None,
+    });
+    assert!(
+        text.as_ref().is_some_and(|t| !t.is_empty()),
+        "error result carries a non-empty message: {text:?}"
+    );
 }

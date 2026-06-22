@@ -67,6 +67,7 @@ struct OrderTool {
     log: Arc<Mutex<Vec<String>>>,
     mode: ExecutionMode,
     terminate: bool,
+    delay_ms: Duration,
 }
 
 impl OrderTool {
@@ -76,6 +77,22 @@ impl OrderTool {
             log,
             mode,
             terminate,
+            delay_ms: Duration::from_millis(5),
+        }
+    }
+
+    /// Like [`OrderTool::new`] but with an explicit per-call delay, used to make
+    /// completion order diverge from assistant source order deterministically.
+    fn new_with_delay(
+        name: &str,
+        log: Arc<Mutex<Vec<String>>>,
+        mode: ExecutionMode,
+        terminate: bool,
+        delay_ms: Duration,
+    ) -> Self {
+        Self {
+            delay_ms,
+            ..Self::new(name, log, mode, terminate)
         }
     }
 }
@@ -103,9 +120,10 @@ impl Tool for OrderTool {
         let log = self.log.clone();
         let name = self.name.clone();
         let terminate = self.terminate;
+        let delay_ms = self.delay_ms;
         Box::pin(async move {
             log.lock().unwrap().push(format!("{name}:start"));
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::time::sleep(delay_ms).await;
             log.lock().unwrap().push(format!("{name}:end"));
             Ok(ToolResult {
                 content: vec![OutputContent::Text {
@@ -1048,5 +1066,437 @@ async fn phase8_event_order_terminal_should_stop_skips_prepare_next_turn() {
     assert!(
         !seq.contains(&"queue_update".to_string()),
         "no queue polling after a terminal should_stop_after_turn: {seq:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: tool scheduling and termination contract (task 8.3)
+//
+// Pins the documented scheduler rules through opi_agent::agent_loop: global
+// default Parallel mode, per-tool Sequential override, mixed-batch
+// sequential-forces-batch, source-ordered persisted tool results (independent
+// of completion order), one ToolExecutionEnd per tool, and early termination
+// only when every finalized result sets terminate.
+// ---------------------------------------------------------------------------
+
+/// Collect persisted `ToolResult` tool-call ids in message order.
+fn persisted_tool_result_ids(messages: &[AgentMessage]) -> Vec<String> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            AgentMessage::Llm(Message::ToolResult(trm)) => Some(trm.tool_call_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Event sink that records the `tool_call_id` of every `ToolExecutionEnd`.
+fn tool_end_sink(ids: Arc<Mutex<Vec<String>>>) -> Box<dyn Fn(AgentEvent) + Send + Sync> {
+    Box::new(move |e| {
+        if let AgentEvent::ToolExecutionEnd { tool_call_id, .. } = e {
+            ids.lock().unwrap().push(tool_call_id);
+        }
+    })
+}
+
+// DoD: a parallel batch executes every tool call.
+#[tokio::test]
+async fn phase8_tool_scheduling_parallel_batch_executes_all() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    let provider = RecordingProvider::new(vec![
+        multi_tool_call_response(vec![
+            ("c1", "tool_a", r#"{"arg":"a"}"#),
+            ("c2", "tool_b", r#"{"arg":"b"}"#),
+        ]),
+        text_response("done"),
+    ]);
+
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(OrderTool::new(
+            "tool_a",
+            log.clone(),
+            ExecutionMode::Parallel,
+            false,
+        )),
+        Box::new(OrderTool::new(
+            "tool_b",
+            log.clone(),
+            ExecutionMode::Parallel,
+            false,
+        )),
+    ];
+
+    let context = make_context(Box::new(provider), tools);
+    let hooks = MinimalHooks;
+
+    opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        noop_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let entries = log.lock().unwrap();
+    assert!(
+        entries.contains(&"tool_a:start".to_string()),
+        "tool_a executes: {entries:?}"
+    );
+    assert!(
+        entries.contains(&"tool_b:start".to_string()),
+        "tool_b executes: {entries:?}"
+    );
+}
+
+// DoD: a fully-sequential batch runs strictly serially in source order.
+#[tokio::test]
+async fn phase8_tool_scheduling_sequential_batch_runs_serially() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    let provider = RecordingProvider::new(vec![
+        multi_tool_call_response(vec![
+            ("c1", "tool_a", r#"{"arg":"a"}"#),
+            ("c2", "tool_b", r#"{"arg":"b"}"#),
+        ]),
+        text_response("done"),
+    ]);
+
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(OrderTool::new(
+            "tool_a",
+            log.clone(),
+            ExecutionMode::Sequential,
+            false,
+        )),
+        Box::new(OrderTool::new(
+            "tool_b",
+            log.clone(),
+            ExecutionMode::Sequential,
+            false,
+        )),
+    ];
+
+    let context = make_context(Box::new(provider), tools);
+    let hooks = MinimalHooks;
+
+    opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        noop_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let entries = log.lock().unwrap();
+    let a_end = entries
+        .iter()
+        .position(|e| e == "tool_a:end")
+        .expect("tool_a ends");
+    let b_start = entries
+        .iter()
+        .position(|e| e == "tool_b:start")
+        .expect("tool_b starts");
+    assert!(
+        a_end < b_start,
+        "sequential batch: tool_a must finish before tool_b starts, got: {entries:?}"
+    );
+}
+
+// DoD: a single Sequential tool in a mixed batch forces the whole batch
+// sequential even when the other tool is Parallel.
+#[tokio::test]
+async fn phase8_tool_scheduling_mixed_batch_forces_sequential() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    let provider = RecordingProvider::new(vec![
+        multi_tool_call_response(vec![
+            ("c1", "tool_a", r#"{"arg":"a"}"#),
+            ("c2", "tool_b", r#"{"arg":"b"}"#),
+        ]),
+        text_response("done"),
+    ]);
+
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(OrderTool::new(
+            "tool_a",
+            log.clone(),
+            ExecutionMode::Sequential,
+            false,
+        )),
+        Box::new(OrderTool::new(
+            "tool_b",
+            log.clone(),
+            ExecutionMode::Parallel,
+            false,
+        )),
+    ];
+
+    let context = make_context(Box::new(provider), tools);
+    let hooks = MinimalHooks;
+
+    opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        noop_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let entries = log.lock().unwrap();
+    let a_end = entries
+        .iter()
+        .position(|e| e == "tool_a:end")
+        .expect("tool_a ends");
+    let b_start = entries
+        .iter()
+        .position(|e| e == "tool_b:start")
+        .expect("tool_b starts");
+    assert!(
+        a_end < b_start,
+        "mixed batch with one Sequential tool must run serially, got: {entries:?}"
+    );
+}
+
+// DoD: persisted tool-result messages follow assistant source order even when
+// completion order diverges (tool_a is slower than tool_b but listed first).
+// join_all preserves input order, so persistence is source order, not
+// completion order.
+#[tokio::test]
+async fn phase8_tool_scheduling_persisted_results_in_source_order() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    let provider = RecordingProvider::new(vec![
+        multi_tool_call_response(vec![
+            ("c1", "tool_a", r#"{"arg":"a"}"#),
+            ("c2", "tool_b", r#"{"arg":"b"}"#),
+        ]),
+        text_response("done"),
+    ]);
+
+    let tools: Vec<Box<dyn Tool>> = vec![
+        // tool_a is first in source order (c1) but much slower, so it completes
+        // after tool_b. Persistence must still be [c1, c2].
+        Box::new(OrderTool::new_with_delay(
+            "tool_a",
+            log.clone(),
+            ExecutionMode::Parallel,
+            false,
+            Duration::from_millis(40),
+        )),
+        Box::new(OrderTool::new_with_delay(
+            "tool_b",
+            log.clone(),
+            ExecutionMode::Parallel,
+            false,
+            Duration::from_millis(2),
+        )),
+    ];
+
+    let context = make_context(Box::new(provider), tools);
+    let hooks = MinimalHooks;
+
+    let messages = opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        noop_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    // Sanity: completion order genuinely diverged (tool_b finished first).
+    let entries = log.lock().unwrap();
+    let a_end = entries
+        .iter()
+        .position(|e| e == "tool_a:end")
+        .expect("tool_a ends");
+    let b_end = entries
+        .iter()
+        .position(|e| e == "tool_b:end")
+        .expect("tool_b ends");
+    assert!(
+        b_end < a_end,
+        "test setup: tool_b must complete before tool_a, got: {entries:?}"
+    );
+
+    // Yet persisted results follow assistant source order.
+    let ids = persisted_tool_result_ids(&messages);
+    assert_eq!(
+        ids,
+        vec!["c1".to_string(), "c2".to_string()],
+        "persisted tool results must follow assistant source order, got: {ids:?}"
+    );
+}
+
+// DoD: a parallel batch emits one ToolExecutionEnd per tool. The current
+// runtime realizes this in source order (join_all preserves input order); the
+// contract permits completion-order emission, so per-tool coverage and the
+// current realization are what is asserted.
+#[tokio::test]
+async fn phase8_tool_scheduling_completion_events_one_per_tool() {
+    let provider = RecordingProvider::new(vec![
+        multi_tool_call_response(vec![
+            ("c1", "tool_a", r#"{"arg":"a"}"#),
+            ("c2", "tool_b", r#"{"arg":"b"}"#),
+        ]),
+        text_response("done"),
+    ]);
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(OrderTool::new(
+            "tool_a",
+            log.clone(),
+            ExecutionMode::Parallel,
+            false,
+        )),
+        Box::new(OrderTool::new(
+            "tool_b",
+            log.clone(),
+            ExecutionMode::Parallel,
+            false,
+        )),
+    ];
+
+    let end_ids = Arc::new(Mutex::new(Vec::new()));
+    let sink = tool_end_sink(end_ids.clone());
+
+    let context = make_context(Box::new(provider), tools);
+    let hooks = MinimalHooks;
+
+    opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        sink,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let ids = end_ids.lock().unwrap();
+    assert_eq!(ids.len(), 2, "one ToolExecutionEnd per tool in the batch");
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec!["c1".to_string(), "c2".to_string()],
+        "end events cover both tool calls"
+    );
+    assert_eq!(
+        *ids,
+        vec!["c1".to_string(), "c2".to_string()],
+        "current runtime emits end events in source order; contract permits completion order"
+    );
+}
+
+// DoD: early termination applies only when every finalized tool result sets
+// terminate. Both terminate -> single provider call, early stop, both results
+// persisted.
+#[tokio::test]
+async fn phase8_tool_scheduling_all_terminate_stops_early() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    let provider = RecordingProvider::new(vec![multi_tool_call_response(vec![
+        ("c1", "tool_a", r#"{"arg":"a"}"#),
+        ("c2", "tool_b", r#"{"arg":"b"}"#),
+    ])]);
+    let call_count = provider.call_count.clone();
+
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(OrderTool::new(
+            "tool_a",
+            log.clone(),
+            ExecutionMode::Parallel,
+            true,
+        )),
+        Box::new(OrderTool::new(
+            "tool_b",
+            log.clone(),
+            ExecutionMode::Parallel,
+            true,
+        )),
+    ];
+
+    let context = make_context(Box::new(provider), tools);
+    let hooks = MinimalHooks;
+
+    let messages = opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        noop_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        1,
+        "all-terminate batch stops the run after a single provider call"
+    );
+    assert_eq!(
+        persisted_tool_result_ids(&messages),
+        vec!["c1".to_string(), "c2".to_string()],
+        "both finalized results are persisted before the early stop"
+    );
+}
+
+// DoD: a single non-terminating result prevents early termination and the run
+// continues to the next turn.
+#[tokio::test]
+async fn phase8_tool_scheduling_partial_terminate_continues() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+
+    let provider = RecordingProvider::new(vec![
+        multi_tool_call_response(vec![
+            ("c1", "tool_a", r#"{"arg":"a"}"#),
+            ("c2", "tool_b", r#"{"arg":"b"}"#),
+        ]),
+        text_response("done"),
+    ]);
+    let call_count = provider.call_count.clone();
+
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(OrderTool::new(
+            "tool_a",
+            log.clone(),
+            ExecutionMode::Parallel,
+            true,
+        )),
+        Box::new(OrderTool::new(
+            "tool_b",
+            log.clone(),
+            ExecutionMode::Parallel,
+            false,
+        )),
+    ];
+
+    let context = make_context(Box::new(provider), tools);
+    let hooks = MinimalHooks;
+
+    opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        noop_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        2,
+        "partial-terminate batch continues to a second provider call"
     );
 }

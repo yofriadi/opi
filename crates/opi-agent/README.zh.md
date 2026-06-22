@@ -108,6 +108,28 @@ Rate limit 和 timeout 等可重试 Provider 错误可通过 `AgentLoopConfig.re
 `Extension::set_trace_collector` 把本次运行的 `TraceCollector` 下发给每个扩展（运行结束后清空），
 从而使短路了未声明 hook 的 adapter 能够记录该跳过。
 
+## 工具调度
+
+调度器会把一条 assistant 消息携带的工具调用收集为一个批次，并按以下规则执行：
+
+- 全局默认执行模式为 `Parallel`。工具可通过实现 `Tool::execution_mode` 返回
+  `Sequential` 来覆盖默认值。
+- 若批次中任意工具调用声明为 `Sequential`，则整个批次串行执行；否则并行执行。
+- 串行批次严格按 assistant 源顺序执行工具调用：每个调用先启动、执行、完成，
+  之后下一个才开始。
+- 并行批次会在等待任意结果之前为每个工具发出 `ToolExecutionStart`，并用
+  `join_all` 收集结果（保留源顺序）。因此当前运行时按源顺序发出
+  `ToolExecutionEnd`；契约允许按完成顺序发出，因此观察者不应依赖并行工具之间
+  的具体结束事件顺序。
+- 无论串行还是并行，持久化的 `ToolResult` 消息都按 assistant 源顺序排列，
+  与完成顺序无关。
+- 仅当批次中每一个已完成的工具结果都设置 `terminate` 时，运行才提前终止。
+  只要有一个非终止结果，运行就继续到下一 turn。
+
+参数校验在 `before_tool_call` 和 `Tool::execute` 之前执行。校验失败是正常的
+运行时结果，而非循环错误：会持久化一个错误 `ToolResult`（`is_error = true`、
+`terminate = false`）并继续运行；hook 不会执行，工具也不会执行。
+
 ## 会话与压缩
 
 会话存储使用 append-only JSONL：
