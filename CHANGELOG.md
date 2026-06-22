@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `opi-agent` / `opi-coding-agent`: Phase 7 observability diagnostics are now typed and redacted across startup, package/adapter, session recovery, compaction, tool-error, and RPC trace paths.
 
+### Removed
+
+- `opi-web-ui`: removed the unpublished web-facing crate from the workspace; future web UI work should be planned as a separate RPC/SDK consumer surface.
+
 ## [0.5.2] - 2026-06-17
 
 ### Fixed

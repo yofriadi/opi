@@ -4,7 +4,6 @@ members = [
     "crates/opi-agent",
     "crates/opi-coding-agent",
     "crates/opi-tui",
-    "crates/opi-web-ui",
 ]
 resolver = "2"
 
@@ -20,7 +19,6 @@ opi-ai = { path = "crates/opi-ai", version = "0.5.2" }
 opi-agent = { path = "crates/opi-agent", version = "0.5.2" }
 opi-coding-agent = { path = "crates/opi-coding-agent", version = "0.5.2" }
 opi-tui = { path = "crates/opi-tui", version = "0.5.2" }
-opi-web-ui = { path = "crates/opi-web-ui", version = "0.5.2" }
 
 # async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs"] }

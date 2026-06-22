@@ -45,10 +45,6 @@ The current implementation includes:
 - Extension hooks/tools/state for embedders, config-driven resource discovery
   for extensions, packages, skills, prompt fragments, and themes, and
   `process-jsonl` package adapters.
-- An unpublished `opi-web-ui` component/state/rendering crate that consumes
-  RPC/SDK events.
-
-`opi-web-ui` remains `publish = false`; it is not a standalone browser app.
 
 Repository: https://github.com/OdradekAI/opi
 
@@ -123,7 +119,6 @@ Cargo workspace with lockstep versioning. All crates share
 opi-ai      (no internal deps)        - multi-provider LLM API
 opi-tui     (no internal deps)        - terminal UI widgets, pickers, diff and image rendering
 opi-agent   -> opi-ai                 - agent runtime, tool calling, sessions, compaction
-opi-web-ui  (no internal deps)        - unpublished web-facing component/state/rendering crate
 opi-coding-agent -> opi-ai, opi-agent, opi-tui - produces the `opi` binary
 ```
 
@@ -132,9 +127,7 @@ root `Cargo.toml`, then referencing it as `foo = { workspace = true }` in the
 consumer crate's `Cargo.toml`.
 
 When publishing internal crates, path dependencies must also carry a `version`
-field. Bare path dependencies cannot be published to crates.io. While
-`opi-web-ui` has `publish = false`, it must be excluded from crates.io publish
-steps.
+field. Bare path dependencies cannot be published to crates.io.
 
 ## Architecture
 
@@ -433,8 +426,6 @@ Critical properties:
   yanked, never deleted.
 - All publishable crates use the same version and publish in dependency order
   computed from `cargo metadata`.
-- `opi-web-ui` must remain excluded from crates.io publishing while
-  `publish = false`.
 - Never use `git reset --hard` plus `git push --force` for rollback. Use
   `git revert` plus tag deletion.
 - Interrupted releases can resume from `.opi-release-state.json` at the repo
@@ -478,8 +469,6 @@ Two GitHub Actions workflows live in `.github/workflows/`:
   workspace; do not duplicate them per crate.
 - The CLI binary is named `opi` (defined by `[[bin]]` in
   `crates/opi-coding-agent/Cargo.toml`), not `opi-coding-agent`.
-- `opi-web-ui` has `publish = false`; describe it as reusable
-  components/state/rendering, not as a standalone browser app.
 - Runtime expansion of prompt fragments, production sub-agent workflows,
   permission gates, plan/todo workflows, and MCP workflows are example/package
   patterns, not built-in core product workflows.

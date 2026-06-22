@@ -159,7 +159,6 @@ Provider 支持在 `opi-ai` 中实现，并接入 `opi-coding-agent`。
 | [`opi-agent`](crates/opi-agent) | 是 | Agent 主循环、工具执行、hooks、事件、队列、会话、压缩、SDK 类型、扩展、streaming proxy。 |
 | [`opi-tui`](crates/opi-tui) | 是 | Ratatui 组件、对话渲染、diff 视图、选择器、终端图片、主题、按键绑定。 |
 | [`opi-coding-agent`](crates/opi-coding-agent) | 是 | `opi` 二进制与可嵌入编程 harness。 |
-| [`opi-web-ui`](crates/opi-web-ui) | 否 | 未发布的 RPC/SDK 事件解析、对话状态、组件模型和 HTML 渲染辅助。 |
 
 内部依赖形状：
 
@@ -167,7 +166,6 @@ Provider 支持在 `opi-ai` 中实现，并接入 `opi-coding-agent`。
 opi-ai
 opi-tui
 opi-agent -> opi-ai
-opi-web-ui (publish = false)
 opi-coding-agent -> opi-ai + opi-agent + opi-tui -> opi binary
 ```
 
@@ -175,6 +173,9 @@ opi-coding-agent -> opi-ai + opi-agent + opi-tui -> opi binary
 
 `opi --rpc` 暴露不稳定的 0.x JSONL 命令/事件协议，客户端必须检查 schema
 version。`opi-agent` 也为嵌入方提供共享 SDK 类型和 extension registry 基础能力。
+RPC 命令包括 `prompt`、`continue`、`steer`、`follow_up`、`abort`、`set_model`、
+`set_thinking_level`、`compact`、`session_info`、`extension_command`、`trace` 和
+`quit`。
 
 资源发现支持 extensions、packages、skills、prompt fragments 和 themes。Package
 manifest 可以启动 `process-jsonl` adapter，用于暴露自定义工具、命令、hooks、事件
@@ -190,7 +191,6 @@ package 权限声明目前是元数据，不是强制 sandbox 策略。
   package、会话、TUI 能力和 RPC schema 信息。
 - 生产级子 Agent、permission gate、plan/todo 和 MCP 工作流不内置在核心 CLI 中；
   仓库提供相关 examples 与 package 脚手架。
-- `opi-web-ui` 不是独立浏览器应用。
 - OAuth 或订阅登录流程尚未实现。
 - 不支持从任意 extension 路径动态加载 Rust 插件。
 

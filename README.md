@@ -164,7 +164,6 @@ authors.
 | [`opi-agent`](crates/opi-agent) | yes | Agent loop, tool execution, hooks, events, queues, sessions, compaction, SDK types, extensions, streaming proxy. |
 | [`opi-tui`](crates/opi-tui) | yes | Ratatui widgets, transcript rendering, diff view, pickers, terminal images, themes, keybindings. |
 | [`opi-coding-agent`](crates/opi-coding-agent) | yes | The `opi` binary and embeddable coding harness. |
-| [`opi-web-ui`](crates/opi-web-ui) | no | Unpublished RPC/SDK event parsing, conversation state, component models, and HTML rendering helpers. |
 
 Internal dependency shape:
 
@@ -172,7 +171,6 @@ Internal dependency shape:
 opi-ai
 opi-tui
 opi-agent -> opi-ai
-opi-web-ui (publish = false)
 opi-coding-agent -> opi-ai + opi-agent + opi-tui -> opi binary
 ```
 
@@ -180,7 +178,9 @@ opi-coding-agent -> opi-ai + opi-agent + opi-tui -> opi binary
 
 `opi --rpc` exposes an unstable 0.x JSONL command/event protocol with schema
 version checks. `opi-agent` also exposes shared SDK types and extension
-registry primitives for embedders.
+registry primitives for embedders. RPC commands include `prompt`, `continue`,
+`steer`, `follow_up`, `abort`, `set_model`, `set_thinking_level`, `compact`,
+`session_info`, `extension_command`, `trace`, and `quit`.
 
 Resource discovery supports extensions, packages, skills, prompt fragments, and
 themes. Package manifests can start `process-jsonl` adapters that expose custom
@@ -200,7 +200,6 @@ metadata, not enforced sandbox policy.
 - Production sub-agent, permission-gate, plan/todo, and MCP workflows are not
   built into the core CLI. The repository contains examples and package
   scaffolds for those patterns.
-- `opi-web-ui` is not a standalone browser app.
 - OAuth or subscription login flows are not implemented.
 - Dynamic Rust plugin loading from arbitrary extension paths is not supported.
 

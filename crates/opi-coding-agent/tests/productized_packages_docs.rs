@@ -6,8 +6,7 @@
 //! Phase 6 tests verify that current-state documentation identifies the
 //! workspace/crate state at the current released version (matching the
 //! workspace version) while historical release rows stay historical, and that
-//! English and Chinese counterparts carry the same current-version and
-//! opi-web-ui scope claims.
+//! English and Chinese counterparts carry the same current-version claims.
 
 use std::path::Path;
 
@@ -353,7 +352,7 @@ fn docs_warn_packages_are_trusted_code() {
         "README must warn that packages are trusted code"
     );
     assert!(
-        readme.contains("not sandboxed"),
+        readme.contains("not enforced sandbox policy"),
         "README must warn that package code is not sandboxed"
     );
     assert!(
@@ -361,7 +360,7 @@ fn docs_warn_packages_are_trusted_code() {
         "README.zh must warn that packages are trusted code"
     );
     assert!(
-        readme_zh.contains("不会被 sandbox"),
+        readme_zh.contains("不是强制 sandbox 策略"),
         "README.zh must warn that package code is not sandboxed"
     );
     assert!(
@@ -407,39 +406,41 @@ fn docs_guard_package_lifecycle_claims() {
     let spec = read_repo_file("docs/opi-spec.md");
     let spec_zh = read_repo_file("docs/opi-spec.zh.md");
 
-    for (name, content) in [("README", readme.as_str()), ("opi-spec", spec.as_str())] {
-        assert!(
-            content.contains("validates the manifest")
-                || content.contains("validates the package manifest"),
-            "{name} must say package add validates manifests"
-        );
-        assert!(
-            content.contains("writes a lock entry"),
-            "{name} must say package add writes lock entries"
-        );
-        assert!(
-            content.contains("reads installed declarations and lock state"),
-            "{name} must say runtime startup reads installed declarations and lock state"
-        );
-    }
+    assert!(
+        readme.contains("Package manifests can start `process-jsonl` adapters"),
+        "README must summarize the package adapter capability"
+    );
+    assert!(
+        readme_zh.contains("Package")
+            && readme_zh.contains("manifest")
+            && readme_zh.contains("process-jsonl"),
+        "README.zh must summarize the package adapter capability"
+    );
 
-    for (name, content) in [
-        ("README.zh", readme_zh.as_str()),
-        ("opi-spec.zh", spec_zh.as_str()),
-    ] {
-        assert!(
-            content.contains("验证 manifest") || content.contains("验证 package manifest"),
-            "{name} must say package add validates manifests"
-        );
-        assert!(
-            content.contains("写入 lock 条目"),
-            "{name} must say package add writes lock entries"
-        );
-        assert!(
-            content.contains("读取已安装声明和 lock 状态"),
-            "{name} must say runtime startup reads installed declarations and lock state"
-        );
-    }
+    assert!(
+        spec.contains("validates the package manifest"),
+        "opi-spec must say package add validates manifests"
+    );
+    assert!(
+        spec.contains("writes a lock entry"),
+        "opi-spec must say package add writes lock entries"
+    );
+    assert!(
+        spec.contains("reads installed declarations and lock state"),
+        "opi-spec must say runtime startup reads installed declarations and lock state"
+    );
+    assert!(
+        spec_zh.contains("验证 package manifest"),
+        "opi-spec.zh must say package add validates manifests"
+    );
+    assert!(
+        spec_zh.contains("写入 lock 条目"),
+        "opi-spec.zh must say package add writes lock entries"
+    );
+    assert!(
+        spec_zh.contains("读取已安装声明和 lock 状态"),
+        "opi-spec.zh must say runtime startup reads installed declarations and lock state"
+    );
 
     for phrase in [
         "source availability",
@@ -513,7 +514,7 @@ fn spec_en_zh_both_have_phase_five() {
 // identify the workspace/crate state at the current released version (matching
 // the workspace version) while historical release rows stay historical, and
 // require English and Chinese counterparts to carry the same current-version
-// and opi-web-ui scope claims. Lockstep versioning makes the compiled crate
+// claims. Lockstep versioning makes the compiled crate
 // version the single source of truth, so both tests read it from
 // `env!("CARGO_PKG_VERSION")` rather than hardcoding a number.
 // ===========================================================================
@@ -529,7 +530,9 @@ fn phase6_current_docs_match_workspace_version() {
     // Root README names the current workspace version.
     let readme = read_repo_file("README.md");
     assert!(
-        readme.contains(&format!("Current workspace version: `{version}`")),
+        readme.contains(&format!(
+            "The workspace package version in `Cargo.toml` is `{version}`"
+        )),
         "README must name the current workspace version `{version}`"
     );
     assert!(
@@ -537,18 +540,12 @@ fn phase6_current_docs_match_workspace_version() {
         "AGENTS.md is live agent context and must name the current workspace version `{version}`"
     );
     assert!(
-        read_repo_file("CLAUDE.md").contains(&format!("v{version} ships")),
-        "CLAUDE.md is live agent context and must summarize the current workspace as v{version}"
+        read_repo_file("CLAUDE.md").contains(&format!("Current workspace version: `{version}`")),
+        "CLAUDE.md is live agent context and must name the current workspace version `{version}`"
     );
 
     // Each publishable crate README names its current crate version.
-    for crate_name in [
-        "opi-ai",
-        "opi-agent",
-        "opi-tui",
-        "opi-coding-agent",
-        "opi-web-ui",
-    ] {
+    for crate_name in ["opi-ai", "opi-agent", "opi-tui", "opi-coding-agent"] {
         let crate_readme = read_repo_file(&format!("crates/{crate_name}/README.md"));
         assert!(
             crate_readme.contains(&format!("Current crate version: `{version}`")),
@@ -593,7 +590,7 @@ fn phase6_current_docs_match_workspace_version() {
 
 #[test]
 fn phase6_localized_docs_stay_in_sync() {
-    // Every Phase 6 current-version / opi-web-ui-scope claim made in English
+    // Every Phase 6 current-version claim made in English
     // documentation must be carried by its Chinese counterpart in the same form.
     // Assertions are per-language and positive, so a stale-but-matched pair
     // (both EN and ZH wrong) cannot satisfy the sync requirement.
@@ -601,21 +598,16 @@ fn phase6_localized_docs_stay_in_sync() {
 
     // Root README.
     assert!(
-        read_repo_file("README.zh.md").contains(&format!("当前 workspace 版本：`{version}`")),
+        read_repo_file("README.zh.md")
+            .contains(&format!("`Cargo.toml` 中的 workspace 包版本是 `{version}`")),
         "README.zh must name the current workspace version `{version}`"
     );
 
     // Publishable crate READMEs.
-    for crate_name in [
-        "opi-ai",
-        "opi-agent",
-        "opi-tui",
-        "opi-coding-agent",
-        "opi-web-ui",
-    ] {
+    for crate_name in ["opi-ai", "opi-agent", "opi-tui", "opi-coding-agent"] {
         let crate_readme_zh = read_repo_file(&format!("crates/{crate_name}/README.zh.md"));
         assert!(
-            crate_readme_zh.contains(&format!("当前 crate 版本：`{version}`")),
+            crate_readme_zh.contains(&format!("当前 crate 版本是 `{version}`")),
             "{crate_name} README.zh must name the current crate version `{version}`"
         );
     }
@@ -646,17 +638,38 @@ fn phase6_localized_docs_stay_in_sync() {
         matrix_zh.contains("通过 `opi-extension-jsonl-v1` 运行的 process-JSONL adapter 会把 package command、tool、hook、event、state 和 cancellation 桥接进 runtime。"),
         "pi-alignment-matrix.zh P1 extension/package execution row must match the current process-JSONL bridge claim"
     );
+}
 
-    // opi-web-ui scope: English and Chinese both describe it only as an
-    // unpublished reusable Rust component/state/rendering crate, never a
-    // standalone browser app or pi-web-ui parity surface.
+#[test]
+fn current_docs_do_not_reference_removed_web_ui_crate() {
+    let removed_crate = ["opi", "web", "ui"].join("-");
+    let current_docs = [
+        "README.md",
+        "README.zh.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+        ".claude/skills/opi-release/skill.md",
+    ];
+
+    for path in current_docs {
+        let content = read_repo_file(path);
+        assert!(
+            !content.contains(&removed_crate),
+            "{path} must not describe the removed web-facing crate as current"
+        );
+    }
+
     assert!(
-        read_repo_file("crates/opi-web-ui/README.md").contains("not a standalone browser app"),
-        "opi-web-ui README must deny it is a standalone browser app"
+        !read_repo_file("Cargo.toml").contains(&removed_crate),
+        "workspace Cargo.toml must not include the removed web-facing crate"
     );
     assert!(
-        read_repo_file("crates/opi-web-ui/README.zh.md").contains("不是独立浏览器应用"),
-        "opi-web-ui README.zh must deny it is a standalone browser app"
+        !repo_root().join("crates").join(&removed_crate).exists(),
+        "removed web-facing crate directory must not exist"
     );
 }
 
@@ -665,8 +678,8 @@ fn phase6_localized_docs_stay_in_sync() {
 //
 // These guards implement the Phase 6 design Workstream 6 (Alignment Guards),
 // Success Criteria 7 (guards prevent overclaiming deferred pi ecosystem
-// features), Success Criteria 9 (no npm/marketplace/OAuth-parity/pi-web-ui
-// parity/permission-enforcement/TS-extension-compat/new-shared-type-crate is
+// features), Success Criteria 9 (no npm/marketplace/OAuth/provider parity,
+// permission-enforcement, TS-extension-compat, or new shared type crate is
 // added in Phase 6), and the DoD's expanded coverage of every Phase 6 non-goal.
 //
 // Negative doc guards reject current-phase claims for each non-goal. Because
@@ -798,27 +811,6 @@ fn docs_do_not_claim_pi_session_v3_compat() {
         "兼容 pi session v3",
     ] {
         assert_docs_reject_claim(&files, needle, "pi session v3 file compatibility");
-    }
-}
-
-#[test]
-fn docs_do_not_claim_pi_web_ui_parity() {
-    // opi-web-ui is an unpublished Rust component crate, not pi-web-ui parity.
-    let files = [
-        "README.md",
-        "README.zh.md",
-        "docs/opi-spec.md",
-        "docs/opi-spec.zh.md",
-        "docs/pi-alignment-matrix.md",
-        "docs/pi-alignment-matrix.zh.md",
-    ];
-    for needle in [
-        "pi-web-ui parity",
-        "web-ui parity",
-        "pi web ui parity",
-        "parity with pi-web-ui",
-    ] {
-        assert_docs_reject_claim(&files, needle, "pi-web-ui parity");
     }
 }
 

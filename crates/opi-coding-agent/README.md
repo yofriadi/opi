@@ -174,7 +174,12 @@ Exit codes:
 `--rpc` starts a persistent bidirectional JSONL protocol for IDEs, custom UIs,
 and other embedders. This is an unstable 0.x protocol; clients must check the
 `schema_version` in the `rpc_ready` header. The current SDK/RPC schema version
-is `3`.
+is `3`. Startup diagnostics are surfaced in the `startup_diagnostics` field of
+that ready header.
+
+Commands include `prompt`, `continue`, `steer`, `follow_up`, `abort`,
+`set_model`, `set_thinking_level`, `compact`, `session_info`,
+`extension_command`, `trace`, and `quit`.
 
 ## Config, Sessions, and Context Files
 

@@ -92,7 +92,7 @@ cargo metadata --format-version 1 --no-deps | jq '.packages[] | {name, descripti
 # Verify auth
 test -f ~/.cargo/credentials.toml || test -n "$CARGO_REGISTRY_TOKEN"
 # Verify ownership (will fail for first-time publish — handle gracefully)
-for crate in opi-ai opi-tui opi-agent opi-web-ui opi-coding-agent; do
+for crate in opi-ai opi-tui opi-agent opi-coding-agent; do
   cargo owner --list $crate 2>/dev/null || echo "NEW_CRATE:$crate"
 done
 # Version not already published
@@ -101,7 +101,7 @@ cargo search opi-ai --limit 1 | grep -v "$VERSION"
 
 ### 1.8 Package Content Check
 ```bash
-for crate in opi-ai opi-tui opi-agent opi-web-ui opi-coding-agent; do
+for crate in opi-ai opi-tui opi-agent opi-coding-agent; do
   cargo package -p $crate --list 2>/dev/null
 done
 ```
@@ -339,7 +339,7 @@ Exclude crates with `publish = false`.
 
 Expected order (computed dynamically, not hardcoded):
 - Batch 1: `opi-ai`, `opi-tui` (no internal deps)
-- Batch 2: `opi-agent`, `opi-web-ui` (depend on Batch 1)
+- Batch 2: `opi-agent` (depends on Batch 1)
 - Batch 3: `opi-coding-agent` (depends on Batch 1 & 2)
 
 ### 6.2 Publish Each Batch
@@ -410,7 +410,7 @@ cd /tmp/opi-verify && sha256sum -c ../../../release-artifacts/v$VERSION/SHA256SU
 
 **docs.rs build status (all crates):**
 ```bash
-for crate in opi-ai opi-tui opi-agent opi-web-ui opi-coding-agent; do
+for crate in opi-ai opi-tui opi-agent opi-coding-agent; do
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://docs.rs/$crate/$VERSION")
   echo "$crate: $STATUS"
 done
@@ -425,7 +425,6 @@ Published crates:
   - opi-ai v<version>           https://crates.io/crates/opi-ai
   - opi-tui v<version>          https://crates.io/crates/opi-tui
   - opi-agent v<version>        https://crates.io/crates/opi-agent
-  - opi-web-ui v<version>       https://crates.io/crates/opi-web-ui
   - opi-coding-agent v<version> https://crates.io/crates/opi-coding-agent
 
 GitHub Release: https://github.com/OdradekAI/opi/releases/tag/v<version>
@@ -503,4 +502,3 @@ After Phase 7 completes (or on abort), remove transient release artifacts:
 rm -f release-notes.md
 ```
 The `release-artifacts/v$VERSION/` directory is retained for local reference (checksums, archives). It is in `.gitignore` and does not pollute the repo.
-

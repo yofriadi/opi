@@ -168,7 +168,12 @@ Provider 凭据环境变量名、base URL、模型列表和代理都可以在配
 
 `--rpc` 为 IDE、自定义 UI 和其他嵌入方启动持久双向 JSONL 协议。这是不稳定的 0.x
 协议；客户端必须检查 `rpc_ready` header 中的 `schema_version`。当前 SDK/RPC
-schema version 是 `3`。
+schema version 是 `3`。启动诊断会通过该 ready header 的 `startup_diagnostics`
+字段暴露。
+
+命令包括 `prompt`、`continue`、`steer`、`follow_up`、`abort`、`set_model`、
+`set_thinking_level`、`compact`、`session_info`、`extension_command`、`trace` 和
+`quit`。
 
 ## 配置、会话与上下文文件
 
