@@ -1315,6 +1315,9 @@ impl CodingHarness {
         let Some(config) = self.trace.clone() else {
             // Clear any stale collector left on the agent from a prior run.
             self.agent.set_trace_collector(None);
+            if let Some(registry) = &self.extension_registry {
+                registry.set_trace_collector(None);
+            }
             return Ok(());
         };
         let run_id = self.next_run_id();
@@ -1328,6 +1331,9 @@ impl CodingHarness {
             .map_err(|e| AgentError::TraceSetup(e.to_string()))?;
         let collector = Arc::new(collector);
         self.agent.set_trace_collector(Some(collector.clone()));
+        if let Some(registry) = &self.extension_registry {
+            registry.set_trace_collector(Some(collector.clone()));
+        }
         self.active_trace = Some(collector);
         Ok(())
     }
@@ -1339,6 +1345,9 @@ impl CodingHarness {
             collector.finish();
         }
         self.agent.set_trace_collector(None);
+        if let Some(registry) = &self.extension_registry {
+            registry.set_trace_collector(None);
+        }
     }
 
     /// Mirror a diagnostic into the active run's trace as a diagnostic-linked

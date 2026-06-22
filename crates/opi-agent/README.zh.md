@@ -86,6 +86,28 @@ agent_end                                 # 仅一次，终止时
 Rate limit 和 timeout 等可重试 Provider 错误可通过 `AgentLoopConfig.retry` 处理。
 重试开始/结束会通过 `AgentEvent` 暴露。
 
+## Hook 语义
+
+`AgentHooks` 用于定制主循环。六个方法按以下顺序执行，效果如下：
+
+| Hook | 顺序 / 效果 |
+|------|------------|
+| `transform_context` | 在 Provider 转换之前运行；可改写应用层消息。 |
+| `convert_to_llm` | 将应用消息转换为 Provider 消息，并过滤仅会话状态。 |
+| `before_tool_call` | 在 JSON Schema 参数校验之后、`tool.execute` 之前运行；可 `Deny` 阻止执行（拒绝原因成为工具错误）。 |
+| `after_tool_call` | 在执行之后、最终的 `ToolExecutionEnd` 事件之前运行；可 `Replace` 结果，使替换后的结果成为被发出和持久化的值。 |
+| `should_stop_after_turn` | 在 `turn_end` 之后、steering/follow-up 轮询之前运行；返回 `true` 会在下一 turn 之前停止，并跳过 `prepare_next_turn`。 |
+| `prepare_next_turn` | 仅在 `should_stop_after_turn` 允许继续时运行，且早于 steering/follow-up 轮询；可向下一次 provider 请求注入消息。 |
+
+扩展组合：`ExtensionRegistry::wrap_hooks` 先运行基础 `AgentHooks` 方法，再按注册顺序依次运行每个扩展。
+扩展的 `on_before_tool_call` 返回 `Block` 会在首个 block 处中断链路；后续扩展不会被调用。
+扩展的 `on_after_tool_call` 观察者不能修改结果；只有基础 hook 可以 `Replace`。
+
+当 adapter 或扩展只实现了部分 hook 时，在启用 verbose trace 的情况下，被跳过的 hook 会以
+`trace::TraceKind::HookSkipped` 记录写入 trace。运行时会在每次运行之前通过
+`Extension::set_trace_collector` 把本次运行的 `TraceCollector` 下发给每个扩展（运行结束后清空），
+从而使短路了未声明 hook 的 adapter 能够记录该跳过。
+
 ## 会话与压缩
 
 会话存储使用 append-only JSONL：

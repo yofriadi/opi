@@ -1083,3 +1083,277 @@ fn registry_default_is_empty() {
     let registry = ExtensionRegistry::default();
     assert!(registry.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8: extension hook composition contract (task 8.2).
+//
+// Composite hooks (built by ExtensionRegistry::wrap_hooks) must run the base
+// AgentHooks method first, then each extension in registration order, for
+// before_tool_call, after_tool_call, transform_context, and prepare_next_turn.
+// A block in the chain stops further extensions.
+// ---------------------------------------------------------------------------
+
+/// Base hooks that append `base:<hook>` to a shared log for each lifecycle
+/// method. `convert_to_llm` is required by the trait but not exercised here.
+struct LogHooks {
+    log: Arc<Mutex<Vec<String>>>,
+}
+
+impl AgentHooks for LogHooks {
+    fn convert_to_llm(
+        &self,
+        _messages: &[AgentMessage],
+    ) -> Result<Vec<opi_ai::message::Message>, AgentError> {
+        Ok(vec![])
+    }
+
+    fn transform_context(
+        &self,
+        messages: Vec<AgentMessage>,
+        _signal: CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AgentMessage>, AgentError>> + Send>> {
+        let log = self.log.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push("base:transform".into());
+            Ok(messages)
+        })
+    }
+
+    fn before_tool_call(
+        &self,
+        _ctx: BeforeToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = BeforeToolCallResult> + Send>> {
+        let log = self.log.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push("base:before".into());
+            BeforeToolCallResult::Allow
+        })
+    }
+
+    fn after_tool_call(
+        &self,
+        _ctx: AfterToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = AfterToolCallResult> + Send>> {
+        let log = self.log.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push("base:after".into());
+            AfterToolCallResult::Keep
+        })
+    }
+
+    fn prepare_next_turn(
+        &self,
+        _ctx: PrepareNextTurnContext,
+    ) -> Pin<Box<dyn Future<Output = Option<AgentLoopTurnUpdate>> + Send>> {
+        let log = self.log.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push("base:prepare".into());
+            None
+        })
+    }
+}
+
+/// Extension that appends `ext:<name>:<hook>` to a shared log for each hook.
+struct LogExt {
+    name: String,
+    log: Arc<Mutex<Vec<String>>>,
+    block_before: bool,
+}
+
+impl LogExt {
+    fn new(name: &str, log: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            name: name.into(),
+            log,
+            block_before: false,
+        }
+    }
+
+    fn blocking(name: &str, log: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            name: name.into(),
+            log,
+            block_before: true,
+        }
+    }
+}
+
+impl Extension for LogExt {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn on_before_tool_call(
+        &self,
+        _tool_name: &str,
+        _args: &serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = ExtensionHookResult> + Send>> {
+        let log = self.log.clone();
+        let name = self.name.clone();
+        let block = self.block_before;
+        Box::pin(async move {
+            log.lock().unwrap().push(format!("ext:{name}:before"));
+            if block {
+                ExtensionHookResult::Block {
+                    reason: format!("ext {name} blocks"),
+                }
+            } else {
+                ExtensionHookResult::Continue
+            }
+        })
+    }
+
+    fn on_after_tool_call(
+        &self,
+        _tool_name: &str,
+        _result: &ToolResult,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        let log = self.log.clone();
+        let name = self.name.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push(format!("ext:{name}:after"));
+        })
+    }
+
+    fn transform_context(
+        &self,
+        messages: Vec<AgentMessage>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AgentMessage>, ExtensionError>> + Send>> {
+        let log = self.log.clone();
+        let name = self.name.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push(format!("ext:{name}:transform"));
+            Ok(messages)
+        })
+    }
+
+    fn prepare_next_turn(
+        &self,
+        _ctx: &PrepareNextTurnContext,
+    ) -> Pin<Box<dyn Future<Output = Option<AgentLoopTurnUpdate>> + Send>> {
+        let log = self.log.clone();
+        let name = self.name.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push(format!("ext:{name}:prepare"));
+            None
+        })
+    }
+}
+
+// DoD: composite hooks run base first, then extensions in registration order,
+// for every lifecycle hook.
+#[tokio::test]
+async fn phase8_hook_composition_base_then_extensions_in_order() {
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(LogExt::new("alpha", log.clone())))
+        .unwrap();
+    registry
+        .register(Box::new(LogExt::new("beta", log.clone())))
+        .unwrap();
+
+    let composite = registry.wrap_hooks(Box::new(LogHooks { log: log.clone() }));
+
+    // before_tool_call: base -> alpha -> beta.
+    log.lock().unwrap().clear();
+    composite
+        .before_tool_call(BeforeToolCallContext {
+            tool_call_id: "c1".into(),
+            tool_name: "echo".into(),
+            args: serde_json::json!({}),
+            messages: vec![],
+        })
+        .await;
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        &["base:before", "ext:alpha:before", "ext:beta:before"]
+    );
+
+    // after_tool_call: base -> alpha -> beta.
+    log.lock().unwrap().clear();
+    composite
+        .after_tool_call(AfterToolCallContext {
+            tool_call_id: "c1".into(),
+            tool_name: "echo".into(),
+            result: ToolResult {
+                content: vec![OutputContent::Text { text: "x".into() }],
+                details: None,
+                is_error: false,
+                terminate: false,
+            },
+        })
+        .await;
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        &["base:after", "ext:alpha:after", "ext:beta:after"]
+    );
+
+    // transform_context: base -> alpha -> beta.
+    log.lock().unwrap().clear();
+    composite
+        .transform_context(vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        &[
+            "base:transform",
+            "ext:alpha:transform",
+            "ext:beta:transform"
+        ]
+    );
+
+    // prepare_next_turn: base -> alpha -> beta.
+    log.lock().unwrap().clear();
+    composite
+        .prepare_next_turn(PrepareNextTurnContext {
+            messages: vec![],
+            turn: 1,
+        })
+        .await;
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        &["base:prepare", "ext:alpha:prepare", "ext:beta:prepare"]
+    );
+}
+
+// DoD: a block from an extension stops the chain at the first block; later
+// extensions are not consulted.
+#[tokio::test]
+async fn phase8_hook_composition_block_stops_chain() {
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+
+    let mut registry = ExtensionRegistry::new();
+    registry
+        .register(Box::new(LogExt::new("alpha", log.clone())))
+        .unwrap();
+    registry
+        .register(Box::new(LogExt::blocking("beta", log.clone())))
+        .unwrap();
+    registry
+        .register(Box::new(LogExt::new("gamma", log.clone())))
+        .unwrap();
+
+    let composite = registry.wrap_hooks(Box::new(LogHooks { log: log.clone() }));
+
+    let result = composite
+        .before_tool_call(BeforeToolCallContext {
+            tool_call_id: "c1".into(),
+            tool_name: "echo".into(),
+            args: serde_json::json!({}),
+            messages: vec![],
+        })
+        .await;
+    assert!(
+        matches!(result, BeforeToolCallResult::Deny { .. }),
+        "block from beta must deny the call"
+    );
+
+    // beta was reached (and blocked), but gamma was NOT consulted.
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        &["base:before", "ext:alpha:before", "ext:beta:before"]
+    );
+}

@@ -47,10 +47,11 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use opi_agent::Diagnostic;
+use opi_agent::diagnostic::SOURCE_ADAPTER;
 use opi_agent::event::AgentEvent;
 use opi_agent::extension::{
     Extension, ExtensionCommand, ExtensionError, ExtensionHookResult, ExtensionRegistry,
@@ -59,6 +60,7 @@ use opi_agent::hooks::PrepareNextTurnContext;
 use opi_agent::loop_types::AgentLoopTurnUpdate;
 use opi_agent::message::AgentMessage;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
+use opi_agent::trace::{TraceCollector, TraceKind};
 use opi_ai::message::{OutputContent, ToolDef};
 use opi_ai::provider::ModelInfo;
 use serde_json::Value;
@@ -216,6 +218,11 @@ pub struct ProcessAdapter {
     commands: BTreeSet<String>,
     hooks: BTreeSet<String>,
     model_overrides: Vec<crate::adapter_protocol::AdapterModelOverride>,
+    /// Per-run trace collector pushed by the runtime before each run. When
+    /// present, the adapter records a `TraceKind::HookSkipped` record for each
+    /// hook it short-circuits because the hook is not in its capabilities, so
+    /// the "adapter implements only a subset" case is visible in trace data.
+    trace: Arc<Mutex<Option<Arc<TraceCollector>>>>,
 }
 
 impl std::fmt::Debug for ProcessAdapter {
@@ -256,13 +263,38 @@ impl ProcessAdapter {
             commands,
             hooks,
             model_overrides,
+            trace: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Record a `HookSkipped` trace record when this adapter does not implement
+    /// `hook`, if a trace collector is attached for the current run. No-op when
+    /// tracing is disabled, so skipping remains free when no one is observing.
+    fn record_hook_skip(&self, hook: &str) {
+        let Some(collector) = self.trace.lock().unwrap().clone() else {
+            return;
+        };
+        collector
+            .record(SOURCE_ADAPTER, TraceKind::HookSkipped)
+            .details(serde_json::json!({
+                "hook": hook,
+                "adapter": self.name.as_str(),
+            }))
+            .emit();
     }
 }
 
 impl Extension for ProcessAdapter {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Store the per-run trace collector so skipped hooks can be recorded.
+    /// Called by the runtime (via `ExtensionRegistry::set_trace_collector`)
+    /// before each run with the collector, and at run end with `None` so no
+    /// stale handle survives across runs.
+    fn set_trace_collector(&self, collector: Option<Arc<TraceCollector>>) {
+        *self.trace.lock().unwrap() = collector;
     }
 
     fn tools(&self) -> Vec<Box<dyn Tool>> {
@@ -309,6 +341,7 @@ impl Extension for ProcessAdapter {
         args: &Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ExtensionHookResult> + Send>> {
         if !self.hooks.contains("before_tool_call") {
+            self.record_hook_skip("before_tool_call");
             return Box::pin(async { ExtensionHookResult::Continue });
         }
 
@@ -370,6 +403,7 @@ impl Extension for ProcessAdapter {
         result: &ToolResult,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         if !self.hooks.contains("after_tool_call") {
+            self.record_hook_skip("after_tool_call");
             return Box::pin(async {});
         }
 
@@ -409,6 +443,7 @@ impl Extension for ProcessAdapter {
         Box<dyn std::future::Future<Output = Result<Vec<AgentMessage>, ExtensionError>> + Send>,
     > {
         if !self.hooks.contains("transform_context") {
+            self.record_hook_skip("transform_context");
             return Box::pin(async move { Ok(messages) });
         }
 
@@ -467,6 +502,7 @@ impl Extension for ProcessAdapter {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<AgentLoopTurnUpdate>> + Send>>
     {
         if !self.hooks.contains("prepare_next_turn") {
+            self.record_hook_skip("prepare_next_turn");
             return Box::pin(async { None });
         }
 

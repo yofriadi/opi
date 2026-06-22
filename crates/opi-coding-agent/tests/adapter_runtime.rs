@@ -668,3 +668,85 @@ async fn start_adapters_unsupported_kind_diagnostic_names_expected_and_actual() 
         "unsupported-kind package must not register an adapter"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8: skipped adapter hooks are visible in trace data (task 8.2).
+//
+// The capabilities mock declares only ["before_tool_call", "event"]; it does
+// NOT declare "after_tool_call" (or transform_context / prepare_next_turn).
+// When the adapter bridge short-circuits an undeclared hook, the skip must be
+// recorded as a TraceKind::HookSkipped record so the "adapter implements only
+// a subset" case is visible in Phase 7 trace data when tracing is enabled.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn phase8_skipped_adapter_hooks_trace() {
+    let (_host, adapter) = start_capabilities_adapter().await;
+
+    let sink = Arc::new(opi_agent::RecordingTraceSink::new());
+    let collector = Arc::new(opi_agent::TraceCollector::new(
+        "run-skip",
+        opi_agent::RedactionMode::Verbose,
+        sink.clone(),
+        None,
+    ));
+    collector.prepare().expect("prepare trace collector");
+    adapter.set_trace_collector(Some(collector.clone()));
+
+    // The capabilities mock declares only ["before_tool_call", "event"], so
+    // after_tool_call, transform_context, and prepare_next_turn are all
+    // undeclared -> each must emit a HookSkipped record when dispatched.
+    adapter
+        .on_after_tool_call(
+            "read",
+            &opi_agent::tool::ToolResult {
+                content: vec![],
+                details: None,
+                is_error: false,
+                terminate: false,
+            },
+        )
+        .await;
+    adapter
+        .transform_context(vec![])
+        .await
+        .expect("skipped transform_context passes messages through");
+    adapter
+        .prepare_next_turn(&PrepareNextTurnContext {
+            messages: vec![],
+            turn: 1,
+        })
+        .await;
+
+    let records = sink.snapshot();
+    let skipped_hooks: Vec<&str> = records
+        .iter()
+        .filter(|r| r.kind == opi_agent::TraceKind::HookSkipped)
+        .map(|r| {
+            r.details
+                .as_ref()
+                .and_then(|d| d["hook"].as_str())
+                .unwrap_or("")
+        })
+        .collect();
+    for required in ["after_tool_call", "transform_context", "prepare_next_turn"] {
+        assert!(
+            skipped_hooks.contains(&required),
+            "expected a HookSkipped record for {required}, got {skipped_hooks:?}"
+        );
+    }
+
+    // The record carries the adapter name and the hook name in its details.
+    let details = records
+        .iter()
+        .find(|r| r.kind == opi_agent::TraceKind::HookSkipped)
+        .expect("at least one HookSkipped record")
+        .details
+        .as_ref()
+        .expect("hook-skip record details");
+    assert_eq!(details["adapter"], "mock");
+
+    // Clearing the collector detaches the adapter so no stale handle survives
+    // across runs (production run-end path passes None).
+    adapter.set_trace_collector(None);
+}

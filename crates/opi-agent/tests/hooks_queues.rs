@@ -18,6 +18,7 @@ use opi_agent::message::AgentMessage;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_ai::message::{
     AssistantContent, AssistantMessage, InputContent, Message, OutputContent, ToolCall, ToolDef,
+    UserMessage,
 };
 use opi_ai::provider::{EventStream, Provider, ProviderError, Request};
 use opi_ai::stream::{AssistantStreamEvent, StopReason, Usage};
@@ -603,5 +604,421 @@ async fn phase8_queue_polling_order_compaction_stop_before_next_turn() {
     assert!(
         prepare_calls.lock().unwrap().is_empty(),
         "prepare_next_turn must not run after a compaction stop"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: hook order and failure-semantics contract (task 8.2).
+//
+// Pins the documented AgentHooks order and effects: transform_context ->
+// convert_to_llm -> (stream) -> before_tool_call -> execute -> after_tool_call
+// -> should_stop_after_turn -> prepare_next_turn. before_tool_call runs AFTER
+// schema validation and may block; after_tool_call replacement is reflected in
+// the final ToolExecutionEnd event and persisted result; prepare_next_turn may
+// inject a message into the next provider request; a terminal
+// should_stop_after_turn skips prepare_next_turn.
+// ---------------------------------------------------------------------------
+
+/// Echo tool that records each execution by call id so tests can prove whether
+/// `tool.execute` actually ran.
+struct CountingTool {
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl Tool for CountingTool {
+    fn definition(&self) -> ToolDef {
+        ToolDef {
+            name: "echo".into(),
+            description: "echoes input".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "text": { "type": "string" } },
+                "required": ["text"]
+            }),
+        }
+    }
+
+    fn execute(
+        &self,
+        call_id: &str,
+        args: serde_json::Value,
+        _signal: CancellationToken,
+        _on_update: Option<opi_agent::tool::UpdateCallback>,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>> {
+        let text = args["text"].as_str().unwrap_or_default().to_owned();
+        let calls = self.calls.clone();
+        let call_id = call_id.to_owned();
+        Box::pin(async move {
+            calls.lock().unwrap().push(call_id);
+            Ok(ToolResult {
+                content: vec![OutputContent::Text { text }],
+                details: None,
+                is_error: false,
+                terminate: false,
+            })
+        })
+    }
+
+    fn execution_mode(&self) -> ExecutionMode {
+        ExecutionMode::Sequential
+    }
+}
+
+/// Hooks that record the ordered sequence of every lifecycle entry, for the
+/// hook-ordering contract test. `convert_to_llm` and `transform_context` pass
+/// messages through so the loop can stream.
+struct OrderHooks {
+    log: Arc<Mutex<Vec<String>>>,
+    stop: bool,
+}
+
+impl AgentHooks for OrderHooks {
+    fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
+        self.log.lock().unwrap().push("convert".into());
+        Ok(messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::Llm(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn transform_context(
+        &self,
+        messages: Vec<AgentMessage>,
+        _signal: CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<AgentMessage>, AgentError>> + Send>> {
+        let log = self.log.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push("transform".into());
+            Ok(messages)
+        })
+    }
+
+    fn should_stop_after_turn(
+        &self,
+        _ctx: ShouldStopAfterTurnContext,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send>> {
+        let log = self.log.clone();
+        let stop = self.stop;
+        Box::pin(async move {
+            log.lock().unwrap().push("should_stop".into());
+            stop
+        })
+    }
+
+    fn before_tool_call(
+        &self,
+        _ctx: BeforeToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = BeforeToolCallResult> + Send>> {
+        let log = self.log.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push("before".into());
+            BeforeToolCallResult::Allow
+        })
+    }
+
+    fn after_tool_call(
+        &self,
+        _ctx: AfterToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = AfterToolCallResult> + Send>> {
+        let log = self.log.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push("after".into());
+            AfterToolCallResult::Keep
+        })
+    }
+
+    fn prepare_next_turn(
+        &self,
+        _ctx: PrepareNextTurnContext,
+    ) -> Pin<Box<dyn Future<Output = Option<AgentLoopTurnUpdate>> + Send>> {
+        let log = self.log.clone();
+        Box::pin(async move {
+            log.lock().unwrap().push("prepare".into());
+            None
+        })
+    }
+}
+
+/// Hooks that deny one named tool and record every before_tool_call by tool
+/// name, for the block-after-validation contract.
+struct DenyHooks {
+    deny: String,
+    before_calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl AgentHooks for DenyHooks {
+    fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
+        Ok(messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::Llm(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn before_tool_call(
+        &self,
+        ctx: BeforeToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = BeforeToolCallResult> + Send>> {
+        let deny = self.deny.clone();
+        let before_calls = self.before_calls.clone();
+        let tool_name = ctx.tool_name.clone();
+        Box::pin(async move {
+            let matches = tool_name == deny;
+            before_calls.lock().unwrap().push(tool_name);
+            if matches {
+                BeforeToolCallResult::Deny {
+                    reason: "denied by hook".into(),
+                }
+            } else {
+                BeforeToolCallResult::Allow
+            }
+        })
+    }
+}
+
+/// Hooks that inject a user message on the first prepare_next_turn, for the
+/// injection contract.
+struct InjectHooks {
+    injected: Arc<Mutex<bool>>,
+}
+
+impl AgentHooks for InjectHooks {
+    fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
+        Ok(messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::Llm(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn prepare_next_turn(
+        &self,
+        ctx: PrepareNextTurnContext,
+    ) -> Pin<Box<dyn Future<Output = Option<AgentLoopTurnUpdate>> + Send>> {
+        let injected = self.injected.clone();
+        Box::pin(async move {
+            // First prepare fires after turn 0 (ctx.turn == 1).
+            if ctx.turn == 1 {
+                *injected.lock().unwrap() = true;
+                Some(AgentLoopTurnUpdate {
+                    extra_messages: vec![AgentMessage::Llm(Message::User(UserMessage {
+                        content: vec![InputContent::Text {
+                            text: "injected-from-prepare".into(),
+                        }],
+                        timestamp_ms: 0,
+                    }))],
+                })
+            } else {
+                None
+            }
+        })
+    }
+}
+
+// DoD: the six AgentHooks methods fire in the documented order within a turn
+// (transform -> convert -> before -> after -> should_stop -> prepare).
+#[tokio::test]
+async fn phase8_hook_contract_order() {
+    let provider = RecordingProvider::new(vec![
+        tool_call_response("c1", "echo", r#"{"text":"hello"}"#),
+        text_response("done"),
+    ]);
+
+    let log = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hooks = Box::new(OrderHooks {
+        log: log.clone(),
+        stop: false,
+    });
+
+    let mut agent = make_agent(provider, vec![Box::new(EchoTool)], hooks);
+    agent.prompt("test").await.unwrap();
+
+    let recorded = log.lock().unwrap().clone();
+    assert!(
+        recorded.len() >= 6,
+        "expected at least six hook entries, got {recorded:?}"
+    );
+    assert_eq!(
+        &recorded[..6],
+        &[
+            "transform",
+            "convert",
+            "before",
+            "after",
+            "should_stop",
+            "prepare",
+        ],
+        "first-turn hook order must be transform -> convert -> before -> after -> should_stop -> prepare"
+    );
+}
+
+// DoD: before_tool_call runs AFTER schema validation. An invalid-args call
+// fails validation before the hook and before execute; a valid-args call with
+// a Deny hook runs the hook but still does not execute the tool.
+#[tokio::test]
+async fn phase8_hook_contract_before_call_after_validation() {
+    let execs = Arc::new(Mutex::new(Vec::<String>::new()));
+
+    // Case 1: invalid arguments -> schema validation fails inside execute_tool
+    // before before_tool_call and before tool.execute. The error result does
+    // not terminate, so the loop needs a second response to end gracefully.
+    let provider = RecordingProvider::new(vec![
+        tool_call_response("c-invalid", "echo", r#"{}"#),
+        text_response("done"),
+    ]);
+    let before_calls = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hooks = Box::new(DenyHooks {
+        deny: "never-matches".into(),
+        before_calls: before_calls.clone(),
+    });
+    let tool = CountingTool {
+        calls: execs.clone(),
+    };
+    let mut agent = make_agent(provider, vec![Box::new(tool)], hooks);
+    let result = agent.prompt("test").await.unwrap();
+
+    assert!(
+        before_calls.lock().unwrap().is_empty(),
+        "before_tool_call must NOT run when schema validation fails first"
+    );
+    assert!(
+        execs.lock().unwrap().is_empty(),
+        "tool.execute must NOT run when schema validation fails"
+    );
+    let invalid_result = result
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::Llm(Message::ToolResult(tr)) if tr.tool_call_id == "c-invalid" => {
+                Some(tr.clone())
+            }
+            _ => None,
+        })
+        .expect("validation-failure tool result must be persisted");
+    assert!(
+        invalid_result.is_error,
+        "invalid-args tool result must be an error"
+    );
+
+    // Case 2: valid arguments but the hook denies -> before_tool_call runs,
+    // validation passed, but tool.execute still does NOT run. Same as above:
+    // the denied result does not terminate, so a second response is needed.
+    let provider = RecordingProvider::new(vec![
+        tool_call_response("c-deny", "echo", r#"{"text":"hello"}"#),
+        text_response("done"),
+    ]);
+    let before_calls2 = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hooks2 = Box::new(DenyHooks {
+        deny: "echo".into(),
+        before_calls: before_calls2.clone(),
+    });
+    let tool2 = CountingTool {
+        calls: execs.clone(),
+    };
+    let mut agent = make_agent(provider, vec![Box::new(tool2)], hooks2);
+    let result2 = agent.prompt("test").await.unwrap();
+
+    assert_eq!(
+        before_calls2.lock().unwrap().as_slice(),
+        &["echo".to_string()],
+        "before_tool_call must run after validation passes"
+    );
+    assert!(
+        execs.lock().unwrap().is_empty(),
+        "tool.execute must NOT run when before_tool_call denies"
+    );
+    let denied = result2
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::Llm(Message::ToolResult(tr)) if tr.tool_call_id == "c-deny" => {
+                Some(tr.clone())
+            }
+            _ => None,
+        })
+        .expect("denied tool result must be persisted");
+    assert!(denied.is_error, "denied tool result must be an error");
+    assert!(
+        matches!(&denied.content[0], OutputContent::Text { text } if text == "denied by hook"),
+        "denied result must carry the hook reason, got {:?}",
+        denied.content
+    );
+}
+
+// DoD: after_tool_call replacement is reflected in the final ToolExecutionEnd
+// event (replacement happens before the event is emitted).
+#[tokio::test]
+async fn phase8_hook_contract_after_replace_before_events() {
+    let provider = RecordingProvider::new(vec![
+        tool_call_response("c1", "echo", r#"{"text":"hello"}"#),
+        text_response("done"),
+    ]);
+
+    let end_results: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let end_results_clone = end_results.clone();
+
+    let mut agent = make_agent(provider, vec![Box::new(EchoTool)], Box::new(ReplacingHooks));
+    agent.subscribe(Box::new(move |e| {
+        if let AgentEvent::ToolExecutionEnd { result, .. } = e {
+            end_results_clone.lock().unwrap().push(result.clone());
+        }
+    }));
+    agent.prompt("test").await.unwrap();
+
+    let results = end_results.lock().unwrap();
+    assert_eq!(results.len(), 1, "one tool execution end event expected");
+    let replaced = &results[0];
+    assert_eq!(
+        replaced[0]["text"], "replaced: 1",
+        "ToolExecutionEnd must carry the REPLACED result, proving after_tool_call ran before the event"
+    );
+}
+
+// DoD: prepare_next_turn may inject a message that reaches the next provider
+// request.
+#[tokio::test]
+async fn phase8_hook_contract_prepare_injection() {
+    let provider = RecordingProvider::new(vec![
+        tool_call_response("c1", "echo", r#"{"text":"hello"}"#),
+        text_response("done"),
+    ]);
+    let received = provider.received_messages.clone();
+
+    let injected = Arc::new(Mutex::new(false));
+    let hooks = Box::new(InjectHooks {
+        injected: injected.clone(),
+    });
+
+    let mut agent = make_agent(provider, vec![Box::new(EchoTool)], hooks);
+    agent.prompt("test").await.unwrap();
+
+    assert!(*injected.lock().unwrap(), "prepare_next_turn must have run");
+    let msgs = received.lock().unwrap();
+    assert_eq!(msgs.len(), 2, "provider called twice");
+    assert!(
+        user_text_in_messages(&msgs[1], "injected-from-prepare"),
+        "injected prepare message must reach the second provider request"
+    );
+}
+
+// DoD: a terminal should_stop_after_turn skips prepare_next_turn.
+#[tokio::test]
+async fn phase8_hook_contract_terminal_stop_skips_prepare() {
+    let provider = RecordingProvider::new(vec![text_response("only")]);
+
+    let hooks = RecordingHooks::new(true);
+    let prepare_calls = hooks.prepare_calls.clone();
+
+    let mut agent = make_agent(provider, vec![], Box::new(hooks));
+    agent.prompt("test").await.unwrap();
+
+    assert!(
+        prepare_calls.lock().unwrap().is_empty(),
+        "prepare_next_turn must be skipped after a terminal should_stop_after_turn"
     );
 }

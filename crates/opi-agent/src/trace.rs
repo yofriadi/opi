@@ -76,6 +76,11 @@ pub enum TraceKind {
     ToolCallCompleted,
     ToolCallFailed,
     ToolCallCancelled,
+    /// A hook dispatch was skipped because the implementing extension or
+    /// adapter did not declare that hook in its capabilities. Makes the
+    /// "adapter implements only a subset" case visible in trace data. Details
+    /// carry the hook name and the adapter/extension name.
+    HookSkipped,
     /// A diagnostic observation linked into the trace; carries `severity` and
     /// `diagnostic_code`.
     DiagnosticLinked,

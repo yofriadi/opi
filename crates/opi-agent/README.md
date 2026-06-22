@@ -92,6 +92,32 @@ Retryable provider errors such as rate limits and timeouts can be retried
 through `AgentLoopConfig.retry`. Retry start/end events are surfaced through
 `AgentEvent`.
 
+## Hook Semantics
+
+`AgentHooks` customizes the loop. The six methods run in this order and have
+these effects:
+
+| Hook | Order / effect |
+|------|----------------|
+| `transform_context` | Runs before provider conversion; may alter app-level messages. |
+| `convert_to_llm` | Converts app messages to provider messages and filters session-only state. |
+| `before_tool_call` | Runs after JSON Schema argument validation and before `tool.execute`; may `Deny` to block execution (the deny reason becomes the tool error). |
+| `after_tool_call` | Runs after execution and before the final `ToolExecutionEnd` event; may `Replace` the result so the replacement is what is emitted and persisted. |
+| `should_stop_after_turn` | Runs after `turn_end` and before steering/follow-up polling; returning `true` stops before the next turn and skips `prepare_next_turn`. |
+| `prepare_next_turn` | Runs only when `should_stop_after_turn` permits continuation, and before steering/follow-up polling; may inject messages into the next provider request. |
+
+Extension composition: `ExtensionRegistry::wrap_hooks` runs the base
+`AgentHooks` method first, then each extension in registration order. A
+`Block` from an extension's `on_before_tool_call` stops the chain at the first
+block; later extensions are not consulted. Extension `on_after_tool_call`
+observers cannot modify the result; only the base hook can `Replace`.
+
+When an adapter or extension implements only a subset of hooks, the skipped
+hooks are recorded as `trace::TraceKind::HookSkipped` records when verbose
+tracing is enabled. The runtime pushes the per-run `TraceCollector` to every
+extension via `Extension::set_trace_collector` before each run (and clears it
+after), so adapters that short-circuit an undeclared hook can record the skip.
+
 ## Sessions and Compaction
 
 Session storage is append-only JSONL:
