@@ -35,22 +35,58 @@ It depends on `opi-ai` for provider and message types. It does not implement the
 
 ## Loop Shape
 
+The loop emits a fixed runtime event order. `AgentStart` fires once before the
+first turn and `AgentEnd` fires once on every termination path (normal stop,
+hook stop, terminate flags, cancellation, or error). Per turn (`0..max_turns`):
+
 ```text
-agent_loop
-  -> transform_context
-  -> convert_to_llm
-  -> validate request capabilities
-  -> provider.stream(Request)
-  -> emit and accumulate AssistantStreamEvent values
-  -> detect tool calls
-  -> validate tool args with jsonschema
-  -> before_tool_call hook
-  -> execute tools in parallel or sequential batches
-  -> after_tool_call hook
-  -> should_stop_after_turn hook
-  -> prepare_next_turn hook
-  -> drain steering and follow-up queues
+agent_start                              # once, before turn 0
+  for each turn:
+    cancel check                          # cancelled -> AgentEnd, AgentError::Cancelled
+    turn_start
+    transform_context                     # AgentHooks::transform_context
+    convert_to_llm                        # AgentHooks::convert_to_llm
+    validate request capabilities         # failure -> AgentEnd, AgentError::Provider
+    provider.stream(Request)
+      message_start                       # assistant stream Start
+      message_update                      # per text/thinking delta
+      message_end                         # complete assistant message
+      if tool calls are present:
+        validate tool args (jsonschema)
+        tool_execution_start              # per tool call
+        before_tool_call                  # AgentHooks::before_tool_call (may block)
+        tool.execute                      # parallel batch, or sequential if any tool is Sequential
+        after_tool_call                   # AgentHooks::after_tool_call (may replace result)
+        tool_execution_end                # per tool call
+        turn_end                          # assistant message + tool_results
+        if every result terminates -> AgentEnd, return Ok
+        should_stop_after_turn            # true -> AgentEnd, return Ok (compaction stop)
+      else:
+        turn_end                          # assistant message, no tool_results
+        should_stop_after_turn            # true -> AgentEnd, return Ok
+    prepare_next_turn                     # AgentHooks::prepare_next_turn; SKIPPED after a
+                                         # terminal should_stop_after_turn; may inject messages
+    drain steering queue                  # non-empty -> QueueUpdate, append, next turn
+    if no tools are pending:
+      pop follow-up queue                 # non-empty -> QueueUpdate, append, next turn
+      else -> stop
+agent_end                                 # once, on termination
 ```
+
+Boundaries:
+
+- `should_stop_after_turn` runs after `turn_end` and before `prepare_next_turn`
+  and any queue polling. A compaction coordinator returns `true` here to stop
+  before the next turn; `prepare_next_turn` and steering/follow-up polling do
+  not run after a terminal stop.
+- `prepare_next_turn` runs only when `should_stop_after_turn` permits
+  continuation, and before steering/follow-up polling. Injected messages are
+  included in the next provider request.
+- Steering is drained before follow-up. Follow-up is popped only when no tools
+  are pending and the steering queue is empty.
+- `CompactionEngine` is a context-size primitive; the higher-level coordinator
+  that connects compaction to persisted CLI sessions lives in `opi-coding-agent`
+  and stops the loop through `should_stop_after_turn`.
 
 Retryable provider errors such as rate limits and timeouts can be retried
 through `AgentLoopConfig.retry`. Retry start/end events are surfaced through

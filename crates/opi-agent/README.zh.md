@@ -33,22 +33,55 @@ envelope，以及 streaming proxy。
 
 ## 主循环形状
 
+主循环按固定的运行时事件顺序执行。`AgentStart` 在首轮之前仅触发一次，
+`AgentEnd` 在每条终止路径上仅触发一次（正常停止、Hook 停止、terminate 标志、
+取消或错误）。每个 turn（`0..max_turns`）内：
+
 ```text
-agent_loop
-  -> transform_context
-  -> convert_to_llm
-  -> validate request capabilities
-  -> provider.stream(Request)
-  -> emit and accumulate AssistantStreamEvent values
-  -> detect tool calls
-  -> validate tool args with jsonschema
-  -> before_tool_call hook
-  -> execute tools in parallel or sequential batches
-  -> after_tool_call hook
-  -> should_stop_after_turn hook
-  -> prepare_next_turn hook
-  -> drain steering and follow-up queues
+agent_start                              # 仅一次，首轮之前
+  对每个 turn：
+    cancel check                          # 被取消 -> AgentEnd, AgentError::Cancelled
+    turn_start
+    transform_context                     # AgentHooks::transform_context
+    convert_to_llm                        # AgentHooks::convert_to_llm
+    validate request capabilities         # 失败 -> AgentEnd, AgentError::Provider
+    provider.stream(Request)
+      message_start                       # assistant 流 Start
+      message_update                      # 每个文本/思考 delta
+      message_end                         # 完整的 assistant 消息
+      若存在 tool call：
+        validate tool args (jsonschema)
+        tool_execution_start              # 每个 tool call
+        before_tool_call                  # AgentHooks::before_tool_call（可阻止）
+        tool.execute                      # 并行批次；若任一工具为 Sequential 则整批串行
+        after_tool_call                   # AgentHooks::after_tool_call（可替换结果）
+        tool_execution_end                # 每个 tool call
+        turn_end                          # assistant 消息 + tool_results
+        若所有结果都 terminate -> AgentEnd, return Ok
+        should_stop_after_turn            # true -> AgentEnd, return Ok（压缩停止）
+      否则：
+        turn_end                          # assistant 消息，无 tool_results
+        should_stop_after_turn            # true -> AgentEnd, return Ok
+    prepare_next_turn                     # AgentHooks::prepare_next_turn；在终止的
+                                         # should_stop_after_turn 之后被跳过；可注入消息
+    drain steering queue                  # 非空 -> QueueUpdate，追加，进入下一 turn
+    若无待处理工具：
+      pop follow-up queue                 # 非空 -> QueueUpdate，追加，进入下一 turn
+      否则 -> 停止
+agent_end                                 # 仅一次，终止时
 ```
+
+边界：
+
+- `should_stop_after_turn` 在 `turn_end` 之后、`prepare_next_turn` 及任何队列
+  轮询之前执行。压缩协调器在此返回 `true` 以在下一 turn 之前停止；终止停止
+  之后不会运行 `prepare_next_turn`，也不会轮询 steering/follow-up。
+- `prepare_next_turn` 仅在 `should_stop_after_turn` 允许继续时执行，且早于
+  steering/follow-up 轮询；注入的消息会进入下一次 provider 请求。
+- Steering 先于 follow-up 被排空。仅当无待处理工具且 steering 队列为空时，
+  才弹出 follow-up。
+- `CompactionEngine` 只是上下文大小的原语；将压缩与持久化 CLI 会话相连的
+  高层协调器位于 `opi-coding-agent`，并通过 `should_stop_after_turn` 停止主循环。
 
 Rate limit 和 timeout 等可重试 Provider 错误可通过 `AgentLoopConfig.retry` 处理。
 重试开始/结束会通过 `AgentEvent` 暴露。

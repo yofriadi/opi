@@ -11,9 +11,9 @@ use opi_agent::agent::Agent;
 use opi_agent::event::AgentEvent;
 use opi_agent::hooks::{
     AfterToolCallContext, AfterToolCallResult, AgentHooks, BeforeToolCallContext,
-    BeforeToolCallResult, ShouldStopAfterTurnContext,
+    BeforeToolCallResult, PrepareNextTurnContext, ShouldStopAfterTurnContext,
 };
-use opi_agent::loop_types::{AgentError, AgentLoopConfig};
+use opi_agent::loop_types::{AgentError, AgentLoopConfig, AgentLoopTurnUpdate};
 use opi_agent::message::AgentMessage;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_ai::message::{
@@ -109,6 +109,7 @@ impl Tool for EchoTool {
 struct RecordingHooks {
     after_calls: Arc<Mutex<Vec<AfterToolCallContext>>>,
     stop_calls: Arc<Mutex<Vec<ShouldStopAfterTurnContext>>>,
+    prepare_calls: Arc<Mutex<Vec<u32>>>,
     stop_result: bool,
 }
 
@@ -117,6 +118,7 @@ impl RecordingHooks {
         Self {
             after_calls: Arc::new(Mutex::new(Vec::new())),
             stop_calls: Arc::new(Mutex::new(Vec::new())),
+            prepare_calls: Arc::new(Mutex::new(Vec::new())),
             stop_result,
         }
     }
@@ -163,6 +165,20 @@ impl AgentHooks for RecordingHooks {
         Box::pin(async move {
             calls.lock().unwrap().push(ctx);
             AfterToolCallResult::Keep
+        })
+    }
+
+    // Records each invocation so queue-polling-order tests can prove that a
+    // terminal should_stop_after_turn skips prepare_next_turn. Returns None
+    // (no injection), preserving the behavior other tests rely on.
+    fn prepare_next_turn(
+        &self,
+        ctx: PrepareNextTurnContext,
+    ) -> Pin<Box<dyn Future<Output = Option<AgentLoopTurnUpdate>> + Send>> {
+        let prepare_calls = self.prepare_calls.clone();
+        Box::pin(async move {
+            prepare_calls.lock().unwrap().push(ctx.turn);
+            None
         })
     }
 }
@@ -494,5 +510,98 @@ async fn queue_update_event_emitted() {
     assert!(
         updates[0].0.contains(&"redirect".to_owned()),
         "event should contain steering message"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: queue-polling order contract (task 8.1)
+//
+// Pins the documented order: steering is drained before follow-up, and a
+// compaction stop (should_stop_after_turn == true) terminates the run before
+// prepare_next_turn runs or any queued message is polled.
+// ---------------------------------------------------------------------------
+
+// DoD: when both a steering and a follow-up message are queued, steering is
+// delivered to the next provider request strictly before the follow-up.
+#[tokio::test]
+async fn phase8_queue_polling_order_steering_before_follow_up() {
+    let provider = RecordingProvider::new(vec![
+        text_response("first"),
+        text_response("second"),
+        text_response("third"),
+    ]);
+    let received = provider.received_messages.clone();
+
+    let hooks = RecordingHooks::new(false);
+
+    let mut agent = make_agent(provider, vec![], Box::new(hooks));
+    agent.steer("steer-msg".into());
+    agent.follow_up("follow-msg".into());
+    agent.prompt("test").await.unwrap();
+
+    let msgs = received.lock().unwrap();
+    assert_eq!(
+        msgs.len(),
+        3,
+        "steering + follow-up yield three provider calls"
+    );
+
+    let steer_call = msgs
+        .iter()
+        .position(|ms| user_text_in_messages(ms, "steer-msg"))
+        .expect("steering message must be delivered");
+    let follow_call = msgs
+        .iter()
+        .position(|ms| user_text_in_messages(ms, "follow-msg"))
+        .expect("follow-up message must be delivered");
+    assert_eq!(
+        steer_call, 1,
+        "steering delivered on the second provider call (index 1)"
+    );
+    assert_eq!(
+        follow_call, 2,
+        "follow-up delivered on the third provider call (index 2), after steering"
+    );
+    assert!(
+        steer_call < follow_call,
+        "steering must be delivered before follow-up"
+    );
+    // Follow-up is not delivered in the same call as steering.
+    assert!(
+        !user_text_in_messages(&msgs[1], "follow-msg"),
+        "follow-up must not accompany steering in the second call"
+    );
+}
+
+// DoD: a compaction stop signaled through should_stop_after_turn terminates the
+// run at the stop gate, before prepare_next_turn runs and before a queued
+// follow-up is polled (no next turn is prepared).
+#[tokio::test]
+async fn phase8_queue_polling_order_compaction_stop_before_next_turn() {
+    let provider = RecordingProvider::new(vec![text_response("only")]);
+    let received = provider.received_messages.clone();
+
+    let hooks = RecordingHooks::new(true);
+    let prepare_calls = hooks.prepare_calls.clone();
+
+    let mut agent = make_agent(provider, vec![], Box::new(hooks));
+    agent.follow_up("must-not-deliver".into());
+    agent.prompt("test").await.unwrap();
+
+    let msgs = received.lock().unwrap();
+    assert_eq!(
+        msgs.len(),
+        1,
+        "compaction stop: exactly one provider call, no next turn"
+    );
+    assert!(
+        !msgs
+            .iter()
+            .any(|ms| user_text_in_messages(ms, "must-not-deliver")),
+        "follow-up must not be delivered after a compaction stop"
+    );
+    assert!(
+        prepare_calls.lock().unwrap().is_empty(),
+        "prepare_next_turn must not run after a compaction stop"
     );
 }

@@ -4,6 +4,7 @@
 //!   H5 — prepare_next_turn message injection
 //!   M1 — should_stop_after_turn receives current-turn tool_results only
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -714,4 +715,338 @@ async fn m1_tool_results_scoped_to_current_turn() {
         "turn 2 should have exactly 1 tool_result (current turn only)"
     );
     assert_eq!(with_tools[1].tool_results[0].tool_call_id, "c2");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: runtime event order and queue-polling contract (task 8.1)
+//
+// Pins the documented agent_start -> agent_end order through
+// opi_agent::agent_loop: AgentStart/AgentEnd bracket the run; per turn the
+// order is TurnStart -> assistant message events -> tool execution -> TurnEnd
+// -> should_stop_after_turn -> prepare_next_turn -> steering/follow-up polling.
+// ---------------------------------------------------------------------------
+
+/// Reduce an `AgentEvent` to a stable kind label for sequence assertions.
+fn event_kind(e: &AgentEvent) -> &'static str {
+    match e {
+        AgentEvent::AgentStart => "agent_start",
+        AgentEvent::AgentEnd { .. } => "agent_end",
+        AgentEvent::TurnStart => "turn_start",
+        AgentEvent::TurnEnd { .. } => "turn_end",
+        AgentEvent::MessageStart { .. } => "message_start",
+        AgentEvent::MessageUpdate { .. } => "message_update",
+        AgentEvent::MessageEnd { .. } => "message_end",
+        AgentEvent::ToolExecutionStart { .. } => "tool_execution_start",
+        AgentEvent::ToolExecutionUpdate { .. } => "tool_execution_update",
+        AgentEvent::ToolExecutionEnd { .. } => "tool_execution_end",
+        AgentEvent::QueueUpdate { .. } => "queue_update",
+        AgentEvent::AutoRetryStart { .. } => "auto_retry_start",
+        AgentEvent::AutoRetryEnd { .. } => "auto_retry_end",
+        AgentEvent::CompactionStart { .. } => "compaction_start",
+        AgentEvent::CompactionEnd { .. } => "compaction_end",
+        AgentEvent::SessionPersistError { .. } => "session_persist_error",
+        // AgentEvent is #[non_exhaustive]; future variants collapse to "other".
+        _ => "other",
+    }
+}
+
+/// Build an event sink that records the kind of every emitted `AgentEvent`.
+fn recording_sink(log: Arc<Mutex<Vec<String>>>) -> Box<dyn Fn(AgentEvent) + Send + Sync> {
+    Box::new(move |e| {
+        log.lock().unwrap().push(event_kind(&e).to_string());
+    })
+}
+
+/// Position of the first occurrence of `kind` in the recorded sequence.
+fn event_pos(seq: &[String], kind: &str) -> usize {
+    seq.iter()
+        .position(|s| s == kind)
+        .unwrap_or_else(|| panic!("event `{kind}` not present in sequence: {seq:?}"))
+}
+
+/// True if `m` is a user text message equal to `target`.
+fn matches_user_text(m: &AgentMessage, target: &str) -> bool {
+    matches!(
+        m,
+        AgentMessage::Llm(Message::User(u))
+            if u.content.iter().any(|c| matches!(
+                c,
+                InputContent::Text { text } if text == target
+            ))
+    )
+}
+
+/// Hooks that terminate the run on the first `should_stop_after_turn` and
+/// record every `prepare_next_turn` invocation. Models a compaction coordinator
+/// that requests a stop before the next turn.
+struct TerminalStopHooks {
+    prepare_calls: Arc<Mutex<Vec<u32>>>,
+}
+
+impl AgentHooks for TerminalStopHooks {
+    fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
+        Ok(messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::Llm(msg) => Some(msg.clone()),
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn should_stop_after_turn(
+        &self,
+        _: ShouldStopAfterTurnContext,
+    ) -> Pin<Box<dyn Future<Output = bool> + Send>> {
+        Box::pin(async { true })
+    }
+
+    fn before_tool_call(
+        &self,
+        _: BeforeToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = BeforeToolCallResult> + Send>> {
+        Box::pin(async { BeforeToolCallResult::Allow })
+    }
+
+    fn after_tool_call(
+        &self,
+        _: AfterToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = AfterToolCallResult> + Send>> {
+        Box::pin(async { AfterToolCallResult::Keep })
+    }
+
+    fn prepare_next_turn(
+        &self,
+        ctx: PrepareNextTurnContext,
+    ) -> Pin<Box<dyn Future<Output = Option<AgentLoopTurnUpdate>> + Send>> {
+        let prepare_calls = self.prepare_calls.clone();
+        Box::pin(async move {
+            prepare_calls.lock().unwrap().push(ctx.turn);
+            None
+        })
+    }
+}
+
+// DoD: no-tool run emits the documented order with no tool events.
+#[tokio::test]
+async fn phase8_event_order_no_tool_run() {
+    let provider = RecordingProvider::new(vec![text_response("done")]);
+    let call_count = provider.call_count.clone();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = recording_sink(events.clone());
+
+    let context = make_context(Box::new(provider), vec![]);
+    let hooks = MinimalHooks;
+
+    opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        sink,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let seq = events.lock().unwrap();
+    assert_eq!(
+        seq.first().map(String::as_str),
+        Some("agent_start"),
+        "AgentStart must be first: {seq:?}"
+    );
+    assert_eq!(
+        seq.last().map(String::as_str),
+        Some("agent_end"),
+        "AgentEnd must be last: {seq:?}"
+    );
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        1,
+        "no-tool run makes exactly one provider call"
+    );
+    assert!(
+        !seq.contains(&"tool_execution_start".to_string()),
+        "no tool events in a no-tool run: {seq:?}"
+    );
+    assert!(!seq.contains(&"tool_execution_end".to_string()));
+    assert_eq!(
+        seq.iter().filter(|s| s.as_str() == "turn_start").count(),
+        1,
+        "no-tool run is a single turn"
+    );
+    assert_eq!(seq.iter().filter(|s| s.as_str() == "turn_end").count(), 1);
+    // turn_start < message_end < turn_end within the only turn
+    assert!(event_pos(&seq, "turn_start") < event_pos(&seq, "message_end"));
+    assert!(event_pos(&seq, "message_end") < event_pos(&seq, "turn_end"));
+}
+
+// DoD: one-tool run brackets tool execution inside the first turn and runs a
+// second turn for the final assistant response.
+#[tokio::test]
+async fn phase8_event_order_one_tool_run() {
+    let provider = RecordingProvider::new(vec![
+        multi_tool_call_response(vec![("c1", "echo", r#"{"arg":"x"}"#)]),
+        text_response("done"),
+    ]);
+    let call_count = provider.call_count.clone();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = recording_sink(events.clone());
+
+    let context = make_context(Box::new(provider), vec![Box::new(EchoTool)]);
+    let hooks = MinimalHooks;
+
+    opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        sink,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let seq = events.lock().unwrap();
+    assert_eq!(seq.first().map(String::as_str), Some("agent_start"));
+    assert_eq!(seq.last().map(String::as_str), Some("agent_end"));
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        2,
+        "one-tool run makes two provider calls"
+    );
+    assert_eq!(
+        seq.iter().filter(|s| s.as_str() == "turn_start").count(),
+        2,
+        "one-tool run spans two turns"
+    );
+    assert_eq!(seq.iter().filter(|s| s.as_str() == "turn_end").count(), 2);
+    assert_eq!(
+        seq.iter()
+            .filter(|s| s.as_str() == "tool_execution_start")
+            .count(),
+        1
+    );
+    assert_eq!(
+        seq.iter()
+            .filter(|s| s.as_str() == "tool_execution_end")
+            .count(),
+        1
+    );
+    // Tool execution sits inside the first turn: after its assistant
+    // message_end and before the first turn_end.
+    let first_turn_end = event_pos(&seq, "turn_end");
+    assert!(event_pos(&seq, "message_end") < event_pos(&seq, "tool_execution_start"));
+    assert!(event_pos(&seq, "tool_execution_start") < first_turn_end);
+    assert!(event_pos(&seq, "tool_execution_end") < first_turn_end);
+}
+
+// DoD: prepare_next_turn injection is applied before follow-up polling. With a
+// turn-1 injection and a queued follow-up, the injected message reaches the
+// provider strictly before the follow-up message.
+#[tokio::test]
+async fn phase8_event_order_prepare_next_turn_injection() {
+    let provider = RecordingProvider::new(vec![
+        text_response("first"),
+        text_response("second"),
+        text_response("third"),
+    ]);
+    let call_count = provider.call_count.clone();
+
+    let follow_up_queue: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::from(vec![
+        "follow-up-msg".to_string(),
+    ])));
+
+    let context = AgentLoopContext {
+        provider: Box::new(provider),
+        tools: vec![],
+        messages: vec![AgentMessage::Llm(Message::User(
+            opi_ai::message::UserMessage {
+                content: vec![InputContent::Text {
+                    text: "seed".into(),
+                }],
+                timestamp_ms: 0,
+            },
+        ))],
+        model: "mock".into(),
+        system: None,
+        steering_queue: None,
+        follow_up_queue: Some(follow_up_queue),
+        diagnostic_sink: None,
+        trace: None,
+    };
+    let hooks = InjectingHooks::new(1, "injected-context".into());
+
+    let result = opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        noop_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        3,
+        "injection then follow-up yield three provider calls"
+    );
+    let injected_at = result
+        .iter()
+        .position(|m| matches_user_text(m, "injected-context"))
+        .expect("injected message must be present");
+    let follow_up_at = result
+        .iter()
+        .position(|m| matches_user_text(m, "follow-up-msg"))
+        .expect("follow-up message must be present");
+    assert!(
+        injected_at < follow_up_at,
+        "prepare_next_turn injection must precede follow-up delivery"
+    );
+}
+
+// DoD: a terminal should_stop_after_turn stops the run before prepare_next_turn
+// runs and before any queue is polled.
+#[tokio::test]
+async fn phase8_event_order_terminal_should_stop_skips_prepare_next_turn() {
+    let provider = RecordingProvider::new(vec![text_response("only")]);
+    let call_count = provider.call_count.clone();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = recording_sink(events.clone());
+
+    let hooks = TerminalStopHooks {
+        prepare_calls: Arc::new(Mutex::new(Vec::new())),
+    };
+    let prepare_calls = hooks.prepare_calls.clone();
+
+    let context = make_context(Box::new(provider), vec![]);
+
+    opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        sink,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let seq = events.lock().unwrap();
+    assert_eq!(seq.first().map(String::as_str), Some("agent_start"));
+    assert_eq!(seq.last().map(String::as_str), Some("agent_end"));
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        1,
+        "terminal stop makes exactly one provider call"
+    );
+    assert!(
+        prepare_calls.lock().unwrap().is_empty(),
+        "prepare_next_turn must NOT run after a terminal should_stop_after_turn"
+    );
+    assert!(
+        !seq.contains(&"queue_update".to_string()),
+        "no queue polling after a terminal should_stop_after_turn: {seq:?}"
+    );
 }
