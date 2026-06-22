@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-agent.svg)](https://crates.io/crates/opi-agent)
 [![Docs.rs](https://docs.rs/opi-agent/badge.svg)](https://docs.rs/opi-agent)
 
-> General-purpose agent runtime for [opi](https://github.com/OdradekAI/opi): streaming turns, tool calling, hooks, event emission, message queues, sessions, branch reconstruction, context compaction, SDK commands, extensions, and JSONL streaming proxy primitives.
+> Provider-independent agent runtime used by [opi](https://github.com/OdradekAI/opi).
 
 [Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
@@ -11,32 +11,29 @@
 
 Current crate version: `0.5.2`, inherited from the workspace package version.
 
-`opi-agent` provides the provider-independent runtime used by the `opi` binary. It handles the turn loop, JSON Schema validation for tools, parallel/sequential tool execution, retry-aware provider streaming, image-capability checks, event subscriptions, steering/follow-up queues, JSONL session storage, branch reconstruction from session leaves, threshold/manual/overflow compaction primitives, SDK/RPC command and response types, extension hooks/tools/state, and transport-agnostic streaming proxy support.
+`opi-agent` owns the agent loop and runtime primitives: tool contracts,
+JSON Schema argument validation, parallel/sequential tool execution, lifecycle
+hooks, event emission, steering/follow-up queues, session JSONL storage,
+branch reconstruction, context compaction, SDK/RPC types, extensions, local
+diagnostics, redacted trace envelopes, and streaming proxy support.
+
+It depends on `opi-ai` for provider and message types. It does not implement the
+`opi` CLI, terminal UI, or built-in filesystem/shell tools; those live in
+`opi-coding-agent` and `opi-tui`.
 
 ## Core Abstractions
 
-```rust
-pub trait Tool: Send + Sync {
-    fn definition(&self) -> ToolDef;
-    fn execute(&self, call_id: &str, args: serde_json::Value,
-               signal: CancellationToken,
-               on_update: Option<UpdateCallback>) -> ...;
-    fn execution_mode(&self) -> ExecutionMode { ExecutionMode::Parallel }
-}
+| Item | Purpose |
+|------|---------|
+| `Agent` | Stateful wrapper around the loop with prompt, continue, abort, subscribe, steering, follow-up, model switching, and tool registration helpers. |
+| `Tool` | JSON Schema based tool contract with cancellable execution and optional progress updates. |
+| `ExecutionMode` | Controls whether a tool can run in a parallel batch or forces sequential execution. |
+| `AgentHooks` | Lifecycle hooks for context transforms, LLM conversion, tool policy/results, stopping, and next-turn preparation. |
+| `AgentEvent` | Runtime event stream for lifecycle, streaming text, tool calls, queues, retries, compaction, and end state. |
+| `AgentSessionEvent` | Session-level event protocol used by `opi --json`. |
+| `AgentLoopConfig` | Loop limits, retry config, compaction config, and related runtime settings. |
 
-pub trait AgentHooks: Send + Sync {
-    async fn transform_context(...) -> Result<Vec<AgentMessage>, AgentError>;
-    fn convert_to_llm(...) -> Result<Vec<Message>, AgentError>;
-    async fn before_tool_call(...) -> BeforeToolCallResult;
-    async fn after_tool_call(...) -> AfterToolCallResult;
-    async fn should_stop_after_turn(...) -> bool;
-    async fn prepare_next_turn(...) -> Option<PrepareNextTurnUpdate>;
-}
-```
-
-`Agent` wraps the loop with `prompt`, `prompt_with_content`, `continue_`, `abort`, `subscribe`, `steer`, `follow_up`, `add_tool`, model switching, and message-buffer helpers.
-
-## Agent Loop
+## Loop Shape
 
 ```text
 agent_loop
@@ -44,119 +41,71 @@ agent_loop
   -> convert_to_llm
   -> validate request capabilities
   -> provider.stream(Request)
-  -> emit/accumulate AssistantStreamEvent values
+  -> emit and accumulate AssistantStreamEvent values
   -> detect tool calls
-  -> validate args with jsonschema
+  -> validate tool args with jsonschema
   -> before_tool_call hook
-  -> execute tools
-     -> all parallel tools run together
-     -> any sequential tool makes the batch sequential
+  -> execute tools in parallel or sequential batches
   -> after_tool_call hook
-  -> stop if all tool results terminate
   -> should_stop_after_turn hook
   -> prepare_next_turn hook
-  -> drain steering queue
-  -> pop one follow-up message when no tools are pending
+  -> drain steering and follow-up queues
 ```
 
-Retryable provider errors (`RateLimited`, `Timeout`) can be retried through `AgentLoopConfig.retry`. Retry start/end events are emitted through `AgentEvent`.
+Retryable provider errors such as rate limits and timeouts can be retried
+through `AgentLoopConfig.retry`. Retry start/end events are surfaced through
+`AgentEvent`.
 
 ## Sessions and Compaction
 
-Session storage uses append-only JSONL:
+Session storage is append-only JSONL:
 
 - First line: `SessionHeader`.
 - Entries: `MessageEntry`, `CompactionEntry`, and `LeafEntry`.
-- Reader supports crash recovery by skipping corrupt entries and truncated trailing lines.
-- `session_branch::SessionTree` reconstructs branch metadata and the active branch from `parent_id` links plus the latest `LeafEntry`.
+- Reader recovery skips corrupt entries and truncated trailing lines.
+- `session_branch::SessionTree` reconstructs active branches from `parent_id`
+  links and the latest `LeafEntry`.
 
-Compaction support includes:
+Compaction primitives include threshold/manual/overflow reasons,
+`CompactionEngine::should_compact`, `CompactionEngine::compact`, and
+`CompactionHooks` for custom summary generation. `opi-coding-agent` owns the
+higher-level coordinator that connects these primitives to persisted CLI
+sessions.
 
-- `CompactionConfig { enabled, threshold_tokens }`.
-- `CompactionReason::{Manual, Threshold, Overflow}`.
-- `CompactionEngine::should_compact`.
-- `CompactionEngine::compact`.
-- `CompactionHooks` for custom summary generation, with a core fallback summary.
+## SDK, Extensions, Diagnostics, and Proxy
 
-`opi-coding-agent` owns the higher-level coordinator that connects these primitives to runtime persistence.
+- `sdk` defines schema-versioned command/response types shared by RPC JSONL
+  mode and embedders. `SDK_SCHEMA_VERSION` is `3`.
+- `extension` provides `Extension` and `ExtensionRegistry` for lifecycle hooks,
+  custom tools, custom commands, event observers, extension state, custom
+  providers, and model overrides.
+- `diagnostic` and `diagnostic_sink` provide typed diagnostics with redaction
+  helpers for public JSON/text boundaries.
+- `trace` stores a local, redacted trace envelope for the latest run when a
+  caller opts in.
+- `streaming_proxy` forwards JSONL commands/events over arbitrary
+  `BufRead`/`Write` transports, emits a `proxy_ready` header, buffers events,
+  supports cancellation, and redacts common secret patterns by default.
 
-## Events
+All SDK/RPC/proxy surfaces are unstable 0.x APIs. Clients should check schema
+versions and pin exact crate versions when needed.
 
-`AgentEvent` reports agent lifecycle, turn lifecycle, message streaming, tool execution, queues, automatic retries, compaction, session persistence errors, and agent end.
+## Public Modules
 
-`AgentSessionEvent` is the session-level wire protocol used by JSON output. It wraps agent events and adds compaction, retry, thinking-level, session-info, and session-summary events.
+`agent`, `compaction`, `diagnostic`, `diagnostic_sink`, `event`, `extension`,
+`hooks`, `loop_types`, `message`, `sdk`, `session`, `session_branch`,
+`session_event`, `state`, `streaming_proxy`, `tool`, `trace`, and `validation`.
 
-## SDK, Extensions, and Proxy
+The crate root re-exports the most common runtime types, including `Agent`,
+`Tool`, `ToolResult`, `ToolError`, `ExecutionMode`, `AgentHooks`, `AgentEvent`,
+`AgentSessionEvent`, `AgentLoopConfig`, `SdkCommand`, `SdkResponse`, and
+`ToolDef`.
 
-- `sdk` defines the unstable schema-versioned command and response types shared by RPC JSONL mode and embedders. `SDK_SCHEMA_VERSION` is `3`, and commands are `prompt`, `continue`, `steer`, `follow_up`, `abort`, `set_model`, `set_thinking_level`, `compact`, `session_info`, `extension_command`, `trace`, and `quit`.
-- `extension` provides `Extension` and `ExtensionRegistry` for lifecycle hooks, custom tools, custom commands, event observers, per-extension state serialization/restoration, custom providers, and model overrides.
-- `streaming_proxy` forwards JSONL commands/events over arbitrary `BufRead`/`Write` transports, emits a `proxy_ready` header with schema version `3`, applies bounded event buffering, supports cancellation, and redacts common secret patterns by default.
+## Testing Support
 
-## Quick Example
-
-```rust
-use opi_agent::{ExecutionMode, Tool, ToolError, ToolResult};
-use opi_ai::message::{OutputContent, ToolDef};
-
-struct EchoTool;
-
-impl Tool for EchoTool {
-    fn definition(&self) -> ToolDef {
-        ToolDef {
-            name: "echo".into(),
-            description: "Echo back the input.".into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": { "text": { "type": "string" } },
-                "required": ["text"],
-            }),
-        }
-    }
-
-    fn execute(&self, _id: &str, args: serde_json::Value,
-               _signal: tokio_util::sync::CancellationToken,
-               _on_update: Option<opi_agent::tool::UpdateCallback>)
-        -> std::pin::Pin<Box<dyn std::future::Future<
-            Output = Result<ToolResult, ToolError>> + Send>>
-    {
-        let text = args.get("text").and_then(|v| v.as_str())
-            .unwrap_or("").to_owned();
-        Box::pin(async move {
-            Ok(ToolResult {
-                content: vec![OutputContent::Text { text }],
-                details: None,
-                is_error: false,
-                terminate: false,
-            })
-        })
-    }
-
-    fn execution_mode(&self) -> ExecutionMode { ExecutionMode::Parallel }
-}
-```
-
-Create an `Agent` with a boxed `opi_ai::Provider`, tool list, model, optional system prompt, `AgentLoopConfig`, and an `AgentHooks` implementation. Use `prompt_with_content` when a user turn contains text plus images.
-
-## Modules
-
-| Module | Purpose |
-|--------|---------|
-| `agent` | Stateful `Agent` wrapper, model switching, cancellation, queues, message buffer management |
-| root `agent_loop` | Provider/tool turn loop |
-| `tool` | `Tool`, `ToolResult`, `ToolError`, `ExecutionMode`, update callbacks |
-| `hooks` | Hook trait and hook context/result types |
-| `event` | Runtime event protocol |
-| `session_event` | Session-level event protocol for JSON mode |
-| `session` | JSONL session header, entries, writer, reader, recovery |
-| `session_branch` | Branch reconstruction from session entry parent links and leaf pointers |
-| `compaction` | Context compaction engine and hooks |
-| `sdk` | Shared SDK/RPC schema version, commands, responses, and event conversion |
-| `extension` | Extension trait, extension registry, hook wrapping, custom commands, tools, providers, model overrides, event dispatch, and state serialization |
-| `streaming_proxy` | Transport-agnostic JSONL command/event proxy with secret redaction |
-| `state` | Conversation state holder |
-| `message` | Agent-level message variants |
-| `loop_types` | Loop context, config, and errors |
-| `validation` | JSON Schema argument validation |
+Use `opi_ai::test_support::MockProvider` with custom `Tool` implementations for
+deterministic loop tests. Tests that touch session storage should use isolated
+temporary directories.
 
 ## License
 

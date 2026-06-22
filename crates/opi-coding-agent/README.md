@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-coding-agent.svg)](https://crates.io/crates/opi-coding-agent)
 [![Docs.rs](https://docs.rs/opi-coding-agent/badge.svg)](https://docs.rs/opi-coding-agent)
 
-> The `opi` binary: an interactive and non-interactive terminal coding agent built on `opi-ai`, `opi-agent`, and `opi-tui`.
+> The `opi` binary and embeddable coding harness.
 
 [Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
@@ -11,9 +11,22 @@
 
 Current crate version: `0.5.2`, inherited from the workspace package version.
 
-This crate produces the `opi` CLI and exposes the coding harness as a Rust library. It supports interactive TUI mode, positional-prompt non-interactive mode, NDJSON output, RPC JSONL mode, nine built-in provider prefixes plus configured OpenAI-compatible profiles, eight available built-in tools, pi-aligned interactive default tools, conservative non-interactive default tools, image attachments, model/session/branch/tree pickers, interactive session fork/clone, shell completion generation, context file loading, session persistence, resume/fork/list/delete session commands, context compaction, configurable keybindings/themes, per-provider proxy config, progressive resource discovery for packages/extensions/skills/fragments/themes, package add/remove/list/doctor commands, process-jsonl package adapters, retry, token usage totals, best-effort cost summaries, shared runtime diagnostics, an opt-in local trace envelope (`--trace` plus RPC `trace` for the latest run), and a top-level network-free `opi doctor` command.
+This crate connects `opi-ai`, `opi-agent`, and `opi-tui` into a terminal coding
+agent. It provides:
 
-Observability is local and explicit: shared diagnostics, the trace envelope, and `opi doctor` run against local state only, never phone home, and stay an unstable 0.x surface. opi does not collect telemetry or analytics and does not share sessions automatically.
+- the `opi` CLI binary;
+- interactive ratatui TUI mode;
+- one-shot text mode and `--json` NDJSON mode;
+- `--rpc` JSONL command/event mode;
+- model, session, branch, and session-tree pickers;
+- image attachments through `--image` and `/image`;
+- session list/resume/fork/delete commands;
+- eight built-in tools;
+- config, context-file loading, session persistence, compaction, retry, usage,
+  cost summaries, package/resource discovery, diagnostics, and opt-in traces.
+
+The crate is usable as a library through `CodingHarness`, but most users should
+start with the CLI.
 
 ## Install
 
@@ -22,7 +35,8 @@ cargo install opi-coding-agent
 opi --version
 ```
 
-Or download a pre-built binary from a [GitHub Release](https://github.com/OdradekAI/opi/releases).
+Pre-built binaries are attached to
+[GitHub Releases](https://github.com/OdradekAI/opi/releases).
 
 ## Quick Start
 
@@ -32,53 +46,54 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # Interactive TUI
 opi
 
-# Single prompt, assistant text to stdout
-opi "Find all TODO comments in this repository."
+# One prompt, assistant text to stdout
+opi "Find TODO comments in this repository."
 
-# NDJSON event stream for automation
+# NDJSON event stream
 opi --json "Summarize this workspace."
 
-# Pick a provider/model
+# Select a provider/model
 opi -m openai:gpt-4o "Explain crates/opi-coding-agent/src/main.rs"
 
 # Attach images to the first prompt
 opi --image screenshot.png "Review this screenshot."
 
-# Allow mutating tools in non-interactive automation
+# Allow write/edit/bash in non-interactive automation
 opi --allow-mutating "Update the README."
 ```
 
-## CLI Flags
+## CLI Commands and Flags
 
-| Flag / arg | Description |
-|------------|-------------|
-| `[PROMPT]...` | Positional prompt text; non-empty args select non-interactive mode |
-| `-m, --model <SPEC>` | Model spec such as `anthropic:claude-sonnet-4-5-20250514` |
-| `-c, --config <FILE>` | Explicit TOML config file; must exist |
-| `-s, --system <FILE>` | User system prompt file appended to the built-in coding prompt |
-| `--non-interactive` | Force non-interactive mode; prompt text is still required |
-| `--allow-mutating` | Allow `write`, `edit`, and `bash` in non-interactive mode |
-| `--json` | Output NDJSON events to stdout; also uses non-interactive mode |
-| `--list-sessions` | List stored sessions and exit |
-| `--resume <ID>` | Resume a stored session by id |
-| `--fork <ID>` | Fork a stored session by id into a new session |
-| `--delete-session <ID>` | Delete a stored session by id and exit |
-| `--generate-completion <SHELL>` | Generate shell completions for `bash`, `zsh`, `fish`, `powershell`, or `elvish` |
-| `-v, --verbose` | Enable debug tracing |
-| `--tools <TOOLS>` | Comma-separated active tool allowlist, for example `read,grep` |
-| `--no-tools` | Disable all tools |
-| `--no-builtin-tools` | Disable built-in tools while leaving extension/custom tools available to embedders or packages |
-| `--image <IMAGE>` | Attach one image file to the initial prompt; can be repeated |
-| `--list-models` | List available models from configured providers and exit |
-| `--rpc` | RPC JSONL mode: bidirectional command/event protocol over stdin/stdout |
-| `package <COMMAND>` | Manage extension packages: `add`, `remove`, `list`, `doctor` |
+Run `opi --help` for the exact current surface. Important commands and flags:
+
+| Command / flag | Purpose |
+|----------------|---------|
+| `[PROMPT]...` | Non-empty positional prompt selects one-shot text mode. |
+| `-m, --model <SPEC>` | Model spec such as `anthropic:claude-sonnet-4-5-20250514`. |
+| `-c, --config <FILE>` | Explicit TOML config file; it must exist. |
+| `-s, --system <FILE>` | Append a user system prompt file to the built-in coding prompt. |
+| `--non-interactive` | Force one-shot text mode; prompt text is still required. |
+| `--json` | Emit NDJSON session/agent events to stdout. |
+| `--rpc` | Start bidirectional JSONL command/event mode over stdin/stdout. |
+| `--allow-mutating` | Allow `write`, `edit`, and `bash` outside interactive mode. |
+| `--tools <TOOLS>` | Comma-separated built-in tool allowlist. |
+| `--no-tools` | Disable all tools. |
+| `--no-builtin-tools` | Disable built-in tools while leaving extension/custom tools available. |
+| `--image <PATH>` | Attach one image to the initial prompt; repeatable. |
+| `--list-models` | List models exposed by configured providers and exit. |
+| `--list-sessions` | List stored sessions and exit. |
+| `--resume <ID>` | Resume a stored session. |
+| `--fork <ID>` | Fork a stored session into a new session. |
+| `--delete-session <ID>` | Delete a stored session and exit. |
+| `--generate-completion <SHELL>` | Generate completion for `bash`, `zsh`, `fish`, `powershell`, or `elvish`. |
+| `--trace <PATH>` | Write an opt-in, redacted local trace envelope for a non-interactive/JSON run. |
+| `doctor [--json] [--scope ...]` | Local, network-free health check. |
+| `package <add|remove|list|doctor>` | Manage local/git extension packages. |
 
 ## Providers
 
-`opi-coding-agent` builds a provider from the configured model prefix.
-
-| Prefix | Provider | Default credentials/config |
-|--------|----------|----------------------------|
+| Prefix | Backend | Default credentials/config |
+|--------|---------|----------------------------|
 | `anthropic:` | `AnthropicProvider` | `ANTHROPIC_API_KEY` |
 | `openai:` | `OpenAiChatProvider` | `OPENAI_API_KEY` |
 | `openai-responses:` | `OpenAiResponsesProvider` | `OPENAI_API_KEY` |
@@ -90,201 +105,57 @@ opi --allow-mutating "Update the README."
 | `vertex:` | `VertexProvider` | `VERTEX_ACCESS_TOKEN`; project/location in config |
 | configured profile | OpenAI-compatible profile | profile-specific `api_key_env`, `base_url`, and model list |
 
-Environment variable names, base URLs, provider-specific fields, and proxies can be overridden in config.
-
-## Configuration
-
-Config layers merge in this order: user config, project config, explicit `--config` file. Later layers override earlier fields.
-
-Model precedence:
-
-1. `--model`
-2. `OPI_MODEL` only when `--config` was not passed
-3. `model` in `--config <FILE>`
-4. `<CWD>/.opi/config.toml`
-5. User config
-6. Built-in defaults
-
-Full shape with common defaults:
-
-```toml
-[defaults]
-model = "anthropic:claude-sonnet-4"
-max_iterations = 50
-tool_timeout_ms = 30000
-max_image_bytes = 20971520
-theme = "default"
-allow_mutating_tools = false
-
-[thinking]
-enabled = true
-budget_tokens = 10000
-
-[retry]
-max_attempts = 3
-initial_delay_ms = 1000
-max_delay_ms = 60000
-
-[compaction]
-enabled = true
-threshold_tokens = 100000
-
-[keybindings]
-submit = "enter"
-abort = "escape"
-new_line = "alt+enter"
-
-[providers.anthropic]
-api_key_env = "ANTHROPIC_API_KEY"
-# base_url = "https://api.anthropic.com"
-
-[providers.openai]
-api_key_env = "OPENAI_API_KEY"
-# base_url = "https://api.openai.com"
-
-[providers.openai_responses]
-api_key_env = "OPENAI_API_KEY"
-# base_url = "https://api.openai.com"
-
-[providers.openrouter]
-api_key_env = "OPENROUTER_API_KEY"
-# base_url = "https://openrouter.ai/api"
-# referer = "https://example.com"
-
-[providers.mistral]
-api_key_env = "MISTRAL_API_KEY"
-# base_url = "https://api.mistral.ai"
-
-[providers.gemini]
-api_key_env = "GEMINI_API_KEY"
-# base_url = "https://generativelanguage.googleapis.com"
-
-[providers.bedrock]
-region = "us-east-1"
-# profile = "default"
-# base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
-# secret_access_key_env = "AWS_SECRET_ACCESS_KEY"
-# session_token_env = "AWS_SESSION_TOKEN"
-
-[providers.azure]
-api_key_env = "AZURE_OPENAI_API_KEY"
-endpoint = "https://my-resource.openai.azure.com"
-api_version = "2024-06-01"
-deployments = ["my-deployment"]
-
-[providers.vertex]
-access_token_env = "VERTEX_ACCESS_TOKEN"
-project = "my-gcp-project"
-location = "us-central1"
-models = ["gemini-2.5-flash", "gemini-2.5-pro"]
-
-[providers.openai_compatible.localai]
-api_key_env = "LOCALAI_API_KEY"
-base_url = "https://localai.example.com"
-system_role_override = "developer"
-max_tokens_field = "max_completion_tokens"
-tool_result_name_field = true
-usage_in_stream = true
-
-[[providers.openai_compatible.localai.models]]
-id = "local-model"
-display_name = "Local Model"
-context_window = 128000
-max_output_tokens = 4096
-supports_images = true
-supports_streaming = true
-supports_thinking = false
-
-[providers.openai.proxy]
-url = "http://proxy.example.com:8080"
-no_proxy = "localhost,127.0.0.1"
-
-[extensions]
-paths = ["vendor/my-extension"]
-
-[packages]
-paths = ["vendor/my-package"]
-```
-
-If a provider-specific proxy is not configured, the HTTP client falls back to `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
+Provider credential env names, base URLs, model lists, and proxies can be
+overridden in config.
 
 ## Built-in Tools
 
-Tools live in `src/tool/`.
+Tools live under `src/tool/`.
 
 | Tool | Args | Notes |
 |------|------|-------|
-| `read` | `path`, optional `offset`, `limit` | 1-based line offset; parallel |
-| `ls` | `path`, optional `max_entries`, `max_depth` | Deterministic directory listing; gitignore-aware; parallel |
-| `glob` | `pattern` | Gitignore-aware file discovery; parallel |
-| `find` | `pattern`, optional `path` | Gitignore-aware file discovery scoped to an optional subdirectory; parallel |
-| `grep` | `pattern` | Gitignore-aware regex search; parallel |
-| `write` | `path`, `content` | Creates parent dirs; sequential; mutating |
-| `edit` | `path`, `old_string`, `new_string` | Replaces first exact match and records before/after details; sequential; mutating |
-| `bash` | `command`, optional `timeout_secs` | Runs in workspace root via `cmd /C` on Windows or `sh -c` on Unix; sequential; mutating |
+| `read` | `path`, optional `offset`, `limit` | 1-based line offset; parallel. |
+| `ls` | `path`, optional `max_entries`, `max_depth` | Deterministic directory listing; gitignore-aware; parallel. |
+| `glob` | `pattern` | Gitignore-aware file discovery; parallel. |
+| `find` | `pattern`, optional `path` | Gitignore-aware file discovery scoped to an optional subdirectory; parallel. |
+| `grep` | `pattern` | Gitignore-aware regex search; parallel. |
+| `write` | `path`, `content` | Creates parent dirs; sequential; mutating. |
+| `edit` | `path`, `old_string`, `new_string` | Replaces the first exact match and records before/after details; sequential; mutating. |
+| `bash` | `command`, optional `timeout_secs` | Runs in workspace root via `cmd /C` on Windows or `sh -c` on Unix; sequential; mutating. |
 
-Available built-in tools are `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, and `glob`.
+Default active tools:
 
-Default active tools depend on run mode:
+| Mode | Tools |
+|------|-------|
+| Interactive | `read`, `write`, `edit`, `bash` |
+| Non-interactive / RPC | `read`, `grep`, `find`, `ls`, `glob` |
+| Non-interactive / RPC with mutating opt-in | `read`, `write`, `edit`, `bash` |
 
-- Interactive mode: `read`, `write`, `edit`, `bash`.
-- Non-interactive mode: `read`, `grep`, `find`, `ls`, `glob`.
-- Non-interactive mode with `--allow-mutating` or `defaults.allow_mutating_tools = true`: `read`, `write`, `edit`, `bash`.
-
-Use `--tools <TOOLS>` to provide an explicit active tool allowlist. In non-interactive mode, allowlists containing `write`, `edit`, or `bash` require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
-
-Path policy is mode-aware. File writes and edits are restricted to the harness workspace root. Interactive `read` can resolve absolute paths and paths outside the workspace; non-interactive file tools remain workspace-only by default. File tool details include `workspace_root`, `resolved_path`, and `inside_workspace`.
-
-Tool selection precedence is `--no-tools` > `--tools` > `--no-builtin-tools` > default.
-
-## Images
-
-`--image <PATH>` attaches images to the first prompt in interactive or non-interactive mode. The flag can be repeated. Interactive mode also accepts `/image <path>` to queue an image for the next prompt.
-
-Supported formats are PNG, JPEG, GIF, and WebP. The default file-size limit is 20 MiB and can be changed with `defaults.max_image_bytes`.
-
-## Sessions
-
-Sessions are persisted automatically through `SessionCoordinator`. The session JSONL is a Rust-native format that represents selected pi session concepts (branching, compaction, message history, extension state); it does not promise pi session v3 file compatibility.
-
-Default storage:
-
-- Windows: `%LOCALAPPDATA%\opi\sessions\`
-- Unix: `~/.local/share/opi/sessions/`
-
-Override with `OPI_SESSIONS_DIR`.
-
-```sh
-opi --list-sessions
-opi --resume <session-id> "Continue the work."
-opi --fork <session-id> "Continue from a fork."
-opi --delete-session <session-id>
-```
-
-Resume reconstructs the active branch from session JSONL entries. Fork creates a new JSONL session whose header points back to the source session through `parent_session`; the source remains append-only. If a session contains compaction markers, the resumed context includes the compaction summary and kept tail.
+In non-interactive/RPC mode, explicit allowlists containing `write`, `edit`, or
+`bash` require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
 
 ## Modes
 
 ### Interactive
 
-With no prompt args, `opi` starts the ratatui TUI. It uses `opi-tui` widgets for transcript rendering, input editing, status, markdown, tool calls, edit diffs, themes, keybindings, model/session/branch/tree pickers, and terminal image output.
-
-Slash commands:
+With no prompt args, `opi` starts the ratatui TUI. Slash commands include:
 
 | Command | Effect |
 |---------|--------|
-| `/model` | Open the model picker for the active provider |
-| `/session` | Open the session picker |
-| `/branch` | Open the branch picker for the active session |
-| `/tree` | Open the session tree picker for the active session |
-| `/fork` | Fork the active branch into a new parented session |
-| `/clone` | Clone the active branch into a new parented session |
-| `/image <path>` | Queue an image for the next prompt |
-| `exit` or `quit` | Exit |
+| `/model` | Open the model picker for the active provider. |
+| `/session` | Open the session picker. |
+| `/branch` | Open the branch picker. |
+| `/tree` | Open the session tree picker. |
+| `/fork` | Fork the active branch into a new parented session. |
+| `/clone` | Clone the active branch into a new parented session. |
+| `/image <path>` | Queue an image for the next prompt. |
+| `exit` / `quit` | Exit. |
 
-### Text non-interactive
+### Non-interactive and JSON
 
-With prompt args or `--non-interactive`, `NonInteractiveRunner::run()` captures assistant text to stdout and diagnostics to stderr.
+Text mode writes assistant text to stdout and diagnostics to stderr. `--json`
+writes a schema header, serialized session/agent events, and a final
+`session_summary` as NDJSON.
 
 Exit codes:
 
@@ -298,108 +169,41 @@ Exit codes:
 | `5` | Tool failure |
 | `130` | Interrupted |
 
-### JSON non-interactive
+### RPC JSONL
 
-`--json` emits NDJSON to stdout. The first line is a schema header, followed by serialized session/agent events and a final `session_summary` with token totals and optional cost totals.
+`--rpc` starts a persistent bidirectional JSONL protocol for IDEs, custom UIs,
+and other embedders. This is an unstable 0.x protocol; clients must check the
+`schema_version` in the `rpc_ready` header. The current SDK/RPC schema version
+is `3`.
 
-### RPC JSONL mode
+## Config, Sessions, and Context Files
 
-`--rpc` starts a persistent bidirectional JSONL session over stdin/stdout. This is the recommended embedding mode for IDEs, custom UIs, and external tool integration.
+Config layers merge user config, project config, and explicit `--config` files.
+Model precedence is `--model`, then `OPI_MODEL` when no `--config` was passed,
+then explicit config, project `.opi/config.toml`, user config, and built-in
+defaults.
 
-**This is an unstable 0.x protocol.** The schema may change between minor versions. Clients MUST check `schema_version` in the `rpc_ready` header.
+User config paths:
 
-```sh
-opi --rpc
-```
+- Windows: `%APPDATA%\opi\config.toml`
+- Unix: `~/.config/opi/config.toml`
 
-On startup, `opi` emits a `rpc_ready` header:
+Sessions are append-only JSONL files under `%LOCALAPPDATA%\opi\sessions\` on
+Windows and `~/.local/share/opi/sessions/` on Unix, unless `OPI_SESSIONS_DIR`
+is set.
 
-```json
-{"type":"rpc_ready","schema_version":3,"mode":"rpc","version":"0.5.2","startup_diagnostics":[]}
-```
-
-Commands are JSON objects sent to stdin, one per line. Responses and events are JSON objects emitted to stdout, one per line. Diagnostics go to stderr.
-
-#### Commands
-
-| Command | Description |
-|---------|-------------|
-| `prompt` | Send user prompt; agent events stream asynchronously |
-| `continue` | Continue conversation with additional text |
-| `steer` | Queue steering message during agent operation |
-| `follow_up` | Queue follow-up message for after agent stops |
-| `abort` | Cancel current agent operation |
-| `set_model` | Switch provider:model |
-| `set_thinking_level` | Set reasoning/thinking level |
-| `compact` | Trigger manual compaction |
-| `session_info` | Query session metadata |
-| `extension_command` | Dispatch a custom command to the extension registry |
-| `trace` | Return the latest run's redacted in-memory trace envelope |
-| `quit` | Shut down the RPC session |
-
-All commands support an optional `id` field for request/response correlation.
-
-#### Response format
-
-```json
-{"type":"response","id":"req-1","command":"prompt","success":true}
-{"type":"response","id":"req-2","command":"set_model","success":false,"error":"model not found"}
-{"type":"response","id":"req-3","command":"session_info","success":true,"data":{"model":"anthropic:claude-sonnet-4"}}
-```
-
-For `prompt` and `continue`, `success: true` means the command was accepted. Agent events (including errors after acceptance) arrive as async event lines.
-
-#### Error semantics
-
-- **Parse errors**: `{"type":"response","command":"parse","success":false,"error":"..."}`
-- **Command rejected**: `{"type":"response","command":"<cmd>","success":false,"error":"..."}`
-- **Agent errors after acceptance**: emitted as regular agent events, not as a second response.
-
-#### Cancellation
-
-`abort` cancels the current agent operation via the cancellation token. The agent surfaces a `Cancelled` error through the normal event stream. A second `abort` while idle is a no-op.
-
-#### Example
-
-```python
-import subprocess, json
-
-proc = subprocess.Popen(
-    ["opi", "--rpc"],
-    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
-)
-
-def send(cmd):
-    proc.stdin.write(json.dumps(cmd) + "\n")
-    proc.stdin.flush()
-
-def read_line():
-    return json.loads(proc.stdout.readline())
-
-header = read_line()  # rpc_ready
-send({"type": "session_info", "id": "1"})
-resp = read_line()    # response with session info
-send({"type": "quit"})
-resp = read_line()    # response: quit success
-```
-
-## Context Files
-
-`CodingHarness` discovers `AGENTS.md` and `CLAUDE.md` from the workspace directory upward to the git root, then from the user config directory. Empty files and files larger than 128 KiB are skipped.
+`CodingHarness` loads `AGENTS.md` and `CLAUDE.md` from the workspace ancestors
+up to the git root, then from the user config directory. Empty files and files
+larger than 128 KiB are ignored. `OPI.md` is intentionally not loaded.
 
 ## Resources and Packages
 
-The harness discovers resource metadata from user, project, explicit, and package layers and exposes it in the system prompt and RPC/session metadata. Discovery covers:
+Resource discovery covers extensions, packages, skills, prompt fragments, and
+themes from user, project, explicit, and package layers. Higher-precedence
+layers override lower-precedence layers; duplicate names within the same layer
+are reported as diagnostics.
 
-- Extensions: directories containing `extension.toml`.
-- Packages: directories containing `package.toml`; packages may compose extensions, skills, prompt fragments, and themes from conventional subdirectories.
-- Skills: directories containing `SKILL.md` with YAML frontmatter.
-- Prompt fragments: directories containing `FRAGMENT.md` with YAML frontmatter.
-- Themes: directories containing `theme.toml`, resolved before falling back to built-in themes.
-
-User-level resources live under the user config directory (`~/.config/opi/` on Unix, `%APPDATA%\opi\` on Windows). Project-level resources live under `.opi/` in the workspace root. Explicit extension and package paths come from config. Higher-precedence layers override lower-precedence layers; duplicates within the same layer are reported as diagnostics.
-
-Package commands manage local and git package declarations without constructing a provider:
+Package commands:
 
 ```sh
 opi package add ./vendor/todo
@@ -412,132 +216,31 @@ opi package doctor --json
 opi package remove todo
 ```
 
-`add` and `remove` write the user-level package store by default; pass `--local` to write project-local `.opi/packages.toml`. `list --json` emits one JSON object per line; `doctor --json` emits one JSON array of diagnostic rows. Runtime startup resolves installed declarations, validates lock state, and starts valid `[adapter]` packages that use the `process-jsonl` kind and `opi-extension-jsonl-v1` protocol.
-
-The `process-jsonl` adapter protocol is an **unstable 0.x contract**. `docs/opi-spec.md` §10.2 documents the observed lifecycle, deterministic startup order, request-id correlation, timeouts, best-effort cancellation, fire-and-forget events, state serialize/restore, shutdown, and crash behavior. Protocol and kind are validated as a startup-time manifest gate: a package whose `[adapter]` declares any other protocol or kind is skipped with a diagnostic naming the expected and actual values, while its static resources still load.
-
-## Skills
-
-Skills are progressively discovered from project, user, explicit, and package resources. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter.
-
-**This is an unstable 0.x API.** The skill format and discovery rules may change between minor versions.
-
-### Skill format
-
-A skill directory contains a `SKILL.md`:
-
-```markdown
----
-name: my-skill
-description: What this skill does and when to use it.
-disable-model-invocation: false
----
-
-Full skill instructions go here.
-```
-
-Fields:
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Lowercase `a-z`, `0-9`, hyphens. Max 64 characters. |
-| `description` | Yes | Max 1024 characters. |
-| `disable-model-invocation` | No | Defaults to `false`. When `true`, the skill is excluded from automatic model invocation but still available for human use. |
-
-### Discovery locations
-
-Skills are discovered from multiple layers with precedence-based deduplication (higher precedence wins on name collision):
-
-1. **User-level** (`~/.config/opi/skills/` on Unix, `%APPDATA%\opi\skills\` on Windows) — precedence 0
-2. **Project-level** (`.opi/skills/` in workspace root) — precedence 1
-3. **Explicit** resource layers supplied by an embedder — precedence 2
-4. **Package-composed** resources from discovered packages, using the package layer precedence
-
-Each skill is a subdirectory of a scan location containing a `SKILL.md` file.
-
-### Progressive disclosure
-
-Skill metadata (name, description) is available without loading the full skill body. The complete instructions are loaded on demand only when the skill is invoked. This keeps the initial context small while supporting rich, specialized instructions.
-
-## Prompt Fragments
-
-Prompt fragments (templates) are progressively discovered from project, user, explicit, and package resources. Each fragment is a directory containing a `FRAGMENT.md` file with YAML frontmatter.
-
-**This is an unstable 0.x API.** The fragment format and discovery rules may change between minor versions.
-
-### Fragment format
-
-A fragment directory contains a `FRAGMENT.md`:
-
-```markdown
----
-name: translate
-description: Translate text between languages.
-arguments: text, from=en, to=fr
----
-
-Translate {{text}} from {{from}} to {{to}}.
-```
-
-Fields:
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Lowercase `a-z`, `0-9`, hyphens. Max 64 characters. |
-| `description` | Yes | Max 1024 characters. |
-| `arguments` | No | Comma-separated list. Required: `name`. Optional: `name=default`. |
-
-### Argument expansion
-
-Arguments declared in the frontmatter are referenced as `{{name}}` placeholders in the body. During expansion:
-
-- Required arguments must be provided.
-- Optional arguments use their declared default when not provided.
-- Undeclared placeholders are left as-is.
-
-### Discovery locations
-
-Fragments use the same precedence-based discovery as skills and extensions (higher precedence wins on name collision):
-
-1. **User-level** (`~/.config/opi/fragments/` on Unix, `%APPDATA%\opi\fragments\` on Windows) — precedence 0
-2. **Project-level** (`.opi/fragments/` in workspace root) — precedence 1
-3. **Explicit** resource layers supplied by an embedder — precedence 2
-4. **Package-composed** resources from discovered packages, using the package layer precedence
-
-## Themes
-
-Themes are discovered from `theme.toml` files in user, project, explicit, and package layers. A theme file contains metadata plus optional color token overrides:
-
-```toml
-name = "operator"
-description = "Operator theme"
-
-[colors]
-role_user = "Green"
-status_bg = "#1a1a2e"
-```
-
-Unknown tokens and invalid colors produce diagnostics. Missing color tokens inherit from the default theme. The runtime resolves discovered themes before built-in `default` and `monokai`.
+Packages can start `process-jsonl` adapters using the
+`opi-extension-jsonl-v1` protocol. That adapter protocol is an unstable 0.x
+contract. Packages are trusted code and are not sandboxed by the package
+manager.
 
 ## Library Use
 
-```rust
-use opi_coding_agent::config::OpiConfig;
-use opi_coding_agent::harness::CodingHarness;
+`CodingHarness` is the embedding entry point. It can be built directly or
+through `CodingHarness::builder`, with optional custom hooks, session resume
+data, tool selection, runtime package state, resource metadata, and startup
+diagnostics.
 
-# async fn example(provider: Box<dyn opi_ai::Provider>) -> anyhow::Result<()> {
-let config = OpiConfig::default();
-let mut harness = CodingHarness::new(
-    provider,
-    config.defaults.model.clone(),
-    config,
-    std::env::current_dir()?,
-);
-let _messages = harness.prompt("Hello").await?;
-# Ok(()) }
-```
+Common methods include `prompt`, `prompt_with_content`, `queue_images`,
+`subscribe`, `cancel`, `set_model`, `model_picker_items`, `branch_picker_items`,
+`resource_metadata`, `resolve_theme`, and `session`.
 
-Use `builder`, `new_with_hooks`, `new_with_hooks_and_resume`, `new_with_selection`, `subscribe`, `cancel`, `queue_images`, `prompt_with_content`, `model_picker_items`, `branch_picker_items`, `set_model`, `resource_metadata`, `resolve_theme`, and `session` when embedding the runtime in a custom application.
+## Boundaries
+
+- `opi` does not collect telemetry or analytics and does not share sessions
+  automatically.
+- `opi doctor` makes no paid model calls or network checks by default.
+- Mutating-tool policy is not an OS sandbox.
+- Production sub-agent, permission-gate, plan/todo, and MCP workflows are
+  examples/package patterns, not built-in core workflows.
+- OAuth or subscription login flows are not implemented.
 
 ## License
 

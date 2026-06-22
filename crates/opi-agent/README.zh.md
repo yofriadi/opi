@@ -3,160 +3,99 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-agent.svg)](https://crates.io/crates/opi-agent)
 [![Docs.rs](https://docs.rs/opi-agent/badge.svg)](https://docs.rs/opi-agent)
 
-> [opi](https://github.com/OdradekAI/opi) 的通用 Agent 运行时：流式 turn、工具调用、hooks、事件、消息队列、会话、分支重建、上下文压缩、SDK 命令、扩展和 JSONL streaming proxy 原语。
+> [opi](https://github.com/OdradekAI/opi) 使用的 Provider 无关 Agent 运行时。
 
 [English](README.md) | [opi workspace](../../README.zh.md)
 
 ## 当前状态
 
-当前 crate 版本：`0.5.2`，继承自 workspace package 版本。
+当前 crate 版本是 `0.5.2`，继承自 workspace 包版本。
 
-`opi-agent` 提供 `opi` 二进制使用的 Provider 无关运行时。它负责 turn 主循环、工具参数 JSON Schema 校验、并行/串行工具执行、支持 retry 的 Provider streaming、图片能力校验、事件订阅、steering/follow-up 队列、JSONL 会话存储、基于 leaf 的会话分支重建、阈值/手动/溢出触发的上下文压缩基础能力、SDK/RPC 命令与响应类型、extension hooks/tools/state，以及传输无关的 streaming proxy。
+`opi-agent` 负责 Agent 主循环和运行时基础能力：工具契约、JSON Schema 参数校验、
+并行/串行工具执行、生命周期 hooks、事件输出、steering/follow-up 队列、会话
+JSONL 存储、分支重建、上下文压缩、SDK/RPC 类型、扩展、本地诊断、已脱敏 trace
+envelope，以及 streaming proxy。
+
+它依赖 `opi-ai` 的 Provider 和消息类型。它不实现 `opi` CLI、终端 UI 或具体的
+文件/ shell 内置工具；这些能力分别位于 `opi-coding-agent` 和 `opi-tui`。
 
 ## 核心抽象
 
-```rust
-pub trait Tool: Send + Sync {
-    fn definition(&self) -> ToolDef;
-    fn execute(&self, call_id: &str, args: serde_json::Value,
-               signal: CancellationToken,
-               on_update: Option<UpdateCallback>) -> ...;
-    fn execution_mode(&self) -> ExecutionMode { ExecutionMode::Parallel }
-}
+| 项 | 作用 |
+|----|------|
+| `Agent` | 对主循环的有状态封装，提供 prompt、continue、abort、subscribe、steering、follow-up、模型切换和工具注册辅助。 |
+| `Tool` | 基于 JSON Schema 的工具契约，支持取消和可选进度更新。 |
+| `ExecutionMode` | 控制工具能否进入并行批次，或是否强制串行执行。 |
+| `AgentHooks` | 覆盖上下文转换、LLM 转换、工具策略/结果、停止判断和下一轮准备的生命周期 hooks。 |
+| `AgentEvent` | 运行时事件流，覆盖生命周期、流式文本、工具调用、队列、重试、压缩和结束状态。 |
+| `AgentSessionEvent` | `opi --json` 使用的会话级事件协议。 |
+| `AgentLoopConfig` | 主循环限制、重试配置、压缩配置和相关运行时设置。 |
 
-pub trait AgentHooks: Send + Sync {
-    async fn transform_context(...) -> Result<Vec<AgentMessage>, AgentError>;
-    fn convert_to_llm(...) -> Result<Vec<Message>, AgentError>;
-    async fn before_tool_call(...) -> BeforeToolCallResult;
-    async fn after_tool_call(...) -> AfterToolCallResult;
-    async fn should_stop_after_turn(...) -> bool;
-    async fn prepare_next_turn(...) -> Option<PrepareNextTurnUpdate>;
-}
-```
-
-`Agent` 在主循环外提供 `prompt`、`prompt_with_content`、`continue_`、`abort`、`subscribe`、`steer`、`follow_up`、`add_tool`、模型切换与消息缓冲区辅助方法。
-
-## Agent 主循环
+## 主循环形状
 
 ```text
 agent_loop
   -> transform_context
   -> convert_to_llm
-  -> 校验请求能力
+  -> validate request capabilities
   -> provider.stream(Request)
-  -> 发出并累积 AssistantStreamEvent
-  -> 检测工具调用
-  -> 用 jsonschema 校验参数
+  -> emit and accumulate AssistantStreamEvent values
+  -> detect tool calls
+  -> validate tool args with jsonschema
   -> before_tool_call hook
-  -> 执行工具
-     -> 全部是 parallel 工具时一起执行
-     -> 只要有 sequential 工具，整批串行执行
+  -> execute tools in parallel or sequential batches
   -> after_tool_call hook
-  -> 所有工具结果 terminate 时停止
   -> should_stop_after_turn hook
   -> prepare_next_turn hook
-  -> drain steering 队列
-  -> 无待执行工具时弹出一条 follow-up 消息
+  -> drain steering and follow-up queues
 ```
 
-可重试的 Provider 错误（`RateLimited`、`Timeout`）可以通过 `AgentLoopConfig.retry` 自动重试。retry 开始/结束会通过 `AgentEvent` 发出。
+Rate limit 和 timeout 等可重试 Provider 错误可通过 `AgentLoopConfig.retry` 处理。
+重试开始/结束会通过 `AgentEvent` 暴露。
 
 ## 会话与压缩
 
-会话存储采用 append-only JSONL：
+会话存储使用 append-only JSONL：
 
 - 第一行：`SessionHeader`。
-- 条目：`MessageEntry`、`CompactionEntry`、`LeafEntry`。
-- Reader 支持崩溃恢复，会跳过损坏条目和末尾截断行。
-- `session_branch::SessionTree` 会根据 `parent_id` 关系和最新 `LeafEntry` 重建分支元数据与活跃分支。
+- 条目：`MessageEntry`、`CompactionEntry` 和 `LeafEntry`。
+- Reader 恢复时会跳过损坏条目和末尾截断行。
+- `session_branch::SessionTree` 根据 `parent_id` 链接和最新 `LeafEntry` 重建活跃分支。
 
-上下文压缩能力包括：
+压缩基础能力包括 threshold/manual/overflow 原因、
+`CompactionEngine::should_compact`、`CompactionEngine::compact`，以及用于自定义摘要
+生成的 `CompactionHooks`。`opi-coding-agent` 负责把这些基础能力连接到 CLI 会话
+持久化。
 
-- `CompactionConfig { enabled, threshold_tokens }`。
-- `CompactionReason::{Manual, Threshold, Overflow}`。
-- `CompactionEngine::should_compact`。
-- `CompactionEngine::compact`。
-- `CompactionHooks` 自定义摘要生成，缺省时使用 core fallback summary。
+## SDK、扩展、诊断与 Proxy
 
-`opi-coding-agent` 负责把这些基础能力连接到运行时持久化。
+- `sdk` 定义 RPC JSONL 模式和嵌入方共享的带 schema version 的命令/响应类型。
+  `SDK_SCHEMA_VERSION` 是 `3`。
+- `extension` 提供 `Extension` 和 `ExtensionRegistry`，支持生命周期 hooks、自定义
+  工具、自定义命令、事件观察器、扩展状态、自定义 Provider 和模型覆盖。
+- `diagnostic` 和 `diagnostic_sink` 提供类型化诊断，以及面向公共 JSON/text 边界的
+  脱敏辅助。
+- `trace` 在调用方显式启用时保存最新运行的本地、已脱敏 trace envelope。
+- `streaming_proxy` 可在任意 `BufRead`/`Write` 传输上转发 JSONL 命令/事件，输出
+  `proxy_ready` header，提供事件缓冲、取消，并默认脱敏常见密钥模式。
 
-## 事件
+所有 SDK/RPC/proxy 表面都是不稳定的 0.x API。客户端应检查 schema version，并在
+需要时固定精确 crate 版本。
 
-`AgentEvent` 覆盖 Agent 生命周期、turn 生命周期、消息流式更新、工具执行、队列、自动 retry、压缩、会话持久化错误和 Agent 结束。
+## 公共模块
 
-`AgentSessionEvent` 是 JSON 输出使用的会话级 wire protocol。它包装 agent events，并增加 compaction、retry、thinking level、session info、session summary 等事件。
+`agent`、`compaction`、`diagnostic`、`diagnostic_sink`、`event`、`extension`、
+`hooks`、`loop_types`、`message`、`sdk`、`session`、`session_branch`、
+`session_event`、`state`、`streaming_proxy`、`tool`、`trace` 和 `validation`。
 
-## SDK、扩展与 Proxy
+crate root 重新导出了常用运行时类型，包括 `Agent`、`Tool`、`ToolResult`、
+`ToolError`、`ExecutionMode`、`AgentHooks`、`AgentEvent`、`AgentSessionEvent`、
+`AgentLoopConfig`、`SdkCommand`、`SdkResponse` 和 `ToolDef`。
 
-- `sdk` 定义 RPC JSONL 模式和嵌入方共享的不稳定、带 schema version 的命令与响应类型。`SDK_SCHEMA_VERSION` 是 `3`，命令包括 `prompt`、`continue`、`steer`、`follow_up`、`abort`、`set_model`、`set_thinking_level`、`compact`、`session_info`、`extension_command`、`trace` 和 `quit`。
-- `extension` 提供 `Extension` 与 `ExtensionRegistry`，支持生命周期 hooks、自定义工具、自定义命令、事件观察者、每个 extension 的状态序列化/恢复、自定义 Provider 和模型覆盖。
-- `streaming_proxy` 可以在任意 `BufRead`/`Write` 传输上转发 JSONL 命令/事件，输出 schema version 为 `3` 的 `proxy_ready` 头，提供有界事件缓冲，支持取消，并默认脱敏常见密钥模式。
+## 测试支持
 
-## 简短示例
-
-```rust
-use opi_agent::{ExecutionMode, Tool, ToolError, ToolResult};
-use opi_ai::message::{OutputContent, ToolDef};
-
-struct EchoTool;
-
-impl Tool for EchoTool {
-    fn definition(&self) -> ToolDef {
-        ToolDef {
-            name: "echo".into(),
-            description: "原样返回输入。".into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": { "text": { "type": "string" } },
-                "required": ["text"],
-            }),
-        }
-    }
-
-    fn execute(&self, _id: &str, args: serde_json::Value,
-               _signal: tokio_util::sync::CancellationToken,
-               _on_update: Option<opi_agent::tool::UpdateCallback>)
-        -> std::pin::Pin<Box<dyn std::future::Future<
-            Output = Result<ToolResult, ToolError>> + Send>>
-    {
-        let text = args.get("text").and_then(|v| v.as_str())
-            .unwrap_or("").to_owned();
-        Box::pin(async move {
-            Ok(ToolResult {
-                content: vec![OutputContent::Text { text }],
-                details: None,
-                is_error: false,
-                terminate: false,
-            })
-        })
-    }
-
-    fn execution_mode(&self) -> ExecutionMode { ExecutionMode::Parallel }
-}
-```
-
-创建 `Agent` 时传入 boxed `opi_ai::Provider`、工具列表、模型、可选系统提示词、`AgentLoopConfig` 和 `AgentHooks` 实现即可。用户 turn 包含文本和图片时使用 `prompt_with_content`。
-
-## 模块速查
-
-| 模块 | 作用 |
-|------|------|
-| `agent` | 有状态 `Agent` 封装、模型切换、取消、队列与消息缓冲区管理 |
-| 根模块 `agent_loop` | Provider/tool turn 主循环 |
-| `tool` | `Tool`、`ToolResult`、`ToolError`、`ExecutionMode`、update callbacks |
-| `hooks` | Hook trait 及其上下文/结果类型 |
-| `event` | 运行时事件协议 |
-| `session_event` | JSON 模式使用的会话级事件协议 |
-| `session` | JSONL 会话 header、条目、writer、reader、恢复 |
-| `session_branch` | 根据 session entry 的 parent links 和 leaf pointers 重建分支 |
-| `compaction` | 上下文压缩引擎与 hooks |
-| `sdk` | 共享 SDK/RPC schema version、命令、响应和事件转换 |
-| `extension` | Extension trait、registry、hook 包装、自定义命令、工具、Provider、模型覆盖、事件分发与状态序列化 |
-| `streaming_proxy` | 带密钥脱敏的传输无关 JSONL 命令/事件 proxy |
-| `state` | 对话状态容器 |
-| `message` | Agent 层消息变体 |
-| `loop_types` | 主循环上下文、配置和错误 |
-| `validation` | JSON Schema 参数校验 |
+确定性主循环测试可使用 `opi_ai::test_support::MockProvider` 搭配自定义 `Tool`
+实现。涉及会话存储的测试应使用隔离临时目录。
 
 ## 许可证
 

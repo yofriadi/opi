@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/opi-tui.svg)](https://crates.io/crates/opi-tui)
 [![Docs.rs](https://docs.rs/opi-tui/badge.svg)](https://docs.rs/opi-tui)
 
-> Ratatui-based terminal UI widgets used by [opi](https://github.com/OdradekAI/opi)'s interactive coding agent.
+> Ratatui-based terminal UI widgets used by [opi](https://github.com/OdradekAI/opi).
 
 [Simplified Chinese](README.zh.md) | [opi workspace](../../README.md)
 
@@ -11,76 +11,44 @@
 
 Current crate version: `0.5.2`, inherited from the workspace package version.
 
-`opi-tui` is a synchronous widget library. The application owns the event loop and async runtime. The crate provides transcript, editor, status, markdown, tool-call, diff, select-list, branch-picker, terminal-image, theme, and keybinding primitives used by `opi-coding-agent`.
+`opi-tui` is a synchronous widget library. Callers own the event loop, async
+runtime, terminal setup, and application state. The crate provides rendering
+primitives used by `opi-coding-agent`'s interactive TUI.
 
-## Widgets and UI Primitives
+## Components
 
 | Item | Purpose |
 |------|---------|
-| `Shell` | Top-level layout composing transcript, status bar, editor, and optional tool call view |
-| `MessageList` | Scrollable conversation transcript with role styling, diffs, and image payloads |
-| `InputEditor` | Multi-line input buffer with cursor/edit helpers |
-| `StatusBar` | App state, model, token/cost status, and live activity |
-| `ToolCallView` | Tool-call line with name, args, and status |
-| `MarkdownView` / `CodeBlock` | Markdown rendering and fenced code-block presentation |
-| `DiffView` | Unified diff rendering for before/after file edits |
-| `SelectList` / `SelectListState` | Fuzzy-select list used by model, session, and session-tree pickers |
-| `BranchPicker` / `BranchPickerState` | Session branch picker with active-branch marking and Unicode-width-aware rows |
-| `terminal_image` | Kitty/iTerm2/Sixel escape generation plus text fallback |
-| `Theme` / `resolve_theme` | Semantic palettes; built-in `default` and `monokai` |
-| `Keybindings` / `KeyCombo` | Configurable semantic actions: submit, abort, new line |
-
-## Public Types
-
-```rust
-pub enum Role { User, Assistant, System, Tool }
-
-pub struct Message {
-    pub role: Role,
-    pub content: String,
-    pub diff: Option<DiffPayload>,
-    pub image: Option<ImagePayload>,
-}
-
-pub struct DiffPayload {
-    pub path: String,
-    pub before: String,
-    pub after: String,
-}
-
-pub struct ImagePayload {
-    pub data: ImageData,
-    pub protocol: TerminalGraphicsProtocol,
-}
-
-pub enum AppState { Idle, Thinking, Streaming, ToolExecuting }
-pub enum ToolCallStatus { Running, Success, Error(String) }
-pub enum TuiError { Terminal(String), Render(String) }
-
-pub struct BranchItem {
-    pub tip_id: String,
-    pub label: String,
-    pub metadata: String,
-    pub is_active: bool,
-}
-```
-
-`Message::new(role, content)` builds normal transcript messages. `Message::diff(path, before, after)` builds a tool-role message rendered through `DiffView`. `Message::image(role, payload)` builds an image-only message rendered through terminal graphics escape sequences or text fallback.
+| `Shell` | Top-level layout for transcript, status bar, editor, and optional tool-call view. |
+| `MessageList` | Scrollable conversation transcript with role styling, diffs, and image payloads. |
+| `InputEditor` | Multi-line input buffer with cursor/edit helpers. |
+| `StatusBar` | App state, model, token/cost status, and live activity. |
+| `ToolCallView` | Tool-call line with name, args, and status. |
+| `MarkdownView` / `CodeBlock` | Markdown and fenced code-block rendering. |
+| `DiffView` | Unified diff rendering for before/after file edits. |
+| `SelectList` / `SelectListState` | Fuzzy-select list for model, session, and tree pickers. |
+| `BranchPicker` / `BranchPickerState` | Session branch picker with active-branch marking and Unicode-width-aware rows. |
+| `terminal_image` | Kitty/iTerm2/Sixel escape helpers plus text fallback. |
+| `Theme` / `resolve_theme` | Semantic palettes; built-in `default` and `monokai`. |
+| `Keybindings` / `KeyCombo` | Configurable semantic actions: submit, abort, and new line. |
 
 ## Terminal Images
 
 `terminal_image` exposes:
 
-- `TerminalGraphicsProtocol::{Kitty, Iterm2, Sixel, Fallback}`.
-- `detect_graphics_protocol` from terminal environment hints.
-- `kitty_escape`, `iterm_escape`, `sixel_escape`, and `text_fallback`.
-- `ImageData` with PNG, JPEG, GIF, or WebP metadata.
+- `TerminalGraphicsProtocol::{Kitty, Iterm2, Sixel, Fallback}`
+- `detect_graphics_protocol`
+- `kitty_escape`, `iterm_escape`, `sixel_escape`, and `text_fallback`
+- `ImageData` for PNG, JPEG, GIF, and WebP metadata
 
-Current protocol detection recognizes Kitty and iTerm2 explicitly and otherwise falls back to text placeholders. `sixel_escape` is part of the public surface but currently returns an empty string; callers should treat Sixel as not implemented until that function produces encoded output.
+Protocol detection recognizes Kitty and iTerm2 from environment hints and falls
+back to text placeholders otherwise. `sixel_escape` is public but currently
+returns an empty string, so callers should treat Sixel output as not implemented
+until that function emits encoded content.
 
-## Keybindings
+## Keybindings and Themes
 
-Default bindings:
+Default keybindings:
 
 | Action | Default |
 |--------|---------|
@@ -88,26 +56,29 @@ Default bindings:
 | abort | `escape` |
 | new line | `alt+enter` |
 
-`KeyCombo` parses lowercase strings such as `enter`, `escape`, `ctrl+c`, `alt+enter`, and `shift+tab`. Invalid config falls back to defaults in the `opi` binary.
+`KeyCombo` parses lowercase strings such as `enter`, `escape`, `ctrl+c`,
+`alt+enter`, and `shift+tab`. Invalid config is handled by the caller; the
+`opi` binary falls back to defaults.
 
-## Themes
+`Theme` exposes semantic color fields for roles, status bar, editor, markdown,
+code blocks, diffs, and tool status. `resolve_theme(name)` recognizes `default`
+and `monokai`; unknown names resolve to `default`.
 
-`Theme` exposes semantic color fields for message roles, status bar, editor, markdown/code, diff view, and tool status. `resolve_theme(name)` currently recognizes:
-
-- `default`
-- `monokai`
-
-Unknown names resolve to `default`.
-
-## Integration Shape
+## Integration Pattern
 
 The `opi` binary uses this crate from `crates/opi-coding-agent/src/interactive.rs`:
 
 1. Keep application state in the caller.
-2. Update that state from `opi_agent::AgentEvent` callbacks.
-3. Resolve a `Theme` and `Keybindings`.
-4. Build `SelectList` overlays for model/session/tree selection and branch-picker overlays when requested.
+2. Update state from `opi_agent::AgentEvent` callbacks.
+3. Resolve `Theme` and `Keybindings`.
+4. Build picker overlays when needed.
 5. Build a `Shell` each frame and render it with ratatui.
+
+## Public Modules
+
+`branch_picker`, `diff_view`, `editor`, `keybindings`, `markdown`,
+`message_list`, `render`, `select_list`, `status_bar`, `terminal_image`,
+`theme`, and `tool_call`.
 
 ## License
 

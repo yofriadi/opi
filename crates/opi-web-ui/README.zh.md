@@ -1,66 +1,69 @@
 # opi-web-ui
 
-> [opi](https://github.com/OdradekAI/opi) agent 工具包的可嵌入 Web UI 组件层。
+> [opi](https://github.com/OdradekAI/opi) agent 工具包中未发布的 Web 侧状态与组件层。
 
 [English](README.md) | [opi workspace](../../README.zh.md)
 
 ## 当前状态
 
-当前 crate 版本：`0.5.2`，继承自 workspace package 版本。
+当前 crate 版本是 `0.5.2`，继承自 workspace 包版本。
 
-`opi-web-ui` 为 `publish = false`，提供具体的组件层，消费 opi agent 工具包的 RPC/SDK JSON 事件值并将其渲染为类型化的 Rust 状态和 HTML 组件。它不是独立浏览器应用。后续发布决策可能改变其发布状态。
+`opi-web-ui` 设置了 `publish = false`。它不是独立浏览器应用，也不会启动服务器。它
+为嵌入方控制的 Web 表面提供类型化 Rust 状态和 HTML 组件模型，用于消费 `opi`
+RPC/SDK JSON 事件。
 
-## 架构
+所有公开类型都是不稳定的 0.x API。请固定精确版本，并在升级时测试。
 
-- **`event`** — 将 RPC JSONL 协议的原始 JSON 值解析为类型化的 `WebUiEvent` 变体，并保留未知事件类型以便前向兼容。
-- **`state`** — `ConversationState` 处理事件并维护消息历史、RPC 响应、工具调用状态、思考块、会话元数据、资源元数据、压缩状态，以及最近一次成功的压缩响应 payload。
-- **`components`** — 类型化 UI 组件模型：`ChatMessage`、`ToolCallView`、`ThinkingBlock`、`StatusBar`、`ConversationView`。
-- **`render`** — `Render` trait，用于 HTML 输出，支持 XSS 安全转义。
+## 范围
 
-`ConversationState` 为消息、工具调用、思考块、模型、会话 id、turn/message 计数、agent 运行状态、压缩状态、最近 RPC 响应、资源元数据和最近一次成功压缩 payload 提供只读访问器。它也可以派生用于渲染的 `ConversationView` 和 `StatusBar`。
+| 模块 | 作用 |
+|------|------|
+| `event` | 把原始 RPC JSON 值解析为 `WebUiEvent` 变体，并保留未知事件类型。 |
+| `state` | 根据事件维护对话状态：消息、工具调用、thinking blocks、会话 metadata、资源 metadata、压缩状态和最近 RPC 响应。 |
+| `components` | 类型化组件模型：`ChatMessage`、`ToolCallView`、`ThinkingBlock`、`StatusBar` 和 `ConversationView`。 |
+| `render` | `Render` trait，以及用于 XSS 安全字符串输出的 HTML 转义。 |
 
-## 不稳定的 0.x API
-
-所有类型均可能在版本间变更。请固定精确版本并在升级时进行测试。
+本 crate 有意保持 JSON 形状的运行时边界。它运行时不依赖 `opi-ai` 或 `opi-agent`；
+`opi-agent` 只作为测试 dev-dependency 使用。
 
 ## 用法
 
 ```rust
 use opi_web_ui::event::WebUiEvent;
-use opi_web_ui::state::ConversationState;
 use opi_web_ui::render::Render;
+use opi_web_ui::state::ConversationState;
 
 let mut state = ConversationState::new();
 
-// 解析 RPC JSONL 事件
+// 解析原始 RPC/SDK 事件。
 let raw = serde_json::json!({"type": "AgentStart"});
 let event = WebUiEvent::parse(&raw).unwrap();
 state.process(event);
 
-// 流式文本
+// 调用方已经拥有类型化事件时，也可以直接处理。
 state.process(WebUiEvent::MessageStart {
     model: "claude-sonnet-4-5".to_owned(),
     provider: "anthropic".to_owned(),
 });
-state.process(WebUiEvent::TextDelta { index: 0, delta: "你好".to_owned() });
+state.process(WebUiEvent::TextDelta {
+    index: 0,
+    delta: "你好".to_owned(),
+});
 state.process(WebUiEvent::MessageEnd);
 
-// 渲染为 HTML
-let view = state.to_conversation_view();
-let html = view.render_html();
+let html = state.to_conversation_view().render_html();
 let status = state.to_status_bar().render_html();
 ```
 
-## 依赖
+`ConversationState` 为消息、工具调用、thinking blocks、模型、会话 id、turn/message
+计数、Agent 运行状态、压缩状态、最近 RPC 响应、资源 metadata 和最近一次成功压缩
+payload 提供只读访问器。
 
-- `serde`、`serde_json` — JSON 序列化
-- `thiserror` — 错误类型
+## 边界
 
-`opi-agent` 只作为测试 dev-dependency 使用。运行时边界有意保持为 JSON 形态，因此面向 Web 的代码不需要依赖 Provider 或 Agent 内部类型。
-
-## 边界说明
-
-只有实现面向 Web 的可复用状态或 UI 组件后，相关功能才应进入这里。终端编程 Agent 位于 `opi-coding-agent`；Provider 和消息类型位于 `opi-ai`；Agent 运行时基础能力位于 `opi-agent`。
+只在需要可复用 Web 侧状态或 HTML 组件模型时使用本 crate。终端 UI 属于
+`opi-tui`，CLI/harness 行为属于 `opi-coding-agent`，Provider 类型属于 `opi-ai`，
+运行时主循环基础能力属于 `opi-agent`。
 
 ## 许可证
 
