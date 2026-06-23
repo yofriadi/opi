@@ -6,11 +6,16 @@
 //! verifying tool wiring, system prompt construction, hooks, and multi-turn.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use futures_util::StreamExt;
+use futures_util::stream;
 use opi_agent::event::AgentEvent;
 use opi_agent::message::AgentMessage;
 use opi_agent::tool::{Tool, ToolError, ToolResult};
 use opi_ai::message::{InputContent, Message};
+use opi_ai::provider::{EventStream, Provider, ProviderError, Request};
+use opi_ai::stream::AssistantStreamEvent;
 use opi_ai::test_support::{self, MockProvider};
 use opi_coding_agent::config::OpiConfig;
 use opi_coding_agent::harness::CodingHarness;
@@ -282,4 +287,117 @@ async fn harness_respects_max_iterations_config() {
     // Harness should be created without error even with low max_iterations
     // (the agent loop will enforce the cap internally)
     drop(harness);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: interactive abort/shutdown cancellation contract (task 8.4)
+//
+// Interactive abort and shutdown reduce to the shared cancellation primitive
+// exposed by the harness (cancel_token / cancel — the same handle the TUI abort
+// keybinding and the exit/quit path use). An aborted run must emit a terminal
+// AgentEnd, return Err(AgentError::Cancelled), leave no run pending, and let
+// the harness return to idle so a subsequent prompt is accepted and completes.
+// ---------------------------------------------------------------------------
+
+/// Provider whose first stream hangs mid-stream (so a prompt can be aborted in
+/// flight) and whose subsequent streams complete normally (so the harness can
+/// be shown to return to idle and accept a new prompt after the abort).
+struct HangingThenCompleteProvider {
+    calls: Arc<Mutex<usize>>,
+}
+
+impl HangingThenCompleteProvider {
+    fn new() -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+}
+
+impl Provider for HangingThenCompleteProvider {
+    fn id(&self) -> &str {
+        "mock"
+    }
+    fn models(&self) -> &[opi_ai::provider::ModelInfo] {
+        &[]
+    }
+    fn stream(&self, _request: Request) -> EventStream {
+        let mut count = self.calls.lock().unwrap();
+        *count += 1;
+        let first = *count == 1;
+        if first {
+            // Emit Start, then hang: the run is in flight but never finalizes,
+            // so aborting discards the partial assistant content.
+            Box::pin(
+                stream::iter([Ok::<_, ProviderError>(AssistantStreamEvent::Start {
+                    partial: test_support::base_assistant(),
+                })])
+                .chain(stream::pending::<Result<AssistantStreamEvent, ProviderError>>()),
+            )
+        } else {
+            let events = test_support::text_response("recovered");
+            Box::pin(stream::iter(events.into_iter().map(Ok::<_, ProviderError>)))
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_interactive_abort_shutdown_contract() {
+    let provider = HangingThenCompleteProvider::new();
+    let mut harness = CodingHarness::new(
+        Box::new(provider),
+        "mock-model".into(),
+        OpiConfig::default(),
+        std::env::current_dir().unwrap(),
+    );
+    let token = harness.cancel_token();
+
+    let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let ev = events.clone();
+    harness.subscribe(Box::new(move |event| {
+        ev.lock().unwrap().push(event_name(event).to_owned());
+    }));
+
+    // Spawn the prompt (in-flight run). The interactive TUI abort keybinding
+    // cancels the active run via this same token.
+    let handle = tokio::spawn(async move {
+        let result = harness.prompt("hang").await;
+        (harness, result)
+    });
+
+    // Let the provider emit Start and enter its hang before aborting.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    token.cancel();
+
+    let (mut harness, result) = handle.await.expect("prompt task panicked");
+    assert!(
+        matches!(result, Err(opi_agent::loop_types::AgentError::Cancelled)),
+        "aborted run returns Err(Cancelled)"
+    );
+
+    {
+        let seq = events.lock().unwrap();
+        assert!(
+            seq.contains(&"AgentStart".to_owned()),
+            "AgentStart emitted: {seq:?}"
+        );
+        assert_eq!(
+            seq.iter().filter(|s| s.as_str() == "AgentEnd").count(),
+            1,
+            "aborted run emits exactly one terminal AgentEnd: {seq:?}"
+        );
+        assert!(
+            !seq.contains(&"MessageEnd".to_owned()),
+            "partial assistant message must not be finalized (Done never arrived): {seq:?}"
+        );
+    }
+
+    // The harness returns to idle: after resetting the token, a new prompt is
+    // accepted and runs to completion (provider's second stream completes).
+    harness.reset_cancel_if_cancelled();
+    let result2 = harness.prompt("again").await;
+    assert!(
+        result2.is_ok(),
+        "harness accepts a new prompt after abort (idle): {result2:?}"
+    );
 }

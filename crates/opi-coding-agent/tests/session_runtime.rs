@@ -3,10 +3,17 @@
 //! Tests the full lifecycle: harness creates a session, persists messages as
 //! JSONL, and the session can be read back and reconstructed for resume.
 
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use futures_util::StreamExt;
+use futures_util::stream;
 use opi_agent::diagnostic::{SOURCE_SESSION, code};
 use opi_agent::message::AgentMessage;
 use opi_agent::session::{MessageEntry, SessionEntry, SessionHeader, SessionReader, SessionWriter};
-use opi_ai::message::{InputContent, Message, UserMessage};
+use opi_ai::message::{AssistantContent, InputContent, Message, UserMessage};
+use opi_ai::provider::{EventStream, Provider, ProviderError, Request};
+use opi_ai::stream::AssistantStreamEvent;
 use opi_ai::test_support::{self, MockProvider};
 use opi_coding_agent::config::OpiConfig;
 use opi_coding_agent::harness::CodingHarness;
@@ -1704,4 +1711,167 @@ fn open_existing_replays_usage_from_assistant_messages() {
         15,
         "cache write tokens must sum both assistants"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: cancellation persists only finalized state (task 8.4)
+//
+// A cancelled turn must not write partial assistant/tool/session state: the
+// harness skips persistence for a turn whose agent run returns
+// Err(AgentError::Cancelled), and SessionCoordinator only ever appends
+// finalized AgentMessage::Llm entries. So after a completed turn 1 followed by
+// a cancelled turn 2, the session JSONL contains only turn 1's finalized
+// messages.
+// ---------------------------------------------------------------------------
+
+/// Provider whose first stream completes (so turn 1 finalizes and persists) and
+/// whose second stream hangs mid-stream (so turn 2 can be cancelled before any
+/// assistant message is finalized).
+struct CompleteThenHangProvider {
+    calls: Arc<Mutex<usize>>,
+}
+
+impl CompleteThenHangProvider {
+    fn new() -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+}
+
+impl Provider for CompleteThenHangProvider {
+    fn id(&self) -> &str {
+        "mock"
+    }
+    fn models(&self) -> &[opi_ai::provider::ModelInfo] {
+        &[]
+    }
+    fn stream(&self, _request: Request) -> EventStream {
+        let mut count = self.calls.lock().unwrap();
+        *count += 1;
+        if *count == 1 {
+            let events = test_support::text_response("first-response");
+            Box::pin(stream::iter(events.into_iter().map(Ok::<_, ProviderError>)))
+        } else {
+            // Emit Start + a partial TextDelta, then hang. The Done event that
+            // would finalize the assistant message never arrives.
+            let mut partial = test_support::base_assistant();
+            partial.content.push(AssistantContent::Text {
+                text: "partial".into(),
+            });
+            Box::pin(
+                stream::iter([
+                    Ok::<_, ProviderError>(AssistantStreamEvent::Start {
+                        partial: test_support::base_assistant(),
+                    }),
+                    Ok(AssistantStreamEvent::TextDelta {
+                        content_index: 0,
+                        delta: "partial".into(),
+                        partial,
+                    }),
+                ])
+                .chain(stream::pending::<Result<AssistantStreamEvent, ProviderError>>()),
+            )
+        }
+    }
+}
+
+// The `session_lock()` guard serializes OPI_SESSIONS_DIR mutation across
+// sibling tests and must be held for the whole test, including its awaits.
+// There is no re-entrant acquisition, so the std Mutex is safe to hold across
+// these await points.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_cancel_persists_only_finalized_state() {
+    let _lock = session_lock();
+    let dir = tempfile::tempdir().expect("tempdir");
+    set_sessions_dir(dir.path());
+
+    let provider = CompleteThenHangProvider::new();
+    let mut harness = CodingHarness::new(
+        Box::new(provider),
+        "mock-model".into(),
+        OpiConfig::default(),
+        std::env::current_dir().unwrap(),
+    );
+    let token = harness.cancel_token();
+
+    // Turn 1 completes; the harness persists the finalized user + assistant
+    // messages (and a leaf) to the session JSONL.
+    let result1 = harness.prompt("first").await.unwrap();
+    assert!(
+        result1
+            .iter()
+            .any(|m| matches!(m, AgentMessage::Llm(Message::Assistant(_)))),
+        "turn 1 produces a finalized assistant message"
+    );
+
+    // Turn 2 hangs mid-stream; cancel it. The harness returns Err(Cancelled)
+    // and skips persistence for the cancelled turn.
+    let handle = tokio::spawn(async move { harness.continue_("second").await });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    token.cancel();
+    let result2 = handle.await.expect("continue task panicked");
+    assert!(
+        matches!(result2, Err(opi_agent::loop_types::AgentError::Cancelled)),
+        "cancelled turn returns Err(Cancelled)"
+    );
+
+    // Read back the session JSONL.
+    let jsonl_path = {
+        let mut files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+            .collect();
+        assert_eq!(
+            files.len(),
+            1,
+            "exactly one session JSONL exists: {files:?}"
+        );
+        files.remove(0)
+    };
+    let (_header, entries) = SessionReader::read_all(&jsonl_path).unwrap();
+
+    // Only turn-1 finalized messages persist: the user prompt + the assistant
+    // response. The cancelled turn 2 contributes nothing.
+    assert_eq!(
+        message_entry_count(&entries),
+        2,
+        "only the turn-1 finalized user + assistant messages persist: {entries:?}"
+    );
+    let mut leaked_texts: Vec<String> = Vec::new();
+    for e in &entries {
+        let SessionEntry::Message(MessageEntry { message, .. }) = e else {
+            continue;
+        };
+        match message {
+            Message::User(u) => {
+                for c in &u.content {
+                    if let InputContent::Text { text } = c {
+                        leaked_texts.push(text.clone());
+                    }
+                }
+            }
+            Message::Assistant(a) => {
+                for c in &a.content {
+                    if let AssistantContent::Text { text } = c {
+                        leaked_texts.push(text.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        !leaked_texts.iter().any(|t| t == "partial"),
+        "no partial assistant content from the cancelled turn may be persisted: {leaked_texts:?}"
+    );
+    assert!(
+        !leaked_texts.iter().any(|t| t == "second"),
+        "the cancelled turn's user message must not be persisted: {leaked_texts:?}"
+    );
+
+    clear_sessions_dir();
 }

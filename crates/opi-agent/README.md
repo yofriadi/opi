@@ -144,6 +144,39 @@ A validation failure is a normal runtime outcome, not a loop error: an error
 `ToolResult` (`is_error = true`, `terminate = false`) is persisted and the run
 continues; the hook does not run and the tool does not execute.
 
+## Cancellation
+
+Cancellation has one observable contract across every path — provider stream,
+tool, adapter best-effort cancel, RPC abort, interactive abort, and shutdown.
+The mechanisms differ, but the outcome is the same: cancelled work emits a
+terminal event or diagnostic, no run is left pending, and session storage
+records only finalized state.
+
+In `agent_loop` a single `CancellationToken` is checked at three points each
+turn — before the turn starts, during provider streaming, and during retry
+backoff. When cancellation is observed the loop records an informational
+`agent cancelled` diagnostic (tagged with the lifecycle phase), emits the
+terminal `AgentEnd` event carrying the finalized message buffer, and returns
+`Err(AgentError::Cancelled)`. Partial streaming content accumulated for an
+in-flight assistant message is discarded: it is only pushed to the message
+buffer when the stream's `Done` event arrives, so a cancel mid-stream writes
+no partial assistant message.
+
+`Agent::abort` (and the harness `cancel` / `cancel_token` helpers) cancel the
+active run's token; the token is reset before the next turn, so a cancelled
+runtime returns to idle and accepts a new prompt. A tool that observes its
+`CancellationToken` returns promptly — the process adapter tool returns
+`ToolError::Cancelled` after a best-effort `cancel` message is dispatched to
+the adapter child — and the result becomes a finalized error tool result, not
+a hang. RPC abort, interactive abort, and shutdown all reduce to this same
+token primitive, so the observable contract is uniform across embedder
+boundaries.
+
+Session persistence is append-only per finalized `AgentMessage::Llm` entry, and
+a turn whose run returns `Err(AgentError::Cancelled)` is not persisted at all,
+so storage can never contain a partial assistant message or a half-applied
+tool result.
+
 ## Sessions and Compaction
 
 Session storage is append-only JSONL:

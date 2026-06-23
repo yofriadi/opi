@@ -10,6 +10,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use futures_util::stream;
 use opi_agent::event::AgentEvent;
 use opi_agent::hooks::{
@@ -1498,5 +1499,194 @@ async fn phase8_tool_scheduling_partial_terminate_continues() {
         *call_count.lock().unwrap(),
         2,
         "partial-terminate batch continues to a second provider call"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: cancellation and finalized-state contract (task 8.4)
+//
+// Pins the observable cancellation contract through opi_agent::agent_loop: a
+// cancelled run emits a terminal AgentEnd event and returns
+// Err(AgentError::Cancelled), the provider is not called when cancellation
+// arrives before the first turn, and a run cancelled mid-stream discards the
+// partial assistant message so the terminal payload carries only finalized
+// messages.
+// ---------------------------------------------------------------------------
+
+/// A provider whose stream emits `Start` and a partial `TextDelta`, then never
+/// completes. Used to cancel a run mid-stream and assert the partial content is
+/// discarded: the `Done` event that would finalize the assistant message never
+/// arrives, so nothing is pushed to the message buffer.
+struct HangingStreamProvider {
+    call_count: Arc<Mutex<usize>>,
+}
+
+impl Provider for HangingStreamProvider {
+    fn id(&self) -> &str {
+        "hanging"
+    }
+    fn models(&self) -> &[opi_ai::provider::ModelInfo] {
+        &[]
+    }
+    fn stream(&self, _request: Request) -> EventStream {
+        *self.call_count.lock().unwrap() += 1;
+        let mut partial = base_msg();
+        partial.content.push(AssistantContent::Text {
+            text: "partial".into(),
+        });
+        let events: Vec<Result<AssistantStreamEvent, ProviderError>> = vec![
+            Ok(AssistantStreamEvent::Start {
+                partial: base_msg(),
+            }),
+            Ok(AssistantStreamEvent::TextDelta {
+                content_index: 0,
+                delta: "partial".into(),
+                partial,
+            }),
+        ];
+        // Emit the partial events, then hang forever so the cancel is observed
+        // by the loop's `select!` during streaming rather than on stream end.
+        Box::pin(
+            stream::iter(events)
+                .chain(stream::pending::<Result<AssistantStreamEvent, ProviderError>>()),
+        )
+    }
+}
+
+/// Sink that records event kinds and captures the messages carried by the one
+/// terminal `AgentEnd` event.
+fn agent_end_sink(
+    kinds: Arc<Mutex<Vec<String>>>,
+    end_messages: Arc<Mutex<Option<Vec<AgentMessage>>>>,
+) -> Box<dyn Fn(AgentEvent) + Send + Sync> {
+    Box::new(move |e| {
+        kinds.lock().unwrap().push(event_kind(&e).to_string());
+        if let AgentEvent::AgentEnd { messages } = e {
+            *end_messages.lock().unwrap() = Some(messages);
+        }
+    })
+}
+
+// DoD: a run cancelled before its first turn never calls the provider, emits a
+// terminal AgentEnd, and returns Err(AgentError::Cancelled).
+#[tokio::test]
+async fn phase8_cancellation_contract_before_turn_emits_agent_end_and_returns_cancelled() {
+    let provider = HangingStreamProvider {
+        call_count: Arc::new(Mutex::new(0)),
+    };
+    let call_count = provider.call_count.clone();
+
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+
+    let kinds = Arc::new(Mutex::new(Vec::new()));
+    let end_messages = Arc::new(Mutex::new(None));
+    let sink = agent_end_sink(kinds.clone(), end_messages.clone());
+
+    let context = make_context(Box::new(provider), vec![]);
+    let hooks = MinimalHooks;
+
+    let result =
+        opi_agent::agent_loop(context, AgentLoopConfig::default(), &hooks, sink, cancel).await;
+    assert!(
+        matches!(result, Err(AgentError::Cancelled)),
+        "cancelled-before-turn run returns Err(Cancelled): {result:?}"
+    );
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        0,
+        "provider must not be called when cancellation arrives before the first turn"
+    );
+
+    let seq = kinds.lock().unwrap();
+    assert_eq!(seq.first().map(String::as_str), Some("agent_start"));
+    assert_eq!(
+        seq.iter().filter(|s| s.as_str() == "agent_end").count(),
+        1,
+        "cancelled run emits exactly one terminal AgentEnd: {seq:?}"
+    );
+    assert!(
+        !seq.contains(&"turn_start".to_string()),
+        "no turn work runs when cancelled before turn 0: {seq:?}"
+    );
+
+    // Only the seed message is reflected in the terminal payload.
+    let end = end_messages.lock().unwrap();
+    let end = end.as_ref().expect("AgentEnd payload captured");
+    assert_eq!(end.len(), 1, "only the seed message is finalized: {end:?}");
+    assert!(matches!(end[0], AgentMessage::Llm(Message::User(_))));
+}
+
+// DoD: a run cancelled mid-stream emits a terminal AgentEnd, returns
+// Err(AgentError::Cancelled), and discards the partial assistant message — the
+// terminal payload carries only the seed user message, never the in-flight
+// assistant content.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_cancellation_contract_during_stream_discards_partial_and_emits_agent_end() {
+    let provider = HangingStreamProvider {
+        call_count: Arc::new(Mutex::new(0)),
+    };
+    let call_count = provider.call_count.clone();
+
+    let cancel = CancellationToken::new();
+    let cancel_for_task = cancel.clone();
+
+    let kinds = Arc::new(Mutex::new(Vec::new()));
+    let end_messages = Arc::new(Mutex::new(None));
+    let sink = agent_end_sink(kinds.clone(), end_messages.clone());
+
+    let context = make_context(Box::new(provider), vec![]);
+    let hooks = MinimalHooks;
+
+    let handle = tokio::spawn(async move {
+        opi_agent::agent_loop(
+            context,
+            AgentLoopConfig::default(),
+            &hooks,
+            sink,
+            cancel_for_task,
+        )
+        .await
+    });
+
+    // Let the provider emit Start + the partial TextDelta and enter its hang.
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    cancel.cancel();
+
+    let result = handle.await.expect("agent_loop task panicked");
+    assert!(
+        matches!(result, Err(AgentError::Cancelled)),
+        "mid-stream cancel returns Err(Cancelled): {result:?}"
+    );
+    assert_eq!(
+        *call_count.lock().unwrap(),
+        1,
+        "provider was called once before the cancel was observed"
+    );
+
+    let seq = kinds.lock().unwrap();
+    assert_eq!(seq.first().map(String::as_str), Some("agent_start"));
+    assert_eq!(
+        seq.iter().filter(|s| s.as_str() == "agent_end").count(),
+        1,
+        "cancelled run emits exactly one terminal AgentEnd: {seq:?}"
+    );
+    assert!(
+        !seq.contains(&"message_end".to_string()),
+        "partial assistant message must not be finalized (Done never arrived): {seq:?}"
+    );
+    drop(seq);
+
+    let end = end_messages.lock().unwrap();
+    let end = end.as_ref().expect("AgentEnd payload captured");
+    assert!(
+        end.iter()
+            .all(|m| !matches!(m, AgentMessage::Llm(Message::Assistant(_)))),
+        "terminal payload must not carry a finalized assistant message for the cancelled turn: {end:?}"
+    );
+    assert!(
+        end.iter()
+            .any(|m| matches!(m, AgentMessage::Llm(Message::User(_)))),
+        "terminal payload still carries the seed user message: {end:?}"
     );
 }

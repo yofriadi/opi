@@ -2737,6 +2737,77 @@ async fn rpc_second_turn_abort_after_cancel_targets_active_run() {
     assert_eq!(task.await.unwrap(), 0);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 8: RPC abort cancellation contract (task 8.4)
+//
+// An abort of an in-flight RPC run must surface the shared observable
+// cancellation contract: a correlated success response, a terminal AgentEnd
+// event, and a return to idle so a subsequent prompt is accepted.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_abort_cancellation_contract() {
+    let provider = ControlledProvider::new();
+    let (command_tx, mut output_rx, task) = rpc_test_runner(provider);
+
+    let header = recv_rpc_line(&mut output_rx).await;
+    assert_eq!(header["type"], "rpc_ready");
+
+    // Start a run whose provider stream hangs so the run stays in flight.
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("prompt-1".into()),
+            message: "start".into(),
+        })
+        .unwrap();
+    let prompt = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(prompt["success"], true);
+
+    // Abort the active run; the response is correlated with the request id.
+    command_tx
+        .send(RpcCommand::abort {
+            id: Some("abort-1".into()),
+        })
+        .unwrap();
+    let abort = recv_response(&mut output_rx, "abort").await;
+    assert_eq!(abort["success"], true);
+    assert_eq!(
+        abort["id"], "abort-1",
+        "abort response carries the correlated id"
+    );
+
+    // The cancelled run emits a terminal AgentEnd event on the wire.
+    recv_until_agent_end(&mut output_rx).await;
+
+    // The runner returns to idle, then accepts a new prompt.
+    wait_for_idle_session_info(&command_tx, &mut output_rx).await;
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("prompt-2".into()),
+            message: "again".into(),
+        })
+        .unwrap();
+    let second = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(second["id"], "prompt-2");
+    assert_eq!(
+        second["success"], true,
+        "runner accepts a new prompt after abort (idle)"
+    );
+
+    // Abort the second run before quitting so shutdown is prompt.
+    command_tx
+        .send(RpcCommand::abort {
+            id: Some("abort-2".into()),
+        })
+        .unwrap();
+    let _ = recv_response(&mut output_rx, "abort").await;
+    recv_until_agent_end(&mut output_rx).await;
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rpc_mid_turn_steer_is_queued() {
     let provider = ControlledProvider::new();

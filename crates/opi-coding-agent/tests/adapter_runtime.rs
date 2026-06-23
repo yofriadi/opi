@@ -750,3 +750,89 @@ async fn phase8_skipped_adapter_hooks_trace() {
     // across runs (production run-end path passes None).
     adapter.set_trace_collector(None);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8: adapter best-effort cancel contract (task 8.4)
+//
+// Cancelling an in-flight adapter tool must surface the shared observable
+// cancellation contract: the bridged tool returns Err(ToolError::Cancelled) —
+// a finalized error result rather than a hang — and the cancel is actually
+// dispatched to the adapter child process (best-effort write of a `cancel`
+// message). The `cancel_tool` mock mode hangs on every tool_call and writes an
+// `OPI_ADAPTER_CANCEL_MARKER` file when it receives the cancel.
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_adapter_cancel_contract() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker_path = dir.path().join("cancel.observed");
+    let env: Vec<(String, String)> = vec![
+        (
+            "OPI_ADAPTER_TEST_MODE".to_string(),
+            "cancel_tool".to_string(),
+        ),
+        (
+            "OPI_ADAPTER_CANCEL_MARKER".to_string(),
+            marker_path.to_string_lossy().into_owned(),
+        ),
+    ];
+
+    let host = AdapterHost::start(
+        "cancel-mock",
+        AdapterProcessConfig {
+            command: mock_adapter_bin(),
+            args: vec![],
+            working_dir: std::env::current_dir().expect("cwd"),
+            env,
+        },
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("start host");
+    let caps = host.capabilities().clone();
+    let host = Arc::new(host);
+    let adapter = ProcessAdapter::from_host("cancel-mock", host.clone(), caps);
+    let tools = adapter.tools();
+    assert_eq!(tools.len(), 1, "cancel_tool mode advertises one tool");
+    assert_eq!(tools[0].definition().name, "hanging_tool");
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let token_clone = token.clone();
+    let handle = tokio::spawn(async move {
+        tools[0]
+            .execute("call-cancel", serde_json::json!({}), token_clone, None)
+            .await
+    });
+
+    // Let the tool_call reach the adapter and hang before cancelling.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    token.cancel();
+
+    let result = handle.await.expect("tool task panicked");
+    assert!(
+        matches!(result, Err(opi_agent::tool::ToolError::Cancelled)),
+        "adapter tool must return Err(ToolError::Cancelled) on cancel"
+    );
+
+    // The best-effort cancel was dispatched to the adapter child process.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !marker_path.exists() {
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "adapter cancel marker not written; best-effort cancel was not dispatched to the child"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Reap the child process.
+    let _ = host
+        .send_request(
+            AdapterHostMessage::Shutdown {
+                id: "end".into(),
+                reason: "test_end".into(),
+            },
+            Duration::from_secs(2),
+        )
+        .await;
+}

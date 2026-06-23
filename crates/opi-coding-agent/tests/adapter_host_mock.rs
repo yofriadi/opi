@@ -30,6 +30,7 @@ fn main() {
         "transform" => run_transform(&mut reader, &mut writer),
         "event_backpressure" => run_event_backpressure(&mut reader, &mut writer),
         "shutdown_marker" => run_shutdown_marker(&mut reader, &mut writer),
+        "cancel_tool" => run_cancel_tool(&mut reader, &mut writer),
         _ => std::process::exit(1),
     }
 }
@@ -344,6 +345,60 @@ fn run_shutdown_marker(reader: &mut impl BufRead, writer: &mut impl Write) {
                 let _ = std::fs::write(path, "shutdown observed");
             }
             return;
+        }
+    }
+}
+
+/// `cancel_tool` mode: advertises a tool, hangs on every `tool_call` (never
+/// responds), records an `OPI_ADAPTER_CANCEL_MARKER` file when it receives a
+/// `cancel` message, and exits on `shutdown`. Used to prove the adapter
+/// best-effort cancel is actually dispatched to the child process and that the
+/// bridged tool returns `ToolError::Cancelled` instead of hanging.
+fn run_cancel_tool(reader: &mut impl BufRead, writer: &mut impl Write) {
+    if let Some(line) = read_line(reader) {
+        let msg: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        if msg["type"].as_str() != Some("initialize") {
+            return;
+        }
+        let id = msg["id"].as_str().unwrap_or("1");
+        write_msg(
+            writer,
+            &serde_json::json!({
+                "type": "capabilities",
+                "id": id,
+                "tools": [{
+                    "name": "hanging_tool",
+                    "description": "Hangs on every call until cancelled",
+                    "input_schema": {"type": "object"}
+                }],
+                "commands": [],
+                "hooks": [],
+                "model_overrides": []
+            }),
+        );
+    }
+
+    while let Some(line) = read_line(reader) {
+        let msg: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        match msg["type"].as_str() {
+            // tool_call: intentionally do NOT respond, so the host's request
+            // stays pending and the cancel path is exercised. Keep reading so
+            // the cancel/shutdown lines are still observed.
+            Some("tool_call") => {}
+            Some("cancel") => {
+                if let Ok(path) = std::env::var("OPI_ADAPTER_CANCEL_MARKER") {
+                    let id = msg["id"].as_str().unwrap_or("cancel");
+                    let _ = std::fs::write(path, id);
+                }
+            }
+            Some("shutdown") => return,
+            _ => {}
         }
     }
 }

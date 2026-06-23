@@ -130,6 +130,31 @@ Rate limit 和 timeout 等可重试 Provider 错误可通过 `AgentLoopConfig.re
 运行时结果，而非循环错误：会持久化一个错误 `ToolResult`（`is_error = true`、
 `terminate = false`）并继续运行；hook 不会执行，工具也不会执行。
 
+## 取消（Cancellation）
+
+取消在所有路径上共享同一个可观察契约——provider 流、工具、adapter 尽力取消
+（best-effort cancel）、RPC abort、交互式 abort 以及 shutdown。内部机制各不相同，
+但结果一致：被取消的工作会发出终止事件或诊断，不会留下挂起的 run，且会话存储
+只记录已 finalized 的状态。
+
+在 `agent_loop` 中，每个 turn 会在三处检查同一个 `CancellationToken`：turn 开始
+之前、provider 流式过程中、以及重试退避期间。一旦观察到取消，循环会记录一条信息级
+的 `agent cancelled` 诊断（标注生命周期阶段），发出携带已 finalized 消息缓冲区的终止
+`AgentEnd` 事件，并返回 `Err(AgentError::Cancelled)`。in-flight assistant 消息累积的
+部分流式内容会被丢弃：只有当流的 `Done` 事件到达时才会被推入消息缓冲区，因此流式
+过程中取消不会写入任何部分 assistant 消息。
+
+`Agent::abort`（以及 harness 的 `cancel` / `cancel_token` 辅助方法）会取消活跃 run
+的 token；token 会在下一 turn 之前被重置，因此被取消的运行时会回到 idle 并接受新的
+prompt。观察到自身 `CancellationToken` 的工具会立即返回——进程 adapter 工具在向 adapter
+子进程尽力派发一条 `cancel` 消息后返回 `ToolError::Cancelled`——其结果会成为一个已
+finalized 的错误工具结果，而非挂起。RPC abort、交互式 abort 与 shutdown 都归约为同一个
+token 原语，因此可观察契约在嵌入方边界之间是一致的。
+
+会话持久化对每条已 finalized 的 `AgentMessage::Llm` 条目进行 append-only 写入，而其
+run 返回 `Err(AgentError::Cancelled)` 的 turn 根本不会被持久化，因此存储中永远不会
+出现部分 assistant 消息或半应用的工具结果。
+
 ## 会话与压缩
 
 会话存储使用 append-only JSONL：
