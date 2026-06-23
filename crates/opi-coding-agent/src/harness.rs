@@ -985,6 +985,14 @@ impl CodingHarness {
             .metadata
             .diagnostics
             .extend(session.diagnostics.clone());
+        // Mirror resumed session-recovery diagnostics into the in-process
+        // recording sink (and the trace collector, when active) so they are
+        // counted by diagnostic_counts() and observable on a non-traced run.
+        // This matches how compaction is already wired via
+        // record_harness_diagnostic, closing the 7.2 session-recovery residual.
+        for diagnostic in &session.diagnostics {
+            self.record_harness_diagnostic(diagnostic.clone());
+        }
 
         let compaction_config = opi_agent::compaction::CompactionConfig {
             enabled: self.config.compaction.enabled,

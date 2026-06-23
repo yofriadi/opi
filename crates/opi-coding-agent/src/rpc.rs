@@ -44,6 +44,24 @@
 //!
 //! `abort` cancels the active operation and succeeds immediately when a turn is
 //! running. A second `abort` while idle is a successful no-op.
+//!
+//! # Structured error codes
+//!
+//! Runtime-contract failures carry a stable machine-readable `error_code` on
+//! the response (additive on `SdkResponse::error_code`; the SDK schema version
+//! is unchanged). The codes are:
+//!
+//! | `error_code` | Meaning |
+//! |---|---|
+//! | `unsupported_trace_request` | `trace` issued on a session without a trace sink |
+//! | `agent_busy` | a run is already active (starting a run, or a mutating command while running) |
+//! | `harness_unavailable` | no coding harness is attached to the runner |
+//! | `compaction_failed` | a manual compaction returned an error |
+//! | `extension_command_not_handled` | no registered extension handled the command |
+//!
+//! Idle capability-validation errors from `set_model` / `set_thinking_level`
+//! (cross-provider, malformed spec, unknown model) remain free-text: they are
+//! capability errors, not runtime-state failures.
 
 use std::io::{self, BufRead, Write as IoWrite};
 use std::path::PathBuf;
@@ -68,6 +86,13 @@ use crate::runner::ExitCode;
 use crate::runtime_packages::RuntimePackageStartup;
 
 const ACTIVE_RUN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Stable machine-readable error codes for RPC runtime-contract failures.
+/// Additive on [`SdkResponse::error_code`]; the SDK schema version is unchanged.
+const ERR_AGENT_BUSY: &str = "agent_busy";
+const ERR_HARNESS_UNAVAILABLE: &str = "harness_unavailable";
+const ERR_COMPACTION_FAILED: &str = "compaction_failed";
+const ERR_EXTENSION_COMMAND_NOT_HANDLED: &str = "extension_command_not_handled";
 
 /// Re-export the SDK command type as the RPC command type.
 pub type RpcCommand = SdkCommand;
@@ -638,9 +663,10 @@ impl RpcRunner {
             }
             SdkCommand::set_model { model, .. } => {
                 if self.running {
-                    return emit(&response_error(
+                    return emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_AGENT_BUSY,
                         "cannot change model while agent is running",
                     ));
                 }
@@ -657,25 +683,28 @@ impl RpcRunner {
                         Err(e) => emit(&response_error(cmd_id.as_deref(), cmd_name, &e)),
                     }
                 } else {
-                    emit(&response_error(
+                    emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_HARNESS_UNAVAILABLE,
                         "agent harness is unavailable",
                     ))
                 }
             }
             SdkCommand::set_thinking_level { level, .. } => {
                 if self.running {
-                    return emit(&response_error(
+                    return emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_AGENT_BUSY,
                         "cannot change thinking level while agent is running",
                     ));
                 }
                 let Some(harness) = self.harness.as_mut() else {
-                    return emit(&response_error(
+                    return emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_HARNESS_UNAVAILABLE,
                         "agent harness is unavailable",
                     ));
                 };
@@ -697,16 +726,18 @@ impl RpcRunner {
             }
             SdkCommand::compact { .. } => {
                 if self.running {
-                    return emit(&response_error(
+                    return emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_AGENT_BUSY,
                         "cannot compact while agent is running",
                     ));
                 }
                 let Some(harness) = self.harness.as_mut() else {
-                    return emit(&response_error(
+                    return emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_HARNESS_UNAVAILABLE,
                         "agent harness is unavailable",
                     ));
                 };
@@ -738,21 +769,28 @@ impl RpcRunner {
                             data,
                         ))
                     }
-                    Err(e) => emit(&response_error(cmd_id.as_deref(), cmd_name, &e)),
+                    Err(e) => emit(&response_error_with_code(
+                        cmd_id.as_deref(),
+                        cmd_name,
+                        ERR_COMPACTION_FAILED,
+                        &e,
+                    )),
                 }
             }
             SdkCommand::session_info { .. } => {
                 if self.running {
-                    return emit(&response_error(
+                    return emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_AGENT_BUSY,
                         "cannot query session info while agent is running",
                     ));
                 }
                 let Some(harness) = self.harness.as_mut() else {
-                    return emit(&response_error(
+                    return emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_HARNESS_UNAVAILABLE,
                         "agent harness is unavailable",
                     ));
                 };
@@ -771,16 +809,18 @@ impl RpcRunner {
             }
             SdkCommand::extension_command { name, args, .. } => {
                 if self.running {
-                    return emit(&response_error(
+                    return emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_AGENT_BUSY,
                         "cannot dispatch extension command while agent is running",
                     ));
                 }
                 let Some(harness) = self.harness.as_mut() else {
-                    return emit(&response_error(
+                    return emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_HARNESS_UNAVAILABLE,
                         "agent harness is unavailable",
                     ));
                 };
@@ -793,9 +833,10 @@ impl RpcRunner {
                         cmd_name,
                         data,
                     )),
-                    Ok(None) => emit(&response_error(
+                    Ok(None) => emit(&response_error_with_code(
                         cmd_id.as_deref(),
                         cmd_name,
+                        ERR_EXTENSION_COMMAND_NOT_HANDLED,
                         &format!("extension command not handled: {name}"),
                     )),
                     Err(e) => emit(&response_error(cmd_id.as_deref(), cmd_name, &e)),
@@ -840,15 +881,21 @@ impl RpcRunner {
         emit: &mut impl FnMut(&serde_json::Value) -> bool,
     ) -> bool {
         if self.running {
-            return emit(&response_error(
+            return emit(&response_error_with_code(
                 id,
                 command,
+                ERR_AGENT_BUSY,
                 "agent is already running; use steer or follow_up to queue messages",
             ));
         }
 
         if self.harness.is_none() {
-            return emit(&response_error(id, command, "agent harness is unavailable"));
+            return emit(&response_error_with_code(
+                id,
+                command,
+                ERR_HARNESS_UNAVAILABLE,
+                "agent harness is unavailable",
+            ));
         }
 
         if !emit(&response_success(id, command)) {
@@ -919,5 +966,27 @@ fn drain_events(
         if !emit(&event) {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin the wire values of the RPC runtime-contract failure error codes.
+    /// `agent_busy`, `extension_command_not_handled`, and `unsupported_trace_request`
+    /// are also exercised end-to-end by `tests/rpc_jsonl.rs`; `harness_unavailable`
+    /// and `compaction_failed` guard defensive paths (no-harness runner, compaction
+    /// persist failure) that are impractical to drive through the RPC layer, so their
+    /// wire values are pinned here against accidental rename.
+    #[test]
+    fn error_code_constants_pin_documented_wire_values() {
+        assert_eq!(ERR_AGENT_BUSY, "agent_busy");
+        assert_eq!(ERR_HARNESS_UNAVAILABLE, "harness_unavailable");
+        assert_eq!(ERR_COMPACTION_FAILED, "compaction_failed");
+        assert_eq!(
+            ERR_EXTENSION_COMMAND_NOT_HANDLED,
+            "extension_command_not_handled"
+        );
     }
 }

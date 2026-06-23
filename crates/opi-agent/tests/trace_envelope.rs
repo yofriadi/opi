@@ -1280,3 +1280,528 @@ mod wiring {
         );
     }
 }
+
+// ===========================================================================
+// Phase 8 task 8.6 — runtime-contract failure trace + DiagnosticLinked mirror.
+//
+// Drives the real `agent_loop` through each runtime-contract failure path
+// (tool validation, tool execution error, hook deny, cancellation) and pins
+// BOTH the structural TraceKind record the loop emits AND the DiagnosticLinked
+// mirror (same diagnostic_code + severity) that `observe()` writes in
+// lockstep. The diagnostic sink is also asserted so the in-process record is
+// covered alongside the trace record.
+//
+// Capability-invalid is intentionally not exercised here: it is structurally
+// identical to the already-tested provider-failure path and is pinned by the
+// classification tests in `diagnostics_runtime.rs`.
+// ===========================================================================
+
+mod phase8_runtime_contract_failures {
+    use std::sync::Arc;
+
+    use opi_agent::agent_loop;
+    use opi_agent::diagnostic::code::*;
+    use opi_agent::diagnostic::{RedactionMode, Severity};
+    use opi_agent::diagnostic_sink::RecordingSink;
+    use opi_agent::event::{AgentEvent, AgentEventSink};
+    use opi_agent::hooks::{AgentHooks, BeforeToolCallContext, BeforeToolCallResult};
+    use opi_agent::loop_types::{AgentError, AgentLoopConfig, AgentLoopContext};
+    use opi_agent::message::AgentMessage;
+    use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
+    use opi_agent::{DiagnosticSink, RecordingTraceSink, TraceCollector, TraceKind};
+    use opi_ai::message::{InputContent, Message, OutputContent, ToolDef, UserMessage};
+    use opi_ai::retry::RetryConfig;
+    use opi_ai::test_support::{self, MockProvider};
+
+    /// Hooks that forward LLM messages unchanged and otherwise do nothing.
+    struct NoopHooks;
+    impl AgentHooks for NoopHooks {
+        fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
+            Ok(messages
+                .iter()
+                .filter_map(|m| {
+                    if let AgentMessage::Llm(m) = m {
+                        Some(m.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect())
+        }
+    }
+
+    /// Hooks that deny a tool call to the named tool with the given reason.
+    struct DenyHooks {
+        denied_tool: String,
+        reason: String,
+    }
+    impl AgentHooks for DenyHooks {
+        fn convert_to_llm(&self, messages: &[AgentMessage]) -> Result<Vec<Message>, AgentError> {
+            Ok(messages
+                .iter()
+                .filter_map(|m| {
+                    if let AgentMessage::Llm(m) = m {
+                        Some(m.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect())
+        }
+        fn before_tool_call(
+            &self,
+            ctx: BeforeToolCallContext,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = BeforeToolCallResult> + Send>>
+        {
+            let denied = self.denied_tool.clone();
+            let reason = self.reason.clone();
+            Box::pin(async move {
+                if ctx.tool_name == denied {
+                    BeforeToolCallResult::Deny { reason }
+                } else {
+                    BeforeToolCallResult::Allow
+                }
+            })
+        }
+    }
+
+    fn user_msg(text: &str) -> AgentMessage {
+        AgentMessage::Llm(Message::User(UserMessage {
+            content: vec![InputContent::Text { text: text.into() }],
+            timestamp_ms: 0,
+        }))
+    }
+
+    fn collector(
+        trace_sink: Arc<RecordingTraceSink>,
+        diag_sink: Arc<RecordingSink>,
+    ) -> Arc<TraceCollector> {
+        let c = TraceCollector::new(
+            "run-p8",
+            RedactionMode::default(),
+            trace_sink,
+            Some(diag_sink as Arc<dyn DiagnosticSink>),
+        );
+        c.prepare().expect("recording sink prepare is infallible");
+        Arc::new(c)
+    }
+
+    fn ctx(
+        provider: MockProvider,
+        sink: Arc<RecordingSink>,
+        trace: Option<Arc<TraceCollector>>,
+        tools: Vec<Box<dyn Tool>>,
+    ) -> AgentLoopContext {
+        AgentLoopContext {
+            provider: Box::new(provider),
+            tools,
+            messages: vec![user_msg("hello")],
+            model: "mock-model".into(),
+            system: None,
+            steering_queue: None,
+            follow_up_queue: None,
+            diagnostic_sink: Some(sink as Arc<dyn DiagnosticSink>),
+            trace,
+        }
+    }
+
+    fn config() -> AgentLoopConfig {
+        AgentLoopConfig {
+            max_turns: 10,
+            max_tokens: None,
+            temperature: None,
+            retry: Some(RetryConfig {
+                max_attempts: 3,
+                initial_delay_ms: 1,
+                max_delay_ms: 10,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn null_event_sink() -> AgentEventSink {
+        Box::new(|_: AgentEvent| {})
+    }
+
+    fn kinds_of(sink: &RecordingTraceSink) -> Vec<TraceKind> {
+        sink.snapshot().iter().map(|r| r.kind).collect()
+    }
+
+    /// A tool whose schema requires property "x"; an empty-args call fails
+    /// validation before execute() runs.
+    struct StrictSchemaTool;
+    impl Tool for StrictSchemaTool {
+        fn definition(&self) -> ToolDef {
+            ToolDef {
+                name: "strict".into(),
+                description: "requires x".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": { "x": { "type": "string" } },
+                    "required": ["x"],
+                }),
+            }
+        }
+        fn execute(
+            &self,
+            _call_id: &str,
+            _arguments: serde_json::Value,
+            _signal: tokio_util::sync::CancellationToken,
+            _on_update: Option<opi_agent::tool::UpdateCallback>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<ToolResult, ToolError>> + Send>,
+        > {
+            // Unreachable: validation rejects the empty-args call first.
+            Box::pin(async move {
+                Ok(ToolResult {
+                    content: vec![OutputContent::Text { text: "ok".into() }],
+                    details: None,
+                    is_error: false,
+                    terminate: false,
+                })
+            })
+        }
+        fn execution_mode(&self) -> ExecutionMode {
+            ExecutionMode::Sequential
+        }
+    }
+
+    /// A tool whose execute() always returns a Err(ToolError).
+    struct FailingTool;
+    impl Tool for FailingTool {
+        fn definition(&self) -> ToolDef {
+            ToolDef {
+                name: "boom".into(),
+                description: "always errors".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        fn execute(
+            &self,
+            _call_id: &str,
+            _arguments: serde_json::Value,
+            _signal: tokio_util::sync::CancellationToken,
+            _on_update: Option<opi_agent::tool::UpdateCallback>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<ToolResult, ToolError>> + Send>,
+        > {
+            Box::pin(async move { Err(ToolError::ExecutionFailed("boom".into())) })
+        }
+        fn execution_mode(&self) -> ExecutionMode {
+            ExecutionMode::Sequential
+        }
+    }
+
+    #[tokio::test]
+    async fn phase8_runtime_contract_failure_trace_tool_validation() {
+        // Tool "strict" requires property x; the model calls it with empty
+        // args, so schema validation rejects the call before execute() runs.
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("tc-1", "strict", r#"{}"#),
+                test_support::text_response("done"),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(
+                provider,
+                diag.clone(),
+                Some(trace),
+                vec![Box::new(StrictSchemaTool)],
+            ),
+            config(),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        // Structural trace: Started + Failed, never Completed.
+        let kinds = kinds_of(&trace_sink);
+        assert!(
+            kinds.contains(&TraceKind::ToolCallStarted),
+            "missing ToolCallStarted: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&TraceKind::ToolCallFailed),
+            "validation failure must be traced as ToolCallFailed: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&TraceKind::ToolCallCompleted),
+            "validation failure must not be traced as completed: {kinds:?}"
+        );
+
+        // DiagnosticLinked mirror: validation-failed code, Error severity.
+        let snap = trace_sink.snapshot();
+        let linked = snap.iter().find(|r| {
+            r.kind == TraceKind::DiagnosticLinked
+                && r.diagnostic_code == Some(CODE_TOOL_VALIDATION_FAILED)
+        });
+        let linked = linked.expect(
+            "validation failure must mirror a DiagnosticLinked with CODE_TOOL_VALIDATION_FAILED",
+        );
+        assert_eq!(
+            linked.severity,
+            Some(Severity::Error),
+            "validation failure diagnostic must be Error severity"
+        );
+
+        // The in-process diagnostic sink carries the same code.
+        assert!(
+            diag.snapshot()
+                .iter()
+                .any(|d| d.code == CODE_TOOL_VALIDATION_FAILED),
+            "diagnostic sink must carry CODE_TOOL_VALIDATION_FAILED"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase8_runtime_contract_failure_trace_execute_error() {
+        // Tool "boom" execute() returns Err(ToolError): the loop must trace
+        // ToolCallFailed (NOT Cancelled, since the token is not set) and mirror
+        // a CODE_TOOL_EXECUTION_FAILED diagnostic.
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("tc-1", "boom", r#"{}"#),
+                test_support::text_response("done"),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(
+                provider,
+                diag.clone(),
+                Some(trace),
+                vec![Box::new(FailingTool)],
+            ),
+            config(),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        // Structural trace: Failed, never Cancelled (token is not set).
+        let kinds = kinds_of(&trace_sink);
+        assert!(
+            kinds.contains(&TraceKind::ToolCallStarted),
+            "missing ToolCallStarted: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&TraceKind::ToolCallFailed),
+            "execute error must be traced as ToolCallFailed: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&TraceKind::ToolCallCancelled),
+            "execute error with an unset token must not be traced as cancelled: {kinds:?}"
+        );
+
+        // DiagnosticLinked mirror: execution-failed code, Error severity.
+        let snap = trace_sink.snapshot();
+        let linked = snap.iter().find(|r| {
+            r.kind == TraceKind::DiagnosticLinked
+                && r.diagnostic_code == Some(CODE_TOOL_EXECUTION_FAILED)
+        });
+        let linked = linked
+            .expect("execute error must mirror a DiagnosticLinked with CODE_TOOL_EXECUTION_FAILED");
+        assert_eq!(
+            linked.severity,
+            Some(Severity::Error),
+            "execute error diagnostic must be Error severity"
+        );
+
+        // The in-process diagnostic sink carries the same code.
+        assert!(
+            diag.snapshot()
+                .iter()
+                .any(|d| d.code == CODE_TOOL_EXECUTION_FAILED),
+            "diagnostic sink must carry CODE_TOOL_EXECUTION_FAILED"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase8_runtime_contract_failure_trace_hook_deny() {
+        // DenyHooks rejects the "denied" tool call. The production loop routes
+        // the Deny path through the same execute-failure trace/diagnostic
+        // pipeline as a failing tool, so the diagnostic code is
+        // CODE_TOOL_EXECUTION_FAILED (message "tool call denied by hook"), NOT
+        // CODE_HOOK_FAILED. This test pins that mapping exactly.
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("tc-1", "denied", r#"{}"#),
+                test_support::text_response("done"),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        // A registered tool named "denied" is required so the loop reaches the
+        // before_tool_call hook (an unknown tool would short-circuit on
+        // CODE_TOOL_UNKNOWN before the hook fires).
+        struct PassiveTool;
+        impl Tool for PassiveTool {
+            fn definition(&self) -> ToolDef {
+                ToolDef {
+                    name: "denied".into(),
+                    description: "passive".into(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                }
+            }
+            fn execute(
+                &self,
+                _call_id: &str,
+                _arguments: serde_json::Value,
+                _signal: tokio_util::sync::CancellationToken,
+                _on_update: Option<opi_agent::tool::UpdateCallback>,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<ToolResult, ToolError>> + Send>,
+            > {
+                // Unreachable: the deny hook fires before execute().
+                Box::pin(async move {
+                    Ok(ToolResult {
+                        content: vec![OutputContent::Text { text: "ok".into() }],
+                        details: None,
+                        is_error: false,
+                        terminate: false,
+                    })
+                })
+            }
+            fn execution_mode(&self) -> ExecutionMode {
+                ExecutionMode::Sequential
+            }
+        }
+
+        let hooks = DenyHooks {
+            denied_tool: "denied".into(),
+            reason: "blocked".into(),
+        };
+
+        let result = agent_loop(
+            ctx(
+                provider,
+                diag.clone(),
+                Some(trace),
+                vec![Box::new(PassiveTool)],
+            ),
+            config(),
+            &hooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        // Structural trace: the Deny path emits ToolCallFailed.
+        let kinds = kinds_of(&trace_sink);
+        assert!(
+            kinds.contains(&TraceKind::ToolCallStarted),
+            "missing ToolCallStarted: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&TraceKind::ToolCallFailed),
+            "hook-deny must be traced as ToolCallFailed: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&TraceKind::ToolCallCompleted),
+            "hook-deny must not be traced as completed: {kinds:?}"
+        );
+
+        // DiagnosticLinked mirror: the production loop emits
+        // CODE_TOOL_EXECUTION_FAILED (NOT CODE_HOOK_FAILED) for the deny path,
+        // with Error severity.
+        let snap = trace_sink.snapshot();
+        let linked = snap.iter().find(|r| {
+            r.kind == TraceKind::DiagnosticLinked
+                && r.diagnostic_code == Some(CODE_TOOL_EXECUTION_FAILED)
+        });
+        let linked = linked
+            .expect("hook-deny must mirror a DiagnosticLinked with CODE_TOOL_EXECUTION_FAILED");
+        assert_eq!(
+            linked.severity,
+            Some(Severity::Error),
+            "hook-deny diagnostic must be Error severity"
+        );
+
+        // The in-process diagnostic sink carries the same code.
+        assert!(
+            diag.snapshot()
+                .iter()
+                .any(|d| d.code == CODE_TOOL_EXECUTION_FAILED),
+            "diagnostic sink must carry CODE_TOOL_EXECUTION_FAILED for the deny path"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase8_runtime_contract_failure_trace_cancellation() {
+        // Pre-cancel the token: the loop's before-turn cancel guard fires
+        // first, emits a RunStarted boundary, observes the cancellation
+        // diagnostic (mirrored as DiagnosticLinked with Info severity), then
+        // emits RunEnded and returns Err(AgentError::Cancelled).
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+
+        let result = agent_loop(
+            ctx(provider, diag.clone(), Some(trace), vec![]),
+            config(),
+            &NoopHooks,
+            null_event_sink(),
+            cancel,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(AgentError::Cancelled)),
+            "pre-cancelled loop must return Err(AgentError::Cancelled), got {result:?}"
+        );
+
+        // Run boundaries are still emitted around the cancellation.
+        let kinds = kinds_of(&trace_sink);
+        assert!(
+            kinds.contains(&TraceKind::RunStarted),
+            "missing RunStarted: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&TraceKind::RunEnded),
+            "missing RunEnded: {kinds:?}"
+        );
+
+        // DiagnosticLinked mirror: cancellation code, Info severity
+        // (cancellation is harness/user-initiated, not a failure).
+        let snap = trace_sink.snapshot();
+        let linked = snap.iter().find(|r| {
+            r.kind == TraceKind::DiagnosticLinked && r.diagnostic_code == Some(CODE_AGENT_CANCELLED)
+        });
+        let linked =
+            linked.expect("cancellation must mirror a DiagnosticLinked with CODE_AGENT_CANCELLED");
+        assert_eq!(
+            linked.severity,
+            Some(Severity::Info),
+            "cancellation diagnostic must be Info severity"
+        );
+
+        // The in-process diagnostic sink carries the cancellation code.
+        assert!(
+            diag.snapshot()
+                .iter()
+                .any(|d| d.code == CODE_AGENT_CANCELLED),
+            "diagnostic sink must carry CODE_AGENT_CANCELLED"
+        );
+    }
+}

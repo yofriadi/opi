@@ -384,6 +384,135 @@ mod compaction_classification {
 }
 
 // ===========================================================================
+// Phase 8 task 8.6 — session/compaction diagnostics reach the in-process sink
+//
+// The pure classification bridges above live on CrashRecovery / CompactionOutput
+// / CompactionError; this gate pins that their Diagnostic output round-trips
+// through the in-process RecordingSink (the trait-object path the harness holds)
+// with code/severity/source/details intact. The full end-to-end wiring
+// (resume_session_id -> RecordingSink -> diagnostic_counts) is in
+// opi-coding-agent and is covered by session_runtime.rs; here we lock the
+// substrate the harness depends on.
+// ===========================================================================
+
+mod session_compaction_sink_round_trip {
+    use std::sync::Arc;
+
+    use opi_agent::compaction::{CompactionError, CompactionOutput, SummarySource};
+    use opi_agent::diagnostic::code::*;
+    use opi_agent::diagnostic::{Diagnostic, SOURCE_SESSION, Severity};
+    use opi_agent::session::CrashRecovery;
+    use opi_agent::session_event::CompactionReason;
+    use opi_agent::{DiagnosticSink, RecordingSink};
+
+    #[test]
+    fn phase8_session_compaction_diagnostics_sink() {
+        let sink = RecordingSink::new();
+
+        // --- Crash recovery variants round-trip through the sink ---
+        for diagnostic in CrashRecovery::TruncatedLine.diagnostics() {
+            sink.record(diagnostic);
+        }
+        for diagnostic in (CrashRecovery::CorruptEntries { count: 3 }).diagnostics() {
+            sink.record(diagnostic);
+        }
+        for diagnostic in (CrashRecovery::CorruptEntriesWithTruncation { count: 2 }).diagnostics() {
+            sink.record(diagnostic);
+        }
+        // Clean recovery emits nothing.
+        assert!(CrashRecovery::Clean.diagnostics().is_empty());
+
+        // --- Compaction success + nothing-to-compact round-trip ---
+        let output = CompactionOutput {
+            reason: CompactionReason::Manual,
+            summary_text: "compacted".into(),
+            first_kept_entry_id: "e8".into(),
+            tokens_before: 1000,
+            tokens_after: 200,
+            kept_entries: vec![],
+            summary_source: SummarySource::Hook,
+        };
+        sink.record(output.diagnostic());
+        sink.record(Diagnostic::from(&CompactionError::NothingToCompact));
+
+        let snapshot = sink.snapshot();
+        assert_eq!(
+            snapshot.len(),
+            5,
+            "expected truncated + corrupt + corrupt_with_truncation + compacted + nothing_to_compact"
+        );
+
+        // TruncatedLine: Warning, session_truncated_line, SOURCE_SESSION.
+        let truncated = &snapshot[0];
+        assert_eq!(truncated.code, CODE_SESSION_TRUNCATED_LINE);
+        assert_eq!(truncated.severity, Severity::Warning);
+        assert_eq!(truncated.source, SOURCE_SESSION);
+        assert!(
+            truncated.details.is_none(),
+            "truncated line carries no details"
+        );
+
+        // CorruptEntries: count-bearing, no entry content.
+        let corrupt = &snapshot[1];
+        assert_eq!(corrupt.code, CODE_SESSION_CORRUPT_ENTRIES);
+        assert_eq!(corrupt.severity, Severity::Warning);
+        assert_eq!(corrupt.source, SOURCE_SESSION);
+        let corrupt_details = corrupt.details.as_ref().expect("corrupt carries count");
+        assert_eq!(corrupt_details["corrupt_count"], 3);
+        assert!(corrupt_details.get("entries").is_none(), "no entry content");
+
+        // CorruptEntriesWithTruncation: distinct code, count-bearing.
+        let both = &snapshot[2];
+        assert_eq!(both.code, CODE_SESSION_CORRUPT_WITH_TRUNCATION);
+        assert_eq!(both.severity, Severity::Warning);
+        assert_eq!(both.source, SOURCE_SESSION);
+        let both_details = both
+            .details
+            .as_ref()
+            .expect("corrupt+truncation carries count");
+        assert_eq!(both_details["corrupt_count"], 2);
+        assert!(both_details.get("entries").is_none(), "no entry content");
+
+        // Compaction success: Info, session_compacted, token/source details survive.
+        let compacted = &snapshot[3];
+        assert_eq!(compacted.code, CODE_SESSION_COMPACTED);
+        assert_eq!(compacted.severity, Severity::Info);
+        assert_eq!(compacted.source, SOURCE_SESSION);
+        let compacted_details = compacted
+            .details
+            .as_ref()
+            .expect("compaction carries details");
+        assert_eq!(compacted_details["tokens_before"], 1000);
+        assert_eq!(compacted_details["tokens_after"], 200);
+        assert_eq!(compacted_details["summary_source"], "hook");
+
+        // NothingToCompact: Info, compaction_nothing_to_compact.
+        let nothing = &snapshot[4];
+        assert_eq!(nothing.code, CODE_COMPACTION_NOTHING_TO_COMPACT);
+        assert_eq!(nothing.severity, Severity::Info);
+        assert_eq!(nothing.source, SOURCE_SESSION);
+
+        // --- Trait-object path the harness holds (Arc<dyn DiagnosticSink>) ---
+        // The runtime stores the sink behind `Arc<dyn DiagnosticSink>`; record
+        // goes through the trait object while the concrete RecordingSink keeps
+        // the buffer so we can snapshot it.
+        let concrete = Arc::new(RecordingSink::new());
+        let dyn_sink: Arc<dyn DiagnosticSink> = concrete.clone();
+        for diagnostic in (CrashRecovery::CorruptEntries { count: 7 }).diagnostics() {
+            dyn_sink.record(diagnostic);
+        }
+        let dyn_snapshot = concrete.snapshot();
+        assert_eq!(dyn_snapshot.len(), 1);
+        assert_eq!(dyn_snapshot[0].code, CODE_SESSION_CORRUPT_ENTRIES);
+        assert_eq!(dyn_snapshot[0].severity, Severity::Warning);
+        assert_eq!(
+            dyn_snapshot[0].details.as_ref().unwrap()["corrupt_count"],
+            7
+        );
+    }
+}
+
+// ===========================================================================
 // Runtime emission through production agent_loop paths
 //
 // These drive the real agent_loop with a MockProvider and a RecordingSink

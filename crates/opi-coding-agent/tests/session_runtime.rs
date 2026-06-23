@@ -1714,6 +1714,77 @@ fn open_existing_replays_usage_from_assistant_messages() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 8 task 8.6 — resumed session-recovery diagnostics reach the in-process sink
+//
+// resume_session_id loops record_harness_diagnostic over session.diagnostics
+// (mirroring compaction), so recovery diagnostics from a truncated/corrupt
+// session JSONL land in the in-process RecordingSink and are counted by
+// diagnostic_counts() — not just in resource_metadata. This pins that wiring.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn phase8_session_recovery_diagnostics_reach_in_process_sink() {
+    let _lock = session_lock();
+    let dir = tempfile::tempdir().unwrap();
+    set_sessions_dir(dir.path());
+
+    let path = dir.path().join("recovery-sink-resume.jsonl");
+    let header = make_header("recovery-sink-resume", "/repo");
+    let mut writer = SessionWriter::create(&path, header).unwrap();
+    writer
+        .append(&test_message_entry("msg-1", "hello"))
+        .unwrap();
+    drop(writer);
+
+    // Append a truncated trailing line so resume yields TruncatedLine recovery.
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    write!(file, "{{\"type\":\"message\"").unwrap();
+
+    let provider = MockProvider::new("mock", Vec::new());
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock-model".into(),
+        OpiConfig::default(),
+        std::env::current_dir().unwrap(),
+    )
+    .record_diagnostics(true)
+    .build();
+
+    let message_count = harness
+        .resume_session_id("recovery-sink-resume")
+        .expect("resume should recover preceding entries");
+    assert_eq!(message_count, 1);
+
+    // The recovery diagnostic must be counted in the in-process sink, not just
+    // retained in resource metadata. TruncatedLine is Severity::Warning.
+    let counts = harness
+        .diagnostic_counts()
+        .expect("record_diagnostics installs a recording sink");
+    assert!(
+        counts.warning >= 1,
+        "resumed session-recovery diagnostics should be counted in the in-process sink: {counts:?}"
+    );
+
+    // The matching diagnostic is present in the sink snapshot with the stable
+    // session-recovery code and source.
+    let saw_recovery = harness
+        .resource_metadata()
+        .diagnostics
+        .iter()
+        .any(|d| d.code == code::CODE_SESSION_TRUNCATED_LINE && d.source == SOURCE_SESSION);
+    assert!(
+        saw_recovery,
+        "recovery diagnostic must also be retained in resource metadata"
+    );
+
+    clear_sessions_dir();
+}
+
+// ---------------------------------------------------------------------------
 // Phase 8: cancellation persists only finalized state (task 8.4)
 //
 // A cancelled turn must not write partial assistant/tool/session state: the

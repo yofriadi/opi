@@ -725,6 +725,52 @@ fn phase7_shared_diagnostics_used_by_doctor() {
 }
 
 // ===========================================================================
+// Phase 8 task 8.6 — public diagnostic message/action redaction contract.
+//
+// Pins that the public doctor formatters scrub real-format Anthropic keys,
+// credentialed-URL userinfo, and host absolute paths from BOTH `message` and
+// `action`, regardless of the JSON or text rendering. Both fields are routed
+// through the shared `redacted_payload(Summary)` boundary, so the same
+// redaction contract must hold for either formatter.
+// ===========================================================================
+
+#[test]
+fn phase8_public_diagnostic_message_redaction() {
+    let key = "sk-ant-api03-1234567890abcdefghijklmnopqrstuv";
+    let credentialed = "https://alice:s3cr3t@host/repo.git";
+    let posix_path = "/Users/alice/.config/opi/config.toml";
+    let win_path = "C:\\Users\\alice\\.config\\opi\\packages\\p\\package.toml";
+    let report = DoctorReport {
+        entries: vec![DoctorEntry {
+            scope: DoctorScope::Package,
+            diagnostic: Diagnostic::new(
+                Severity::Warning,
+                "package_diagnostic",
+                "package",
+                format!("read {posix_path} then {win_path}: key {key} src {credentialed}"),
+            )
+            .action(format!("open {win_path} and check {key} at {credentialed}")),
+        }],
+    };
+
+    let json = format_json(&report);
+    let text = format_text(&report);
+
+    for output in [&json, &text] {
+        assert!(!output.contains(key), "Anthropic key leaked: {output}");
+        assert!(
+            !output.contains("s3cr3t"),
+            "userinfo password leaked: {output}"
+        );
+        assert!(!output.contains("alice"), "OS username leaked: {output}");
+        assert!(
+            output.contains("[REDACTED]"),
+            "expected a redaction marker in output: {output}"
+        );
+    }
+}
+
+// ===========================================================================
 // Binary (integration) tests — spawn the real `opi` binary.
 // ===========================================================================
 

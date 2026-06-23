@@ -752,6 +752,102 @@ async fn phase8_skipped_adapter_hooks_trace() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 8: adapter STARTUP degradation diagnostic contract (task 8.6).
+//
+// Characterization gate: when an adapter fails to START (here, an adapter
+// command that escapes the package root), the failure must surface as a typed,
+// structured `Diagnostic` carrying `SOURCE_ADAPTER` and a stable
+// `CODE_ADAPTER_*` code, with structured JSON details — not a free-text
+// `Vec<String>`. The chosen trigger is the `command_invalid` startup gate
+// (relative command path that resolves outside the package root), which runs
+// deterministically before any child process is spawned.
+//
+// DEFERRED: the runtime send_event backpressure path
+// (`CODE_ADAPTER_HOST_DIAGNOSTIC`, from `AdapterHost` observing event-delivery
+// backpressure) is not exercised here. There is no clean deterministic trigger
+// for that path without a test-only `adapter_host_mock` mode, which is out of
+// scope for this characterization gate.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn phase8_adapter_degradation_diagnostic_contract() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Relative command that escapes the package root -> resolve_adapter_command_checked
+    // returns SecurityDiagnostic -> diagnostic_for_adapter_command_invalid.
+    let package = make_gated_package(
+        "cmd-escape-pkg",
+        "opi-extension-jsonl-v1",
+        "process-jsonl",
+        dir.path().to_path_buf(),
+    );
+    // Override the placeholder command with one that fails command resolution.
+    let mut package = package;
+    let adapter = package.manifest.adapter.as_mut().expect("adapter manifest");
+    adapter.command = "../escape-outside-package".to_string();
+
+    let registry = ExtensionRegistry::new();
+    let (registry, diagnostics) =
+        start_adapters_from_packages(&[package], dir.path(), registry).await;
+
+    assert_eq!(
+        diagnostics.len(),
+        1,
+        "expected exactly one startup diagnostic"
+    );
+    let diag = &diagnostics[0];
+
+    // Typed source + stable code (not free text).
+    assert_eq!(diag.source, opi_agent::diagnostic::SOURCE_ADAPTER);
+    assert_eq!(
+        diag.code,
+        opi_agent::diagnostic::code::CODE_ADAPTER_COMMAND_INVALID
+    );
+
+    // Structured JSON details (a JSON object), not a free-text Vec<String>.
+    let details = diag
+        .details
+        .as_ref()
+        .expect("startup degradation must carry structured details");
+    assert!(
+        matches!(details, serde_json::Value::Object(_)),
+        "details must be a JSON object, got {details:?}"
+    );
+    assert_eq!(details["package_name"], "cmd-escape-pkg");
+    assert_eq!(details["adapter_command"], "../escape-outside-package");
+    // adapter_error carries the underlying failure reason.
+    assert!(
+        details["adapter_error"].is_string(),
+        "adapter_error must be a string, got {}",
+        details["adapter_error"]
+    );
+
+    // Every adapter-originated diagnostic in this run carries SOURCE_ADAPTER.
+    for d in &diagnostics {
+        assert_eq!(
+            d.source,
+            opi_agent::diagnostic::SOURCE_ADAPTER,
+            "adapter-originated diagnostic must keep SOURCE_ADAPTER, got {}",
+            d.source
+        );
+    }
+
+    // Redaction boundary is reachable and preserves the stable identity fields
+    // (source + code) so downstream NDJSON/RPC/prompt consumers can match on them.
+    let payload = diag.redacted_payload(opi_agent::RedactionMode::Summary);
+    assert_eq!(payload.source, opi_agent::diagnostic::SOURCE_ADAPTER);
+    assert_eq!(
+        payload.code,
+        opi_agent::diagnostic::code::CODE_ADAPTER_COMMAND_INVALID
+    );
+
+    // The package is skipped at the gate, so no adapter is registered.
+    assert!(
+        registry.collect_tools().is_empty(),
+        "command-invalid package must not register an adapter"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Phase 8: adapter best-effort cancel contract (task 8.4)
 //
 // Cancelling an in-flight adapter tool must surface the shared observable

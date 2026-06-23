@@ -807,4 +807,87 @@ mod phase7 {
             }
         }
     }
+
+    /// Phase 8 task 8.6 — closes the vacuous H5 guard on
+    /// `StartupDiagnostics` redaction. The phase 7 redaction test seeded its
+    /// secrets into the user prompt (not into the startup diagnostic), so it
+    /// could not prove that a real `RuntimePackageStartup.diagnostics` payload
+    /// is scrubbed before it reaches NDJSON. This test seeds every supported
+    /// sensitive class — real-format API keys, a GitHub token, a credentialed
+    /// URL, and a Windows absolute path — directly into a structured
+    /// `Diagnostic` (across `message`, `details`, and `action`), then asserts
+    /// the emitted `StartupDiagnostics` line is both redacted AND still a
+    /// structured `Diagnostic` (carrying `code` / `source` / `severity`),
+    /// proving the runtime did not collapse it to a free-text string.
+    #[tokio::test]
+    async fn phase8_startup_diagnostics_are_structured_and_redacted() {
+        let provider = MockProvider::new("mock", vec![test_support::text_response("hi")]);
+        let diagnostic = Diagnostic::new(
+            Severity::Error,
+            code::CODE_PACKAGE_RESOLUTION_FAILED,
+            SOURCE_PACKAGE,
+            "failed to read config at C:\\Users\\alice\\.config\\opi\\config.toml with key sk-proj-1234567890abcdefghijklmnopqrstuv",
+        )
+        .details(serde_json::json!({
+            "upstream": "https://alice:s3cr3t@github.example.com/o/r.git",
+            "token": "sk-ant-api03-1234567890abcdefghijklmnopqrstuv",
+        }))
+        .action("rotate ghp_1234567890abcdefghijklmnopqrstuvwxyz and retry");
+        let mut runner = runner_with_startup(Box::new(provider), vec![diagnostic], None);
+        let result = runner.run_json("hi").await;
+        assert_eq!(result.exit_code, ExitCode::Success as i32);
+
+        let lines = parse_ndjson(&result.stdout);
+        assert_eq!(lines[0]["type"], "session_header", "first line is header");
+        assert_eq!(
+            lines[1]["type"], "StartupDiagnostics",
+            "second line must be startup diagnostics"
+        );
+
+        let serialized = serde_json::to_string(&lines[1]).unwrap_or_default();
+
+        // Redaction: none of the seeded secrets survive the startup boundary.
+        let leaked_secrets = [
+            "sk-proj-1234567890abcdefghijklmnopqrstuv",
+            "sk-ant-api03-1234567890abcdefghijklmnopqrstuv",
+            "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+            "s3cr3t",
+            "alice",
+        ];
+        for secret in leaked_secrets {
+            assert!(
+                !serialized.contains(secret),
+                "StartupDiagnostics leaked a sensitive value: {secret}\n{serialized}"
+            );
+        }
+        // A redaction marker must be present, proving the scrubber ran rather
+        // than dropping the content silently.
+        assert!(
+            serialized.contains("[REDACTED]"),
+            "StartupDiagnostics should carry at least one redaction marker\n{serialized}"
+        );
+
+        // Structure: the payload is still a Diagnostic, not a flattened string.
+        // Asserting code/source/severity here is the non-vacuous core of H5.
+        let diag = &lines[1]["diagnostics"][0];
+        assert_eq!(
+            diag["code"],
+            code::CODE_PACKAGE_RESOLUTION_FAILED,
+            "structured code field survives redaction"
+        );
+        assert_eq!(
+            diag["source"], SOURCE_PACKAGE,
+            "structured source field survives redaction"
+        );
+        assert_eq!(
+            diag["severity"], "error",
+            "structured severity field survives redaction"
+        );
+        // message is present and redacted (not absent), proving the field was
+        // scrubbed in place rather than dropped.
+        assert!(
+            diag.get("message").and_then(|v| v.as_str()).is_some(),
+            "message field must remain after redaction: {diag}"
+        );
+    }
 }

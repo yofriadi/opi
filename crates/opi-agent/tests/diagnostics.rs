@@ -348,6 +348,56 @@ fn redacted_payload_scrubs_message_action_and_details() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 8 task 8.6 — real provider key formats survive the secret scrubbers.
+//
+// Pins every real-format secret class the redaction core must scrub, plus the
+// Summary-only absolute-path redaction (Verbose deliberately keeps paths). The
+// provider key suffixes are chosen to clear the `{20,}` quantifier floor so a
+// regression that widens or narrows the floor is caught here.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn phase8_real_format_redaction_contract() {
+    let details = json!({
+        "anthropic_api03": "sk-ant-api03-1234567890abcdefghijklmnopqrstuv",
+        "anthropic_api06": "sk-ant-api06-1234567890abcdefghijklmnopqrstuv",
+        "openai_proj": "sk-proj-1234567890abcdefghijklmnopqrstuv",
+        "openai_live": "sk-live-1234567890abcdefghijklmnopqrstuv",
+        "openai_svcacct": "sk-svcacct-1234567890abcdefghijklmnopqrstuv",
+        "credentialed_url": "https://alice:s3cr3t-pw@gitlab.example.com/owner/repo.git",
+        "win_drive_path": "C:\\Users\\alice\\.config\\opi\\config.toml",
+        "unix_abs_path": "/Users/alice/.config/opi/config.toml",
+        "benign": "ordinary value"
+    });
+
+    let summary = redact(&details, RedactionMode::Summary);
+    // Every real-format provider key is scrubbed by the SecretRedactor patterns.
+    assert_eq!(summary["anthropic_api03"], "[REDACTED]");
+    assert_eq!(summary["anthropic_api06"], "[REDACTED]");
+    assert_eq!(summary["openai_proj"], "[REDACTED]");
+    assert_eq!(summary["openai_live"], "[REDACTED]");
+    assert_eq!(summary["openai_svcacct"], "[REDACTED]");
+    // Credentialed URL userinfo is scrubbed in both modes.
+    assert_eq!(summary["credentialed_url"], "[REDACTED]");
+    // Summary mode additionally redacts absolute paths.
+    assert_eq!(summary["win_drive_path"], "[REDACTED]");
+    assert_eq!(summary["unix_abs_path"], "[REDACTED]");
+    // Benign content survives.
+    assert_eq!(summary["benign"], "ordinary value");
+
+    // Verbose keeps content but still scrubs the shared secret patterns. The
+    // absolute-path redaction is Summary-only by design, so do not assert path
+    // redaction here.
+    let verbose = redact(&details, RedactionMode::Verbose);
+    assert_eq!(verbose["anthropic_api03"], "[REDACTED]");
+    assert_eq!(verbose["anthropic_api06"], "[REDACTED]");
+    assert_eq!(verbose["openai_proj"], "[REDACTED]");
+    assert_eq!(verbose["openai_live"], "[REDACTED]");
+    assert_eq!(verbose["openai_svcacct"], "[REDACTED]");
+    assert_eq!(verbose["credentialed_url"], "[REDACTED]");
+}
+
+// ---------------------------------------------------------------------------
 // Display: stable one-line form, no CLI/color formatting in the model
 // ---------------------------------------------------------------------------
 
