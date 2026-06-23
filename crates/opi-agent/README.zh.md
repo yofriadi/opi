@@ -215,6 +215,55 @@ JSONL 模式与嵌入方共享的不稳定 0.x 命令集合。每条命令携带
 所有 SDK/RPC/proxy 表面都是不稳定的 0.x API。客户端应检查 schema version，并在
 需要时固定精确 crate 版本。
 
+## API 表面分类
+
+`opi-agent` 是 0.x crate。公共项分为三档：
+
+| 档位 | 含义 |
+|---|---|
+| 支持的 0.x | 已文档化且经契约测试；在 0.x 内仍可能变动，并附带 changelog 条目。 |
+| 不稳定内部 | 仅因 crate 布局需要而公开；文档告诫消费者固定版本。 |
+| 候选移除 | 在更强的 API 承诺之前应隐藏、迁移或移除。 |
+
+| 表面 | 档位 | 说明 |
+|---|---|---|
+| `Agent` | 支持的 0.x | 对主循环的有状态封装；经契约测试。 |
+| `agent_loop` | 支持的 0.x | 核心异步入口；运行时事件顺序契约已测试。 |
+| `AgentHooks` | 支持的 0.x | 六个生命周期 hooks；hook 顺序与失败契约已测试。 |
+| `Tool` | 支持的 0.x | 基于 JSON-Schema 的工具契约；调度与终止契约已测试。 |
+| `AgentEvent` | 支持的 0.x | 进程内运行时事件流；`#[non_exhaustive]`（0.x 内可能新增变体）。 |
+| `AgentSessionEvent` | 不稳定内部 | `opi --json` 线协议（`NDJSON_SCHEMA_VERSION = 2`，由 `opi-coding-agent` 拥有）；`#[non_exhaustive]`。请检查 schema 版本。 |
+| `SessionEntry` | 不稳定内部 | 会话 JSONL 存储布局；位于 `session::SessionEntry`，未在 crate root 重新导出；`#[non_exhaustive]`。 |
+| `Extension` | 不稳定内部 | 扩展生命周期表面；`extension` 模块标注为 `# Unstable`。 |
+| `ExtensionRegistry` | 不稳定内部 | hook/tool/command 组合；`extension` 模块标注为 `# Unstable`。 |
+| `SdkCommand` | 不稳定内部 | RPC/SDK 命令模型（`SDK_SCHEMA_VERSION = 3`）；`sdk` 模块标注为不稳定 0.x。 |
+| `SdkResponse` | 不稳定内部 | RPC/SDK 响应模型（`SDK_SCHEMA_VERSION = 3`）；`sdk` 模块标注为不稳定 0.x。 |
+| `StreamingProxy`（及 `ProxyConfig`、`ProxyEvent`、`ProxyHandler`、`SecretRedactor`、`StreamingProxyError`） | 不稳定内部 | streaming-proxy 原语；`streaming_proxy` 模块标注为不稳定 0.x。 |
+
+本次评审没有候选移除表面：上述每一项要么是支持的 0.x 运行时表面，要么是 crate
+布局要求保持公开的不稳定内部表面。
+
+不会给出稳定 1.0 API 承诺。当前稳定性由 `AgentEvent`、`AgentSessionEvent`、
+`SessionEntry` 及 trace/hook 结果枚举上的 `#[non_exhaustive]`，以及 `sdk`、
+`streaming_proxy`、`extension` 和 `trace` 模块级的 `# Unstable` / 不稳定 0.x 说明来
+约束。没有 `#[doc(hidden)]` 或 `#[unstable]` feature gate，因此嵌入方应固定精确
+crate 版本。本地 trace envelope 携带 `TRACE_SCHEMA_VERSION = 1`。
+
+## 非目标（Non-Goals）
+
+Phase 8 稳定运行时，不扩展产品范围。以下明确不在范围内，不作声明：
+
+- 不声明稳定 1.0 公共 API 承诺（表面保持 0.x）。
+- 不得引入 TypeScript 扩展 API 兼容。
+- 不得引入 package 生态扩张或 package 市场。
+- 除 `process-jsonl`（`opi-extension-jsonl-v1`）外不得引入新 adapter 类型。
+- 不得添加 Web UI 产品工作。
+- 不得添加供应商 OAuth 登录工作。
+- 不得添加内核 plan mode、sub-agent、todo、权限弹窗或 MCP 运行时。
+- 不得引入共享 `opi-types` crate。
+- 不得在 crate 之间无理由地迁移公共类型。
+- 除非契约测试证明当前形状无法满足所需行为，否则不得重写整个 agent loop。
+
 ## 公共模块
 
 `agent`、`compaction`、`diagnostic`、`diagnostic_sink`、`event`、`extension`、

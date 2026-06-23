@@ -246,6 +246,59 @@ Command-state contract (the runtime guard, not the parse layer):
 All SDK/RPC/proxy surfaces are unstable 0.x APIs. Clients should check schema
 versions and pin exact crate versions when needed.
 
+## API Surface Classification
+
+`opi-agent` is a 0.x crate. Public items fall into three tiers:
+
+| Tier | Meaning |
+|---|---|
+| supported 0.x | Documented and contract-tested; may still change across 0.x with a changelog entry. |
+| unstable internal | Public only because crate layout requires it; documentation warns consumers to pin versions. |
+| candidate removal | Should be hidden, moved, or removed before a stronger API claim. |
+
+| Surface | Tier | Notes |
+|---|---|---|
+| `Agent` | supported 0.x | Stateful loop wrapper; contract-tested. |
+| `agent_loop` | supported 0.x | Core async entry point; runtime event-order contract tested. |
+| `AgentHooks` | supported 0.x | Six lifecycle hooks; hook-order and failure contract tested. |
+| `Tool` | supported 0.x | JSON-Schema tool contract; scheduling and termination contract tested. |
+| `AgentEvent` | supported 0.x | In-process runtime event stream; `#[non_exhaustive]` (new variants may arrive across 0.x). |
+| `AgentSessionEvent` | unstable internal | `opi --json` wire protocol (`NDJSON_SCHEMA_VERSION = 2`, owned by `opi-coding-agent`); `#[non_exhaustive]`. Check the schema version. |
+| `SessionEntry` | unstable internal | Session JSONL storage layout; lives at `session::SessionEntry`, not re-exported at the crate root; `#[non_exhaustive]`. |
+| `Extension` | unstable internal | Extension lifecycle surface; the `extension` module marks it `# Unstable`. |
+| `ExtensionRegistry` | unstable internal | Hook/tool/command composition; the `extension` module marks it `# Unstable`. |
+| `SdkCommand` | unstable internal | RPC/SDK command model (`SDK_SCHEMA_VERSION = 3`); the `sdk` module marks it unstable 0.x. |
+| `SdkResponse` | unstable internal | RPC/SDK response model (`SDK_SCHEMA_VERSION = 3`); the `sdk` module marks it unstable 0.x. |
+| `StreamingProxy` (and `ProxyConfig`, `ProxyEvent`, `ProxyHandler`, `SecretRedactor`, `StreamingProxyError`) | unstable internal | Streaming-proxy primitives; the `streaming_proxy` module marks them unstable 0.x. |
+
+This review found no candidate-removal surfaces: every public item above is
+either a supported 0.x runtime surface or an unstable internal surface that
+crate layout requires to stay public.
+
+There is no stable 1.0 API promise. Stability is enforced today by
+`#[non_exhaustive]` on `AgentEvent`, `AgentSessionEvent`, `SessionEntry`, and
+the trace/hook result enums, and by module-level `# Unstable` / `unstable 0.x`
+prose on `sdk`, `streaming_proxy`, `extension`, and `trace`. There is no
+`#[doc(hidden)]` or `#[unstable]` feature gate, so embedders should pin exact
+crate versions. The local trace envelope carries `TRACE_SCHEMA_VERSION = 1`.
+
+## Non-Goals
+
+Phase 8 stabilizes the runtime; it does not expand product scope. The following
+are explicitly out of scope and not claimed:
+
+- No stable 1.0 public API promise (surfaces stay 0.x).
+- No TypeScript extension API compatibility.
+- No package ecosystem expansion or package marketplace.
+- No new adapter kind beyond `process-jsonl` (`opi-extension-jsonl-v1`).
+- No web UI product work.
+- No provider OAuth login work.
+- No in-core plan mode, sub-agent, todo, permission popup, or MCP runtime.
+- No shared `opi-types` crate.
+- No unjustified public type migration between crates.
+- No rewrite of the whole agent loop unless a contract test proves the current
+  shape cannot satisfy the required behavior.
+
 ## Public Modules
 
 `agent`, `compaction`, `diagnostic`, `diagnostic_sink`, `event`, `extension`,

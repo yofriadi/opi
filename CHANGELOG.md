@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `opi-agent`: README (English and Chinese) classifies the public runtime, extension, event, session, SDK/RPC, and streaming-proxy surfaces as supported 0.x or unstable internal, with their stability mechanism (`#[non_exhaustive]`, module `# Unstable` prose, and the `SDK`/`NDJSON`/`TRACE` schema versions) and an explicit Phase 8 non-goal list; the pi alignment matrix records a Phase 8 runtime-stabilization row. Guard tests pin the classification against the crate-root re-exports and reject the Phase 8 non-goals.
+
 ### Changed
 
 - `opi-coding-agent`: RPC JSONL synchronous rejection responses for runtime-contract failures now carry a stable machine-readable `error_code` — `agent_busy`, `harness_unavailable`, `compaction_failed`, `extension_command_not_handled` (alongside the existing `unsupported_trace_request`) — on the additive `SdkResponse::error_code` field. The SDK schema version is unchanged at `3`; idle `set_model` / `set_thinking_level` capability errors remain free-text.
