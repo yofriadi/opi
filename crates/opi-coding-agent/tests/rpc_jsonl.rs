@@ -2808,6 +2808,332 @@ async fn phase8_abort_cancellation_contract() {
     assert_eq!(task.await.unwrap(), 0);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 8 (task 8.5): RPC command-state contract.
+//
+// The RPC runner accepts prompt/continue only when idle, queues steer/follow_up
+// while running, treats abort as a successful no-op when idle, rejects every
+// mutating command while busy with a correlated structured error, and never
+// silently queues or partially applies a mutation to an in-flight run.
+// ---------------------------------------------------------------------------
+
+/// A second prompt while a run is in flight is rejected (not queued) with a
+/// correlated error, and no second run is spawned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_rpc_command_contract_second_prompt_rejected_while_busy_no_second_run() {
+    let provider = ControlledProvider::new();
+    let call_log = provider.call_log();
+    let (command_tx, mut output_rx, task) = rpc_test_runner(provider);
+
+    let header = recv_rpc_line(&mut output_rx).await;
+    assert_eq!(header["type"], "rpc_ready");
+
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("p1".into()),
+            message: "start".into(),
+        })
+        .unwrap();
+    let first = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(first["success"], true, "first prompt accepted");
+
+    // Wait until the run is provably in flight (provider stream started).
+    loop {
+        let line = recv_rpc_line(&mut output_rx).await;
+        if line["type"] == "MessageStart" {
+            break;
+        }
+    }
+
+    // A second prompt while the run is in flight is rejected, not queued.
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("p2".into()),
+            message: "second".into(),
+        })
+        .unwrap();
+    let second = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(
+        second["id"], "p2",
+        "rejected response carries the correlated id"
+    );
+    assert_eq!(
+        second["success"], false,
+        "second prompt while busy must be rejected"
+    );
+    assert_eq!(
+        second["error"],
+        "agent is already running; use steer or follow_up to queue messages"
+    );
+
+    // No second run was spawned: still exactly one provider request.
+    assert_eq!(
+        call_log.lock().unwrap().len(),
+        1,
+        "busy rejection must not spawn a second run"
+    );
+
+    command_tx.send(RpcCommand::abort { id: None }).unwrap();
+    let _ = recv_response(&mut output_rx, "abort").await;
+    recv_until_agent_end(&mut output_rx).await;
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
+}
+
+/// A continue while a run is in flight is rejected (not queued) with a
+/// correlated error, and no second run is spawned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_rpc_command_contract_continue_rejected_while_busy() {
+    let provider = ControlledProvider::new();
+    let call_log = provider.call_log();
+    let (command_tx, mut output_rx, task) = rpc_test_runner(provider);
+
+    let header = recv_rpc_line(&mut output_rx).await;
+    assert_eq!(header["type"], "rpc_ready");
+
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("p1".into()),
+            message: "start".into(),
+        })
+        .unwrap();
+    let first = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(first["success"], true, "prompt accepted");
+
+    // Wait until the run is provably in flight (provider stream started).
+    loop {
+        let line = recv_rpc_line(&mut output_rx).await;
+        if line["type"] == "MessageStart" {
+            break;
+        }
+    }
+
+    command_tx
+        .send(RpcCommand::continue_ {
+            id: Some("c2".into()),
+            message: "more".into(),
+        })
+        .unwrap();
+    let cont = recv_response(&mut output_rx, "continue").await;
+    assert_eq!(
+        cont["id"], "c2",
+        "rejected response carries the correlated id"
+    );
+    assert_eq!(
+        cont["success"], false,
+        "continue while busy must be rejected"
+    );
+    assert_eq!(
+        cont["error"],
+        "agent is already running; use steer or follow_up to queue messages"
+    );
+    assert_eq!(
+        call_log.lock().unwrap().len(),
+        1,
+        "busy rejection must not spawn a second run"
+    );
+
+    command_tx.send(RpcCommand::abort { id: None }).unwrap();
+    let _ = recv_response(&mut output_rx, "abort").await;
+    recv_until_agent_end(&mut output_rx).await;
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
+}
+
+/// abort while idle is a successful no-op with a correlated id, and leaves the
+/// runner able to accept and complete a subsequent prompt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_rpc_command_contract_abort_while_idle_is_successful_noop() {
+    let provider = ControlledProvider::new();
+    let (command_tx, mut output_rx, task) = rpc_test_runner(provider);
+
+    let header = recv_rpc_line(&mut output_rx).await;
+    assert_eq!(header["type"], "rpc_ready");
+
+    // abort while idle is a successful no-op with a correlated id.
+    command_tx
+        .send(RpcCommand::abort {
+            id: Some("idle-abort".into()),
+        })
+        .unwrap();
+    let abort = recv_response(&mut output_rx, "abort").await;
+    assert_eq!(abort["id"], "idle-abort");
+    assert_eq!(
+        abort["success"], true,
+        "abort while idle is a successful no-op"
+    );
+
+    // The idle no-op leaves the runner able to accept and complete a prompt.
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("p1".into()),
+            message: "after idle abort".into(),
+        })
+        .unwrap();
+    let prompt = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(prompt["success"], true);
+    recv_until_agent_end(&mut output_rx).await;
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
+}
+
+/// follow_up sent while a run is in flight is accepted (queued) with a
+/// correlated success response, and is delivered as a second provider request
+/// once the running turn completes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_rpc_command_contract_follow_up_queued_while_running() {
+    let provider = ControlledProvider::new();
+    let call_log = provider.call_log();
+    let (command_tx, mut output_rx, task) = rpc_test_runner(provider);
+
+    let header = recv_rpc_line(&mut output_rx).await;
+    assert_eq!(header["type"], "rpc_ready");
+
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("p1".into()),
+            message: "start".into(),
+        })
+        .unwrap();
+    let _prompt = recv_response(&mut output_rx, "prompt").await;
+
+    // follow_up while running is accepted (queued) with a correlated id.
+    command_tx
+        .send(RpcCommand::follow_up {
+            id: Some("fu1".into()),
+            message: "queued follow up".into(),
+        })
+        .unwrap();
+    let follow_up = recv_response(&mut output_rx, "follow_up").await;
+    assert_eq!(follow_up["id"], "fu1");
+    assert_eq!(
+        follow_up["success"], true,
+        "follow_up while running is queued (success)"
+    );
+
+    // The run completes turn 1, then the queued follow-up drives a second turn.
+    loop {
+        let line = recv_rpc_line(&mut output_rx).await;
+        if line["type"] == "AgentEnd" {
+            break;
+        }
+    }
+
+    {
+        let calls = call_log.lock().unwrap();
+        assert!(
+            calls.len() >= 2,
+            "queued follow-up must trigger a second provider request"
+        );
+        let saw_follow_up = calls[1].messages.iter().any(|message| match message {
+            opi_ai::message::Message::User(user) => user.content.iter().any(|content| {
+                matches!(
+                    content,
+                    opi_ai::message::InputContent::Text { text } if text == "queued follow up"
+                )
+            }),
+            _ => false,
+        });
+        assert!(
+            saw_follow_up,
+            "second provider request should include the follow-up message"
+        );
+    }
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
+}
+
+/// compact, session_info, and extension_command are each rejected while a run
+/// is in flight — each with its own correlated id and the documented error —
+/// and none mutates the running turn (still exactly one provider request).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phase8_rpc_command_contract_mutating_commands_rejected_while_busy_no_mutation() {
+    let provider = ControlledProvider::new();
+    let call_log = provider.call_log();
+    let (command_tx, mut output_rx, task) = rpc_test_runner(provider);
+
+    let header = recv_rpc_line(&mut output_rx).await;
+    assert_eq!(header["type"], "rpc_ready");
+
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("p1".into()),
+            message: "start".into(),
+        })
+        .unwrap();
+    let prompt = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(prompt["success"], true);
+
+    // Wait until the run is provably in flight.
+    loop {
+        let line = recv_rpc_line(&mut output_rx).await;
+        if line["type"] == "MessageStart" {
+            break;
+        }
+    }
+
+    // compact rejected while busy.
+    command_tx
+        .send(RpcCommand::compact {
+            id: Some("cmp".into()),
+        })
+        .unwrap();
+    let compact = recv_response(&mut output_rx, "compact").await;
+    assert_eq!(compact["id"], "cmp");
+    assert_eq!(compact["success"], false);
+    assert_eq!(compact["error"], "cannot compact while agent is running");
+
+    // session_info rejected while busy.
+    command_tx
+        .send(RpcCommand::session_info {
+            id: Some("si".into()),
+        })
+        .unwrap();
+    let session_info = recv_response(&mut output_rx, "session_info").await;
+    assert_eq!(session_info["id"], "si");
+    assert_eq!(session_info["success"], false);
+    assert_eq!(
+        session_info["error"],
+        "cannot query session info while agent is running"
+    );
+
+    // extension_command rejected while busy.
+    command_tx
+        .send(RpcCommand::extension_command {
+            id: Some("ext".into()),
+            name: "x/y".into(),
+            args: serde_json::json!({}),
+        })
+        .unwrap();
+    let extension = recv_response(&mut output_rx, "extension_command").await;
+    assert_eq!(extension["id"], "ext");
+    assert_eq!(extension["success"], false);
+    assert_eq!(
+        extension["error"],
+        "cannot dispatch extension command while agent is running"
+    );
+
+    // Still exactly one provider request: no partial mutation while running.
+    assert_eq!(
+        call_log.lock().unwrap().len(),
+        1,
+        "busy rejections must not mutate the run"
+    );
+
+    command_tx.send(RpcCommand::abort { id: None }).unwrap();
+    let _ = recv_response(&mut output_rx, "abort").await;
+    recv_until_agent_end(&mut output_rx).await;
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _quit = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rpc_mid_turn_steer_is_queued() {
     let provider = ControlledProvider::new();

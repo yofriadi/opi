@@ -193,6 +193,41 @@ Compaction primitives include threshold/manual/overflow reasons,
 higher-level coordinator that connects these primitives to persisted CLI
 sessions.
 
+## SDK and RPC Command Contract
+
+`sdk` (`SDK_SCHEMA_VERSION = 3`, re-exported as `RPC_SCHEMA_VERSION`) defines the
+unstable 0.x command set shared by RPC JSONL mode and embedders. Each command
+carries an optional `id` echoed on its response; RPC emits one `response` per
+command, carrying `command`, `success`, optional `id`/`error`, optional
+structured `error_code` (e.g. `unsupported_trace_request`), and optional `data`.
+
+Command-state contract (the runtime guard, not the parse layer):
+
+| Command | Idle | While running |
+|---|---|---|
+| `prompt` / `continue` | accepted → spawns a run; async events follow | rejected (`agent is already running; use steer or follow_up to queue messages`) |
+| `abort` | successful no-op | cancels the active run, success |
+| `steer` | queued on the harness | queued on the active control handle |
+| `follow_up` | queued on the harness | queued on the active control handle |
+| `set_model` | validated (same provider, known model, thinking revalidation) | rejected (`cannot change model while agent is running`) |
+| `set_thinking_level` | validated (`off|low|medium|high`, model supports it / budget) | rejected (`cannot change thinking level while agent is running`) |
+| `compact` | manual compaction (result + diagnostic) | rejected (`cannot compact while agent is running`) |
+| `session_info` | returns model / resources / session_id | rejected (`cannot query session info while agent is running`) |
+| `extension_command` | dispatched to the registry (data / `not handled` / error) | rejected (`cannot dispatch extension command while agent is running`) |
+| `trace` | versioned redacted envelope, or `unsupported_trace_request` | allowed (per-run snapshot) |
+| `quit` | success + shutdown | success + shutdown (waits for an active run to clean up) |
+
+- A rejected mutating command is dropped, never queued or partially applied: a
+  busy `set_model` / `set_thinking_level` / `compact` leaves the running turn and
+  its configuration untouched.
+- `steer` and `follow_up` are the only commands that queue during a run; `steer`
+  is delivered before the next provider request, `follow_up` when the agent would
+  otherwise stop.
+- Malformed or unknown commands fail as a structured `parse` response, not a
+  silent drop.
+- `abort` while running is the same observable cancellation as interactive abort
+  and shutdown (see Cancellation).
+
 ## SDK, Extensions, Diagnostics, and Proxy
 
 - `sdk` defines schema-versioned command/response types shared by RPC JSONL

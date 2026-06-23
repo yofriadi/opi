@@ -15,7 +15,7 @@ use opi_agent::loop_types::{AgentError, AgentLoopConfig};
 use opi_agent::sdk::{SDK_SCHEMA_VERSION, SdkCommand, SdkResponse, agent_event_to_value};
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
 use opi_ai::message::{OutputContent, ToolDef};
-use opi_ai::test_support::{MockProvider, text_response};
+use opi_ai::test_support::{MockProvider, text_response, tool_call_response};
 use tokio_util::sync::CancellationToken;
 
 // ---------------------------------------------------------------------------
@@ -485,5 +485,197 @@ fn sdk_types_are_documented_unstable() {
     assert!(
         module_doc.contains("0.x"),
         "SDK module must document unstable 0.x status"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8 (task 8.5): SDK and RPC command-state contract.
+//
+// The SdkCommand/SdkResponse types are the 0.x command contract shared by the
+// RPC JSONL runner and embedders. These tests pin the documented command
+// enumeration, the structured unsupported-command error shape, and that
+// AgentControl (the clonable handle RpcRunner stores as its control surface)
+// routes steer/follow_up into the agent's queues and abort into its shared
+// cancellation token.
+// ---------------------------------------------------------------------------
+
+/// The full documented 0.x command set parses to its canonical name and echoes
+/// its correlation id.
+#[test]
+fn phase8_sdk_command_contract_all_documented_commands_parse_and_name() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            r#"{"type":"prompt","message":"hi","id":"c1"}"#,
+            "prompt",
+            "c1",
+        ),
+        (
+            r#"{"type":"continue","message":"more","id":"c2"}"#,
+            "continue",
+            "c2",
+        ),
+        (r#"{"type":"steer","message":"s","id":"c3"}"#, "steer", "c3"),
+        (
+            r#"{"type":"follow_up","message":"f","id":"c4"}"#,
+            "follow_up",
+            "c4",
+        ),
+        (r#"{"type":"abort","id":"c5"}"#, "abort", "c5"),
+        (
+            r#"{"type":"set_model","model":"m","id":"c6"}"#,
+            "set_model",
+            "c6",
+        ),
+        (
+            r#"{"type":"set_thinking_level","level":"low","id":"c7"}"#,
+            "set_thinking_level",
+            "c7",
+        ),
+        (r#"{"type":"compact","id":"c8"}"#, "compact", "c8"),
+        (r#"{"type":"session_info","id":"c9"}"#, "session_info", "c9"),
+        (
+            r#"{"type":"extension_command","name":"n","args":{},"id":"c10"}"#,
+            "extension_command",
+            "c10",
+        ),
+        (r#"{"type":"trace","id":"c11"}"#, "trace", "c11"),
+        (r#"{"type":"quit","id":"c12"}"#, "quit", "c12"),
+    ];
+    for (json, name, id) in cases {
+        let cmd: SdkCommand =
+            serde_json::from_str(json).unwrap_or_else(|e| panic!("parse {json}: {e}"));
+        assert_eq!(cmd.command_name(), *name, "command_name for {json}");
+        assert_eq!(cmd.id(), Some(*id), "correlated id for {json}");
+    }
+}
+
+/// A structured unsupported-command response carries a stable machine-readable
+/// `error_code`; a plain error response carries none.
+#[test]
+fn phase8_sdk_command_contract_unsupported_response_carries_error_code() {
+    let resp = SdkResponse::error_with_code(
+        Some("t1"),
+        "trace",
+        "unsupported_trace_request",
+        "trace is not enabled",
+    );
+    let val = serde_json::to_value(&resp).unwrap();
+    assert_eq!(val["type"], "response");
+    assert_eq!(val["command"], "trace");
+    assert_eq!(val["success"], false);
+    assert_eq!(val["id"], "t1");
+    assert_eq!(val["error"], "trace is not enabled");
+    assert_eq!(
+        val["error_code"], "unsupported_trace_request",
+        "structured unsupported-command errors carry a stable error_code"
+    );
+
+    // The error_code field is additive: plain errors omit it entirely.
+    let plain = SdkResponse::error(Some("e1"), "set_model", "bad model");
+    let pval = serde_json::to_value(&plain).unwrap();
+    assert_eq!(pval["success"], false);
+    assert!(
+        pval.get("error_code").is_none(),
+        "plain errors must not carry an error_code"
+    );
+}
+
+/// Build an agent backed by a MockProvider whose request log is observable.
+fn agent_with_call_log(
+    responses: Vec<Vec<opi_ai::stream::AssistantStreamEvent>>,
+) -> (Agent, Arc<Mutex<Vec<opi_ai::provider::Request>>>) {
+    let provider = MockProvider::new("mock", responses);
+    let call_log = provider.call_log_handle();
+    let agent = Agent::new(
+        Box::new(provider),
+        vec![Box::new(NoopTool)],
+        "mock:mock-model".into(),
+        Some("test system prompt".into()),
+        AgentLoopConfig::default(),
+        Box::new(NoopHooks),
+    );
+    (agent, call_log)
+}
+
+/// True when provider call `call_index` contains a user text message equal to
+/// `text`.
+fn provider_call_contains_user_text(
+    call_log: &Arc<Mutex<Vec<opi_ai::provider::Request>>>,
+    call_index: usize,
+    text: &str,
+) -> bool {
+    let calls = call_log.lock().unwrap();
+    let Some(request) = calls.get(call_index) else {
+        return false;
+    };
+    request.messages.iter().any(|message| match message {
+        opi_ai::message::Message::User(user) => user.content.iter().any(|content| {
+            matches!(
+                content,
+                opi_ai::message::InputContent::Text { text: t } if t == text
+            )
+        }),
+        _ => false,
+    })
+}
+
+/// AgentControl (the clonable handle RpcRunner stores) routes steer and
+/// follow_up into the agent's queues — observable as a second provider request
+/// carrying the queued text — and routes abort into the agent's shared token.
+#[tokio::test]
+async fn phase8_sdk_command_contract_agent_control_routes_steer_follow_up_abort() {
+    // Steer via the control handle is delivered before the next provider
+    // request. A tool-call first turn forces a continuation so the steering
+    // message is deterministically observed in the second call.
+    let (mut agent, steer_log) = agent_with_call_log(vec![
+        tool_call_response("tc-steer", "noop", "{}"),
+        text_response("steered"),
+    ]);
+    let steer_control = agent.control_handle();
+    steer_control.steer("steer-via-control".into());
+    let result = agent.prompt("initial").await;
+    assert!(result.is_ok(), "steered prompt should complete: {result:?}");
+    assert_eq!(
+        steer_log.lock().unwrap().len(),
+        2,
+        "queued steering must trigger a second provider request"
+    );
+    assert!(
+        provider_call_contains_user_text(&steer_log, 1, "steer-via-control"),
+        "second provider request must include the steering text"
+    );
+
+    // Follow-up via the control handle is delivered when the agent would
+    // otherwise stop, triggering a continuation turn.
+    let (mut agent, follow_up_log) =
+        agent_with_call_log(vec![text_response("first"), text_response("followed")]);
+    let follow_up_control = agent.control_handle();
+    follow_up_control.follow_up("followup-via-control".into());
+    let result = agent.prompt("initial").await;
+    assert!(
+        result.is_ok(),
+        "follow-up prompt should complete: {result:?}"
+    );
+    assert_eq!(
+        follow_up_log.lock().unwrap().len(),
+        2,
+        "queued follow-up must trigger a second provider request"
+    );
+    assert!(
+        provider_call_contains_user_text(&follow_up_log, 1, "followup-via-control"),
+        "second provider request must include the follow-up text"
+    );
+
+    // Abort via the control handle cancels the agent's shared token.
+    let agent = make_agent(vec![text_response("ok")]);
+    let abort_control = agent.control_handle();
+    assert!(
+        !agent.cancel_token().is_cancelled(),
+        "agent starts uncancelled"
+    );
+    abort_control.abort();
+    assert!(
+        agent.cancel_token().is_cancelled(),
+        "AgentControl::abort must cancel the agent's shared cancellation token"
     );
 }
