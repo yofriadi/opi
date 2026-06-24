@@ -12,9 +12,9 @@
 当前 crate 版本是 `0.5.3`，继承自 workspace 包版本。
 
 `opi-ai` 负责模型/Provider 层：请求和消息类型、流式事件、模型元数据、Provider
-注册、HTTP/代理连接、重试辅助、图片内容、用量累计和尽力而为的费用辅助。它不
-实现 Agent 主循环或内置编程工具；这些能力分别位于 `opi-agent` 和
-`opi-coding-agent`。
+注册、HTTP/代理连接、重试辅助、图片内容、用量累计、尽力而为的费用辅助，以及供
+`opi-agent` 诊断层使用的 Provider 侧错误分类。它不实现 Agent 主循环、会话、
+package 加载或内置编程工具；这些能力分别位于 `opi-agent` 和 `opi-coding-agent`。
 
 ## Provider
 
@@ -44,6 +44,7 @@ OpenAI-compatible profile 加入。
 | `InputContent` / `OutputContent` | 文本与图片内容块。 |
 | `AssistantStreamEvent` | Provider 无关流式事件，覆盖 start、text、thinking、tool call、done 和 error。 |
 | `ModelInfo` | 模型元数据：上下文窗口、输出上限、图片、流式和 thinking 支持。 |
+| `ProviderError` / `ProviderErrorCategory` | Provider 失败分类：鉴权、限流、超时、请求和流式错误。 |
 | `ProviderRegistry` | 解析 `provider:model`、注册自定义 Provider、叠加模型覆盖。 |
 | `HttpClient` | 共享 `reqwest` client，支持连接池和显式/环境变量代理。 |
 | `retry` | 重试配置、指数退避和 `Retry-After` 解析。 |

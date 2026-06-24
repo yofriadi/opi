@@ -13,9 +13,10 @@ Current crate version: `0.5.3`, inherited from the workspace package version.
 
 `opi-ai` owns the model/provider layer: request and message types, streaming
 events, model metadata, provider registration, HTTP/proxy plumbing, retry
-helpers, image content, usage accumulation, and best-effort cost helpers. It
-does not implement an agent loop or built-in coding tools; those live in
-`opi-agent` and `opi-coding-agent`.
+helpers, image content, usage accumulation, best-effort cost helpers, and the
+provider-side error taxonomy consumed by `opi-agent` diagnostics. It does not
+implement an agent loop, sessions, package loading, or built-in coding tools;
+those live in `opi-agent` and `opi-coding-agent`.
 
 ## Providers
 
@@ -45,6 +46,7 @@ added through registry overrides or configured OpenAI-compatible profiles.
 | `InputContent` / `OutputContent` | Text and image content blocks. |
 | `AssistantStreamEvent` | Provider-neutral stream events for start, text, thinking, tool calls, done, and error. |
 | `ModelInfo` | Model metadata: context window, output limit, image, streaming, and thinking support. |
+| `ProviderError` / `ProviderErrorCategory` | Provider failure taxonomy: auth, rate limit, timeout, request, and stream errors. |
 | `ProviderRegistry` | Resolves `provider:model`, registers custom providers, and layers model overrides. |
 | `HttpClient` | Shared `reqwest` client with pooling and explicit/env proxy support. |
 | `retry` | Retry config, exponential backoff, and `Retry-After` parsing. |

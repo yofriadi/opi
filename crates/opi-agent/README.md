@@ -206,6 +206,19 @@ carries an optional `id` echoed on its response; RPC emits one `response` per
 command, carrying `command`, `success`, optional `id`/`error`, optional
 structured `error_code` (e.g. `unsupported_trace_request`), and optional `data`.
 
+Structured `error_code` values are limited to runtime-contract failures:
+
+| `error_code` | Meaning |
+|---|---|
+| `unsupported_trace_request` | `trace` was requested when the session has no trace sink. |
+| `agent_busy` | A run is already active, or a runtime-state mutation was attempted while running. |
+| `harness_unavailable` | The RPC runner has no attached `CodingHarness`. |
+| `compaction_failed` | Manual compaction returned an error. |
+| `extension_command_not_handled` | No registered extension handled the requested command. |
+
+Idle capability errors from `set_model` and `set_thinking_level` remain
+free-text validation failures and do not carry `error_code`.
+
 Command-state contract (the runtime guard, not the parse layer):
 
 | Command | Idle | While running |

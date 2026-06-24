@@ -181,6 +181,19 @@ JSONL 模式与嵌入方共享的不稳定 0.x 命令集合。每条命令携带
 `id`/`error`、可选的结构化 `error_code`（如 `unsupported_trace_request`），以及可选的
 `data`。
 
+结构化 `error_code` 只用于运行时契约失败：
+
+| `error_code` | 含义 |
+|---|---|
+| `unsupported_trace_request` | 会话没有 trace sink 时请求了 `trace`。 |
+| `agent_busy` | 已有 run 处于活跃状态，或运行中尝试执行运行时状态修改。 |
+| `harness_unavailable` | RPC runner 没有附着 `CodingHarness`。 |
+| `compaction_failed` | 手动压缩返回错误。 |
+| `extension_command_not_handled` | 没有已注册扩展处理该命令。 |
+
+`set_model` 和 `set_thinking_level` 的空闲态能力错误仍是自由文本验证失败，不携带
+`error_code`。
+
 命令状态契约（运行时守卫，而非解析层）：
 
 | 命令 | 空闲时 | 运行中 |

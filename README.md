@@ -6,7 +6,7 @@
 > Rust AI agent toolkit and terminal-first coding agent inspired by
 > [earendil-works/pi](https://github.com/earendil-works/pi).
 
-[Simplified Chinese](README.zh.md) | [Changelog](CHANGELOG.md) | [Spec](docs/opi-spec.md)
+[Simplified Chinese](README.zh.md) | [Changelog](CHANGELOG.md) | [Spec draft](docs/opi-spec.md)
 
 ## Status
 
@@ -18,6 +18,12 @@ version; check [CHANGELOG.md](CHANGELOG.md) for the current delta.
 `opi` reimplements selected pi ideas in Rust. It is not API-compatible with pi,
 does not read pi config by default, and uses its own TOML config and JSONL
 session format.
+
+The current tree also includes unreleased Phase 8 runtime-stabilization work:
+`opi-agent` documents and guard-tests runtime event order, hook/tool/cancellation
+semantics, SDK/RPC command-state behavior, and public API surface tiers. Treat
+wire protocols, extension/package surfaces, and trace payloads as unstable 0.x
+unless a crate README explicitly says otherwise.
 
 ## Install
 
@@ -96,6 +102,21 @@ Common mode flags:
 | `--no-tools` | Disable all tools. |
 | `--allow-mutating` | Allow `write`, `edit`, and `bash` in non-interactive/RPC runs. |
 | `--trace <PATH>` | Write an opt-in, redacted local trace envelope for the run. |
+
+## Wire Versions
+
+Automation and embedder surfaces are versioned, but still unstable 0.x:
+
+| Surface | Current version | Where it appears |
+|---------|-----------------|------------------|
+| NDJSON mode | `NDJSON_SCHEMA_VERSION = 2` | `opi --json` schema header |
+| RPC / SDK | `SDK_SCHEMA_VERSION = 3` | `opi --rpc` `rpc_ready.schema_version` |
+| Trace envelope | `TRACE_SCHEMA_VERSION = 1` | `--trace <PATH>` and RPC `trace` payloads |
+
+RPC runtime-state rejections may carry a stable machine-readable `error_code`:
+`unsupported_trace_request`, `agent_busy`, `harness_unavailable`,
+`compaction_failed`, or `extension_command_not_handled`. Idle capability errors
+from `set_model` and `set_thinking_level` remain free-text validation errors.
 
 ## Providers
 
@@ -186,22 +207,28 @@ Resource discovery supports extensions, packages, skills, prompt fragments, and
 themes. Package manifests can start `process-jsonl` adapters that expose custom
 tools, commands, hooks, event observers, state, and model/provider overrides.
 
-Packages are trusted code. Installing a package can start child processes with
-the same OS permissions as `opi`; package permission declarations are currently
-metadata, not enforced sandbox policy.
+## Permissions and Trust Boundaries
 
-## Boundaries
+`opi` runs with the operating-system permissions of the user and process that
+launched it. Tool selection and mutating-tool flags control which built-in tools
+the agent can call; they are not an operating-system sandbox.
 
-- `opi` does not collect telemetry or analytics and does not share sessions
-  automatically.
-- `opi doctor` is local and network-free by default; it checks local config,
-  provider credential presence, packages, sessions, TUI capability, and RPC
-  schema information.
+- File writes and edits are scoped to the harness workspace root. `bash` starts
+  in the workspace root but can execute commands with the launching user's OS
+  permissions.
+- Packages are trusted code. A package can start child processes with the same
+  OS permissions as `opi`; package permission declarations are metadata, not enforced sandbox policy.
+- Observability is local and explicit: `opi` does not collect telemetry or
+  analytics, does not share sessions automatically, `opi doctor` is local and
+  network-free by default, and traces are opt-in.
 - Production sub-agent, permission-gate, plan/todo, and MCP workflows are not
   built into the core CLI. The repository contains examples and package
   scaffolds for those patterns.
 - OAuth or subscription login flows are not implemented.
 - Dynamic Rust plugin loading from arbitrary extension paths is not supported.
+
+If you need stronger isolation, run `opi` inside a container, VM, or external
+sandbox appropriate for the tools and credentials you expose to it.
 
 ## Development
 
@@ -217,7 +244,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
 See [AGENTS.md](AGENTS.md) for repository working rules and
-[docs/opi-spec.md](docs/opi-spec.md) for the current technical spec.
+[docs/opi-spec.md](docs/opi-spec.md) for the technical spec draft.
 
 ## License
 

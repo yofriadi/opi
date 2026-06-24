@@ -155,7 +155,8 @@ With no prompt args, `opi` starts the ratatui TUI. Slash commands include:
 
 Text mode writes assistant text to stdout and diagnostics to stderr. `--json`
 writes a schema header, serialized session/agent events, and a final
-`session_summary` as NDJSON.
+`session_summary` as NDJSON. The current NDJSON schema version is
+`NDJSON_SCHEMA_VERSION = 2`.
 
 Exit codes:
 
@@ -180,6 +181,12 @@ that ready header.
 Commands include `prompt`, `continue`, `steer`, `follow_up`, `abort`,
 `set_model`, `set_thinking_level`, `compact`, `session_info`,
 `extension_command`, `trace`, and `quit`.
+
+Runtime-state rejection responses may include `error_code` values:
+`unsupported_trace_request`, `agent_busy`, `harness_unavailable`,
+`compaction_failed`, and `extension_command_not_handled`. Idle capability
+validation failures from `set_model` and `set_thinking_level` remain free-text
+errors without `error_code`.
 
 ## Config, Sessions, and Context Files
 

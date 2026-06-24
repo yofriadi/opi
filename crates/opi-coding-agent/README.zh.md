@@ -150,7 +150,8 @@ Provider 凭据环境变量名、base URL、模型列表和代理都可以在配
 ### 非交互与 JSON
 
 文本模式把助手文本写到 stdout，把诊断写到 stderr。`--json` 会输出 schema header、
-序列化 session/agent 事件，以及最终 `session_summary`，格式为 NDJSON。
+序列化 session/agent 事件，以及最终 `session_summary`，格式为 NDJSON。当前 NDJSON
+schema version 是 `NDJSON_SCHEMA_VERSION = 2`。
 
 退出码：
 
@@ -174,6 +175,11 @@ schema version 是 `3`。启动诊断会通过该 ready header 的 `startup_diag
 命令包括 `prompt`、`continue`、`steer`、`follow_up`、`abort`、`set_model`、
 `set_thinking_level`、`compact`、`session_info`、`extension_command`、`trace` 和
 `quit`。
+
+运行时状态拒绝响应可能包含 `error_code`：`unsupported_trace_request`、`agent_busy`、
+`harness_unavailable`、`compaction_failed` 和 `extension_command_not_handled`。
+`set_model` 和 `set_thinking_level` 的空闲态能力校验失败仍是自由文本错误，不带
+`error_code`。
 
 ## 配置、会话与上下文文件
 

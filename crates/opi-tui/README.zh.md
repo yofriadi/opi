@@ -14,6 +14,9 @@
 `opi-tui` 是同步 widget library。调用方负责事件循环、异步 runtime、终端初始化和
 应用状态。本 crate 提供 `opi-coding-agent` 交互式 TUI 使用的渲染基础组件。
 
+它不调用 Provider、不运行工具、不读取会话、不加载 package，也不管理后台任务。
+这些职责分别留在 `opi-agent` 和 `opi-coding-agent`。
+
 ## 组件
 
 | 项 | 作用 |

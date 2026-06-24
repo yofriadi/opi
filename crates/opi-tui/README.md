@@ -15,6 +15,10 @@ Current crate version: `0.5.3`, inherited from the workspace package version.
 runtime, terminal setup, and application state. The crate provides rendering
 primitives used by `opi-coding-agent`'s interactive TUI.
 
+It does not call providers, run tools, read sessions, load packages, or manage
+background tasks. Those responsibilities stay in `opi-agent` and
+`opi-coding-agent`.
+
 ## Components
 
 | Item | Purpose |
