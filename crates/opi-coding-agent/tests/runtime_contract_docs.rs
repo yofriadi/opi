@@ -20,6 +20,7 @@
 //! Phase 7 guards in `observability_docs.rs` (telemetry/analytics); this file
 //! owns only the Phase 8 runtime-stabilization non-goals.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// Helper: read a file relative to the repo root.
@@ -28,6 +29,278 @@ fn read_repo_file(relative: &str) -> String {
     let path = manifest_dir.join("../..").join(relative);
     std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
+}
+
+fn section_between<'a>(content: &'a str, start: &str, end: &str) -> &'a str {
+    let start_index = content
+        .find(start)
+        .unwrap_or_else(|| panic!("missing section start {start}"));
+    let after_start = &content[start_index..];
+    let end_index = after_start
+        .find(end)
+        .unwrap_or_else(|| panic!("missing section end {end}"));
+    &after_start[..end_index]
+}
+
+fn backticked_names(section: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let mut remaining = section;
+    while let Some(start) = remaining.find('`') {
+        let after_start = &remaining[start + 1..];
+        let Some(end) = after_start.find('`') else {
+            break;
+        };
+        let name = &after_start[..end];
+        if name
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        {
+            names.insert(name.to_string());
+        }
+        remaining = &after_start[end + 1..];
+    }
+    names
+}
+
+fn api_surface_classification_rows(section: &str) -> BTreeMap<String, String> {
+    let mut rows = BTreeMap::new();
+
+    for line in section.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            continue;
+        }
+
+        let cells: Vec<_> = trimmed
+            .split('|')
+            .map(str::trim)
+            .filter(|cell| !cell.is_empty())
+            .collect();
+        if cells.len() < 3 {
+            continue;
+        }
+
+        let surface = cells[0];
+        let tier = cells[1];
+        if surface == "Surface"
+            || surface == "Tier"
+            || surface.chars().all(|ch| ch == '-')
+            || tier.chars().all(|ch| ch == '-')
+        {
+            continue;
+        }
+
+        for name in backticked_names(surface) {
+            rows.insert(name, tier.to_string());
+        }
+    }
+
+    rows
+}
+
+fn split_top_level(input: &str, delimiter: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+
+    for (index, ch) in input.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            _ if ch == delimiter && depth == 0 => {
+                parts.push(input[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    parts.push(input[start..].trim());
+    parts
+}
+
+fn split_top_level_alias(input: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+
+    for (index, ch) in input.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ' ' if depth == 0 && input[index..].starts_with(" as ") => {
+                let left = input[..index].trim();
+                let right = input[index + 4..].trim();
+                return Some((left, right));
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn split_top_level_group(input: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+
+    for (index, ch) in input.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 && input[index..].starts_with("::{") => {
+                let prefix = input[..index].trim();
+                let suffix = input[index + 3..].trim();
+                return Some((prefix, suffix));
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn last_path_segment(path: &str) -> &str {
+    path.rsplit("::")
+        .next()
+        .expect("path should have at least one segment")
+        .trim()
+}
+
+fn collect_reexport_names(tree: &str, prefix: &[&str], names: &mut BTreeSet<String>) {
+    for item in split_top_level(tree, ',') {
+        if item.is_empty() {
+            continue;
+        }
+
+        if let Some((base, alias)) = split_top_level_alias(item) {
+            let export_name = if alias == "self" {
+                last_path_segment(base)
+            } else {
+                last_path_segment(alias)
+            };
+            names.insert(export_name.to_string());
+            continue;
+        }
+
+        if let Some((base, grouped)) = split_top_level_group(item) {
+            let grouped = grouped
+                .strip_suffix('}')
+                .expect("grouped pub use should end with `}`");
+            let mut next_prefix = prefix.to_vec();
+            next_prefix.extend(
+                base.split("::")
+                    .map(str::trim)
+                    .filter(|segment| !segment.is_empty()),
+            );
+            collect_reexport_names(grouped, &next_prefix, names);
+            continue;
+        }
+
+        if item == "self" {
+            let export_name = prefix
+                .last()
+                .expect("`self` in a pub use group needs a parent path");
+            names.insert((*export_name).to_string());
+            continue;
+        }
+
+        if item == "*" {
+            panic!("glob pub use is not supported in crate_root_reexport_names");
+        }
+
+        names.insert(last_path_segment(item).to_string());
+    }
+}
+
+fn crate_root_reexport_names(lib: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let mut statement = String::new();
+    let mut collecting = false;
+
+    for line in lib.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("pub use ") {
+            statement.clear();
+            statement.push_str(trimmed);
+            collecting = !trimmed.ends_with(';');
+        } else if collecting {
+            statement.push(' ');
+            statement.push_str(trimmed);
+            collecting = !trimmed.ends_with(';');
+        } else {
+            continue;
+        }
+
+        if !collecting {
+            let rest = statement
+                .trim_start_matches("pub use ")
+                .trim_end_matches(';')
+                .trim();
+            collect_reexport_names(rest, &[], &mut names);
+        }
+    }
+
+    names
+}
+
+#[test]
+fn crate_root_reexport_names_handles_aliases_and_nested_paths() {
+    let lib = r#"
+pub use foo::Bar as Baz;
+pub use nested::Qux;
+pub use outer::{
+    inner::Leaf as Renamed,
+    branch::{Twig, stem::Bud as Bloom},
+};
+"#;
+
+    let names = crate_root_reexport_names(lib);
+
+    assert!(names.contains("Baz"), "alias should export the alias name");
+    assert!(
+        names.contains("Qux"),
+        "nested path should export the final segment"
+    );
+    assert!(
+        names.contains("Renamed"),
+        "grouped alias should export the alias name"
+    );
+    assert!(
+        names.contains("Twig"),
+        "grouped nested path should export the final segment"
+    );
+    assert!(
+        names.contains("Bloom"),
+        "nested grouped alias should export the alias name"
+    );
+}
+
+#[test]
+fn api_surface_classification_rows_require_table_rows_with_tiers() {
+    let section = r#"
+## API Surface Classification
+
+`AgentState` appears in prose but not in the classification table.
+
+| Surface | Tier | Notes |
+|---|---|---|
+| `Agent` | supported 0.x | Stateful loop wrapper. |
+| `Tool`, `ToolResult` | unstable internal | Example grouped row. |
+"#;
+
+    let rows = api_surface_classification_rows(section);
+
+    assert_eq!(rows.get("Agent").map(String::as_str), Some("supported 0.x"));
+    assert_eq!(
+        rows.get("Tool").map(String::as_str),
+        Some("unstable internal")
+    );
+    assert_eq!(
+        rows.get("ToolResult").map(String::as_str),
+        Some("unstable internal")
+    );
+    assert!(
+        !rows.contains_key("AgentState"),
+        "prose mentions must not count as classification rows"
+    );
 }
 
 /// Helper: case-insensitive substring check.
@@ -102,6 +375,25 @@ fn assert_docs_reject_claim(files: &[&str], needle: &str, what: &str) {
 fn phase8_api_surface_classification() {
     let en = read_repo_file("crates/opi-agent/README.md");
     let zh = read_repo_file("crates/opi-agent/README.zh.md");
+    let lib = read_repo_file("crates/opi-agent/src/lib.rs");
+    let expected_reexports = crate_root_reexport_names(&lib);
+    let en_api = section_between(&en, "## API Surface Classification", "## Non-Goals");
+    let zh_api = section_between(&zh, "## API 表面分类", "## 非目标（Non-Goals）");
+    let en_rows = api_surface_classification_rows(en_api);
+    let zh_rows = api_surface_classification_rows(zh_api);
+    let en_names: BTreeSet<_> = en_rows.keys().cloned().collect();
+    let zh_names: BTreeSet<_> = zh_rows.keys().cloned().collect();
+    let missing_en: Vec<_> = expected_reexports.difference(&en_names).cloned().collect();
+    let missing_zh: Vec<_> = expected_reexports.difference(&zh_names).cloned().collect();
+
+    assert!(
+        missing_en.is_empty(),
+        "EN API Surface Classification missing crate-root re-exports: {missing_en:?}"
+    );
+    assert!(
+        missing_zh.is_empty(),
+        "ZH API Surface Classification missing crate-root re-exports: {missing_zh:?}"
+    );
 
     // The classification section exists in both languages.
     assert!(
@@ -194,7 +486,6 @@ fn phase8_api_surface_classification() {
     // renaming or removing a re-export fails the guard rather than being masked
     // by an unrelated identifier (e.g. a bare `Agent` check would also match
     // `AgentError`). SessionEntry is confirmed module-path-only.
-    let lib = read_repo_file("crates/opi-agent/src/lib.rs");
     for reexport in [
         "pub use agent::Agent;",
         "pub use agent_loop::agent_loop;",

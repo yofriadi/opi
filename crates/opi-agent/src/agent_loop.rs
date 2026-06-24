@@ -2,7 +2,9 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
-use opi_ai::message::{AssistantContent, InputContent, Message, ToolResultMessage, UserMessage};
+use opi_ai::message::{
+    AssistantContent, InputContent, Message, ToolCall, ToolResultMessage, UserMessage,
+};
 use opi_ai::provider::{Request, validate_request_capabilities};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -175,44 +177,53 @@ pub async fn agent_loop(
 
                                 if batch_is_sequential {
                                     for tc in &tool_calls {
-                                        let args: serde_json::Value =
-                                            serde_json::from_str(&tc.arguments)
-                                                .unwrap_or(json!({}));
+                                        let parsed = parse_tool_call_arguments(tc.clone());
 
                                         events(AgentEvent::ToolExecutionStart {
-                                            tool_call_id: tc.id.clone(),
-                                            tool_name: tc.name.clone(),
-                                            args: args.clone(),
+                                            tool_call_id: parsed.tool_call.id.clone(),
+                                            tool_name: parsed.tool_call.name.clone(),
+                                            args: parsed.args_for_event.clone(),
                                         });
 
-                                        let result = execute_tool(
-                                            &tc.id,
-                                            &tc.name,
-                                            &args,
-                                            &tools_map,
-                                            hooks,
-                                            &messages,
-                                            cancel.clone(),
-                                            &diagnostic_sink,
-                                            &trace,
-                                            &turn_id,
-                                        )
-                                        .await;
+                                        let result = match parsed.parsed_args {
+                                            Ok(args) => {
+                                                execute_tool(
+                                                    &parsed.tool_call.id,
+                                                    &parsed.tool_call.name,
+                                                    &args,
+                                                    &tools_map,
+                                                    hooks,
+                                                    &messages,
+                                                    cancel.clone(),
+                                                    &diagnostic_sink,
+                                                    &trace,
+                                                    &turn_id,
+                                                )
+                                                .await
+                                            }
+                                            Err(parse_error) => malformed_tool_arguments_result(
+                                                &parsed.tool_call.name,
+                                                &parse_error,
+                                                &diagnostic_sink,
+                                                &trace,
+                                                &turn_id,
+                                            ),
+                                        };
 
                                         let is_error = result.is_error;
                                         let details = result.details.clone();
                                         terminate_flags.push(result.terminate);
                                         events(AgentEvent::ToolExecutionEnd {
-                                            tool_call_id: tc.id.clone(),
-                                            tool_name: tc.name.clone(),
+                                            tool_call_id: parsed.tool_call.id.clone(),
+                                            tool_name: parsed.tool_call.name.clone(),
                                             result: serde_json::json!(&result.content),
                                             details,
                                             is_error,
                                         });
 
                                         let trm = ToolResultMessage {
-                                            tool_call_id: tc.id.clone(),
-                                            tool_name: tc.name.clone(),
+                                            tool_call_id: parsed.tool_call.id,
+                                            tool_name: parsed.tool_call.name,
                                             content: result.content,
                                             details: result.details,
                                             is_error,
@@ -222,66 +233,75 @@ pub async fn agent_loop(
                                         messages.push(AgentMessage::Llm(Message::ToolResult(trm)));
                                     }
                                 } else {
-                                    let tc_args: Vec<_> = tool_calls
+                                    let parsed_calls: Vec<_> = tool_calls
                                         .iter()
                                         .map(|tc| {
-                                            let args: serde_json::Value =
-                                                serde_json::from_str(&tc.arguments)
-                                                    .unwrap_or(json!({}));
+                                            let parsed = parse_tool_call_arguments(tc.clone());
                                             events(AgentEvent::ToolExecutionStart {
-                                                tool_call_id: tc.id.clone(),
-                                                tool_name: tc.name.clone(),
-                                                args: args.clone(),
+                                                tool_call_id: parsed.tool_call.id.clone(),
+                                                tool_name: parsed.tool_call.name.clone(),
+                                                args: parsed.args_for_event.clone(),
                                             });
-                                            (tc.clone(), args)
+                                            parsed
                                         })
                                         .collect();
 
-                                    let futures: Vec<_> = tc_args
+                                    let futures: Vec<_> = parsed_calls
                                         .iter()
-                                        .map(|(tc, args)| {
+                                        .map(|parsed| {
                                             let tools_map = &tools_map;
                                             let messages = &messages;
                                             let cancel = cancel.clone();
                                             let diagnostic_sink = diagnostic_sink.clone();
                                             let trace = trace.clone();
                                             let turn_id = turn_id.clone();
-                                            let tc_id = tc.id.clone();
-                                            let tc_name = tc.name.clone();
-                                            let args = args.clone();
                                             async move {
-                                                let result = execute_tool(
-                                                    &tc_id,
-                                                    &tc_name,
-                                                    &args,
-                                                    tools_map,
-                                                    hooks,
-                                                    messages,
-                                                    cancel,
-                                                    &diagnostic_sink,
-                                                    &trace,
-                                                    &turn_id,
-                                                )
-                                                .await;
-                                                (tc_id, tc_name, result)
+                                                match parsed.parsed_args.clone() {
+                                                    Ok(args) => {
+                                                        execute_tool(
+                                                            &parsed.tool_call.id,
+                                                            &parsed.tool_call.name,
+                                                            &args,
+                                                            tools_map,
+                                                            hooks,
+                                                            messages,
+                                                            cancel,
+                                                            &diagnostic_sink,
+                                                            &trace,
+                                                            &turn_id,
+                                                        )
+                                                        .await
+                                                    }
+                                                    Err(parse_error) => {
+                                                        malformed_tool_arguments_result(
+                                                            &parsed.tool_call.name,
+                                                            &parse_error,
+                                                            &diagnostic_sink,
+                                                            &trace,
+                                                            &turn_id,
+                                                        )
+                                                    }
+                                                }
                                             }
                                         })
                                         .collect();
                                     let results = futures_util::future::join_all(futures).await;
-                                    for (tc_id, tc_name, result) in results {
+                                    for (parsed, result) in
+                                        parsed_calls.iter().zip(results.into_iter())
+                                    {
                                         let is_error = result.is_error;
                                         let details = result.details.clone();
                                         terminate_flags.push(result.terminate);
                                         events(AgentEvent::ToolExecutionEnd {
-                                            tool_call_id: tc_id.clone(),
-                                            tool_name: tc_name.clone(),
+                                            tool_call_id: parsed.tool_call.id.clone(),
+                                            tool_name: parsed.tool_call.name.clone(),
                                             result: serde_json::json!(&result.content),
                                             details,
                                             is_error,
                                         });
                                         let trm = ToolResultMessage {
-                                            tool_call_id: tc_id,
-                                            tool_name: tc_name,
+                                            tool_call_id: parsed.tool_call.id.clone(),
+                                            tool_name: parsed.tool_call.name.clone(),
                                             content: result.content,
                                             details: result.details,
                                             is_error,
@@ -546,6 +566,56 @@ fn process_stream_event(
         Done { message, .. } => Some(message.clone()),
         Error { message, .. } => Some(message.clone()),
         _ => None,
+    }
+}
+
+#[derive(Clone)]
+struct ParsedToolCall {
+    tool_call: ToolCall,
+    args_for_event: serde_json::Value,
+    parsed_args: Result<serde_json::Value, String>,
+}
+
+fn parse_tool_call_arguments(tool_call: ToolCall) -> ParsedToolCall {
+    match serde_json::from_str::<serde_json::Value>(&tool_call.arguments) {
+        Ok(args) => ParsedToolCall {
+            tool_call,
+            args_for_event: args.clone(),
+            parsed_args: Ok(args),
+        },
+        Err(err) => ParsedToolCall {
+            tool_call,
+            args_for_event: serde_json::Value::Null,
+            parsed_args: Err(err.to_string()),
+        },
+    }
+}
+
+fn malformed_tool_arguments_result(
+    tool_name: &str,
+    parse_error: &str,
+    sink: &Option<Arc<dyn DiagnosticSink>>,
+    trace: &Option<Arc<TraceCollector>>,
+    turn_id: &str,
+) -> ToolResult {
+    trace_tool(trace, TraceKind::ToolCallStarted, tool_name, turn_id);
+    observe(
+        sink,
+        trace,
+        tool_diagnostic(
+            CODE_TOOL_VALIDATION_FAILED,
+            tool_name,
+            "tool arguments were not valid JSON",
+        ),
+    );
+    trace_tool(trace, TraceKind::ToolCallFailed, tool_name, turn_id);
+    ToolResult {
+        content: vec![opi_ai::message::OutputContent::Text {
+            text: format!("tool arguments were not valid JSON: {parse_error}"),
+        }],
+        details: None,
+        is_error: true,
+        terminate: false,
     }
 }
 

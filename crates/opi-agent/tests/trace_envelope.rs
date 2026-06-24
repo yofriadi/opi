@@ -1299,6 +1299,7 @@ mod wiring {
 mod phase8_runtime_contract_failures {
     use std::sync::Arc;
 
+    use futures_util::StreamExt;
     use opi_agent::agent_loop;
     use opi_agent::diagnostic::code::*;
     use opi_agent::diagnostic::{RedactionMode, Severity};
@@ -1309,8 +1310,13 @@ mod phase8_runtime_contract_failures {
     use opi_agent::message::AgentMessage;
     use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
     use opi_agent::{DiagnosticSink, RecordingTraceSink, TraceCollector, TraceKind};
-    use opi_ai::message::{InputContent, Message, OutputContent, ToolDef, UserMessage};
+    use opi_ai::message::{
+        AssistantContent, AssistantMessage, InputContent, Message, OutputContent, ToolDef,
+        UserMessage,
+    };
+    use opi_ai::provider::{EventStream, Provider, ProviderError, Request};
     use opi_ai::retry::RetryConfig;
+    use opi_ai::stream::{AssistantStreamEvent, StopReason, Usage};
     use opi_ai::test_support::{self, MockProvider};
 
     /// Hooks that forward LLM messages unchanged and otherwise do nothing.
@@ -1387,7 +1393,7 @@ mod phase8_runtime_contract_failures {
     }
 
     fn ctx(
-        provider: MockProvider,
+        provider: impl Provider + 'static,
         sink: Arc<RecordingSink>,
         trace: Option<Arc<TraceCollector>>,
         tools: Vec<Box<dyn Tool>>,
@@ -1427,6 +1433,58 @@ mod phase8_runtime_contract_failures {
         sink.snapshot().iter().map(|r| r.kind).collect()
     }
 
+    fn base_msg() -> AssistantMessage {
+        AssistantMessage {
+            content: vec![],
+            api: opi_ai::ApiKind::Anthropic,
+            provider: "hanging".into(),
+            model: "mock".into(),
+            response_model: None,
+            response_id: None,
+            usage: Usage::default(),
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            timestamp_ms: 0,
+        }
+    }
+
+    struct HangingStreamProvider {
+        entered_stream: Arc<tokio::sync::Notify>,
+    }
+
+    impl Provider for HangingStreamProvider {
+        fn id(&self) -> &str {
+            "hanging"
+        }
+
+        fn models(&self) -> &[opi_ai::provider::ModelInfo] {
+            &[]
+        }
+
+        fn stream(&self, _request: Request) -> EventStream {
+            let mut partial = base_msg();
+            partial.content.push(AssistantContent::Text {
+                text: "partial".into(),
+            });
+            let events: Vec<Result<AssistantStreamEvent, ProviderError>> = vec![
+                Ok(AssistantStreamEvent::Start {
+                    partial: base_msg(),
+                }),
+                Ok(AssistantStreamEvent::TextDelta {
+                    content_index: 0,
+                    delta: "partial".into(),
+                    partial,
+                }),
+            ];
+            self.entered_stream.notify_one();
+            Box::pin(
+                futures_util::stream::iter(events).chain(futures_util::stream::pending::<
+                    Result<AssistantStreamEvent, ProviderError>,
+                >()),
+            )
+        }
+    }
+
     /// A tool whose schema requires property "x"; an empty-args call fails
     /// validation before execute() runs.
     struct StrictSchemaTool;
@@ -1463,6 +1521,72 @@ mod phase8_runtime_contract_failures {
         }
         fn execution_mode(&self) -> ExecutionMode {
             ExecutionMode::Sequential
+        }
+    }
+
+    struct PermissiveTool;
+    impl Tool for PermissiveTool {
+        fn definition(&self) -> ToolDef {
+            ToolDef {
+                name: "permissive".into(),
+                description: "accepts any object".into(),
+                input_schema: serde_json::json!({ "type": "object" }),
+            }
+        }
+        fn execute(
+            &self,
+            _call_id: &str,
+            _arguments: serde_json::Value,
+            _signal: tokio_util::sync::CancellationToken,
+            _on_update: Option<opi_agent::tool::UpdateCallback>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<ToolResult, ToolError>> + Send>,
+        > {
+            Box::pin(async {
+                Ok(ToolResult {
+                    content: vec![OutputContent::Text {
+                        text: "unexpected".into(),
+                    }],
+                    details: None,
+                    is_error: false,
+                    terminate: false,
+                })
+            })
+        }
+
+        fn execution_mode(&self) -> ExecutionMode {
+            ExecutionMode::Sequential
+        }
+    }
+
+    struct ParallelPermissiveTool;
+    impl Tool for ParallelPermissiveTool {
+        fn definition(&self) -> ToolDef {
+            ToolDef {
+                name: "permissive_parallel".into(),
+                description: "accepts any object in parallel mode".into(),
+                input_schema: serde_json::json!({ "type": "object" }),
+            }
+        }
+        fn execute(
+            &self,
+            _call_id: &str,
+            _arguments: serde_json::Value,
+            _signal: tokio_util::sync::CancellationToken,
+            _on_update: Option<opi_agent::tool::UpdateCallback>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<ToolResult, ToolError>> + Send>,
+        > {
+            Box::pin(async {
+                Ok(ToolResult {
+                    content: vec![OutputContent::Text {
+                        text: "unexpected".into(),
+                    }],
+                    details: None,
+                    is_error: false,
+                    terminate: false,
+                })
+            })
         }
     }
 
@@ -1558,6 +1682,92 @@ mod phase8_runtime_contract_failures {
                 .iter()
                 .any(|d| d.code == CODE_TOOL_VALIDATION_FAILED),
             "diagnostic sink must carry CODE_TOOL_VALIDATION_FAILED"
+        );
+    }
+
+    #[tokio::test]
+    async fn phase8_runtime_contract_failure_trace_malformed_tool_arguments() {
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("tc-1", "permissive", "{not-json"),
+                test_support::text_response("done"),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(
+                provider,
+                diag.clone(),
+                Some(trace),
+                vec![Box::new(PermissiveTool)],
+            ),
+            config(),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(kinds.contains(&TraceKind::ToolCallStarted));
+        assert!(kinds.contains(&TraceKind::ToolCallFailed));
+        assert!(!kinds.contains(&TraceKind::ToolCallCompleted));
+        assert!(trace_sink.snapshot().iter().any(|r| {
+            r.kind == TraceKind::DiagnosticLinked
+                && r.diagnostic_code == Some(CODE_TOOL_VALIDATION_FAILED)
+        }));
+        assert!(
+            diag.snapshot()
+                .iter()
+                .any(|d| d.code == CODE_TOOL_VALIDATION_FAILED)
+        );
+    }
+
+    #[tokio::test]
+    async fn phase8_runtime_contract_failure_trace_malformed_tool_arguments_parallel() {
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("tc-1", "permissive_parallel", "{not-json"),
+                test_support::text_response("done"),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(
+                provider,
+                diag.clone(),
+                Some(trace),
+                vec![Box::new(ParallelPermissiveTool)],
+            ),
+            config(),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(kinds.contains(&TraceKind::ToolCallStarted));
+        assert!(kinds.contains(&TraceKind::ToolCallFailed));
+        assert!(!kinds.contains(&TraceKind::ToolCallCompleted));
+        assert!(trace_sink.snapshot().iter().any(|r| {
+            r.kind == TraceKind::DiagnosticLinked
+                && r.diagnostic_code == Some(CODE_TOOL_VALIDATION_FAILED)
+        }));
+        assert!(
+            diag.snapshot()
+                .iter()
+                .any(|d| d.code == CODE_TOOL_VALIDATION_FAILED)
         );
     }
 
@@ -1803,5 +2013,46 @@ mod phase8_runtime_contract_failures {
                 .any(|d| d.code == CODE_AGENT_CANCELLED),
             "diagnostic sink must carry CODE_AGENT_CANCELLED"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn phase8_provider_stream_cancel_trace_may_leave_turn_open() {
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel_for_task = cancel.clone();
+        let entered_stream = Arc::new(tokio::sync::Notify::new());
+        let provider = HangingStreamProvider {
+            entered_stream: entered_stream.clone(),
+        };
+
+        let handle = tokio::spawn(async move {
+            agent_loop(
+                ctx(provider, diag, Some(trace), vec![]),
+                config(),
+                &NoopHooks,
+                null_event_sink(),
+                cancel_for_task,
+            )
+            .await
+        });
+
+        entered_stream.notified().await;
+        cancel.cancel();
+
+        let result = handle.await.expect("agent_loop task panicked");
+        assert!(matches!(result, Err(AgentError::Cancelled)));
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(kinds.contains(&TraceKind::TurnStarted));
+        assert!(kinds.contains(&TraceKind::RunEnded));
+        assert!(
+            !kinds.contains(&TraceKind::TurnEnded),
+            "provider-stream cancellation exits mid-turn; trace consumers must tolerate an open turn"
+        );
+        assert!(trace_sink.snapshot().iter().any(|r| {
+            r.kind == TraceKind::DiagnosticLinked && r.diagnostic_code == Some(CODE_AGENT_CANCELLED)
+        }));
     }
 }

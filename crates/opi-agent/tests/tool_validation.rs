@@ -340,6 +340,82 @@ impl Tool for ProbeTool {
     }
 }
 
+/// A permissive tool that records whether malformed JSON reached execute.
+struct PermissiveProbeTool {
+    executed: Arc<Mutex<bool>>,
+}
+
+impl Tool for PermissiveProbeTool {
+    fn definition(&self) -> ToolDef {
+        ToolDef {
+            name: "echo".into(),
+            description: "permissive probe tool".into(),
+            input_schema: json!({ "type": "object" }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _call_id: &str,
+        _arguments: serde_json::Value,
+        _signal: CancellationToken,
+        _on_update: Option<opi_agent::tool::UpdateCallback>,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>> {
+        let executed = self.executed.clone();
+        Box::pin(async move {
+            *executed.lock().unwrap() = true;
+            Ok(ToolResult {
+                content: vec![OutputContent::Text {
+                    text: "execute must not run on malformed arguments".into(),
+                }],
+                details: None,
+                is_error: false,
+                terminate: false,
+            })
+        })
+    }
+
+    fn execution_mode(&self) -> ExecutionMode {
+        ExecutionMode::Sequential
+    }
+}
+
+/// A permissive tool that keeps the default parallel execution mode.
+struct ParallelPermissiveProbeTool {
+    executed: Arc<Mutex<bool>>,
+}
+
+impl Tool for ParallelPermissiveProbeTool {
+    fn definition(&self) -> ToolDef {
+        ToolDef {
+            name: "echo_parallel".into(),
+            description: "parallel permissive probe tool".into(),
+            input_schema: json!({ "type": "object" }),
+        }
+    }
+
+    fn execute(
+        &self,
+        _call_id: &str,
+        _arguments: serde_json::Value,
+        _signal: CancellationToken,
+        _on_update: Option<opi_agent::tool::UpdateCallback>,
+    ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>> {
+        let executed = self.executed.clone();
+        Box::pin(async move {
+            *executed.lock().unwrap() = true;
+            Ok(ToolResult {
+                content: vec![OutputContent::Text {
+                    text: "execute must not run on malformed arguments".into(),
+                }],
+                details: None,
+                is_error: false,
+                terminate: false,
+            })
+        })
+    }
+}
+
 /// Hooks that record whether `before_tool_call` was reached.
 struct ProbeHooks {
     before_called: Arc<Mutex<bool>>,
@@ -531,4 +607,192 @@ async fn phase8_tool_validation_failure_contract() {
         text.as_ref().is_some_and(|t| !t.is_empty()),
         "error result carries a non-empty message: {text:?}"
     );
+}
+
+#[tokio::test]
+async fn phase8_malformed_tool_arguments_do_not_execute_permissive_tool() {
+    use opi_agent::diagnostic::code::CODE_TOOL_VALIDATION_FAILED;
+    use opi_agent::diagnostic_sink::RecordingSink;
+    use opi_agent::event::AgentEvent;
+
+    let executed = Arc::new(Mutex::new(false));
+    let before_called = Arc::new(Mutex::new(false));
+    let diagnostic_sink = Arc::new(RecordingSink::new());
+    let start_args = Arc::new(Mutex::new(Vec::new()));
+    let end_errors = Arc::new(Mutex::new(Vec::new()));
+
+    let provider = ScriptedProvider::new(vec![
+        tool_call_response("call-1", "echo", "{not-json"),
+        text_response("done"),
+    ]);
+    let call_count = provider.call_count.clone();
+
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(PermissiveProbeTool {
+        executed: executed.clone(),
+    })];
+    let hooks = ProbeHooks {
+        before_called: before_called.clone(),
+    };
+
+    let context = AgentLoopContext {
+        provider: Box::new(provider),
+        tools,
+        messages: vec![AgentMessage::Llm(Message::User(
+            opi_ai::message::UserMessage {
+                content: vec![InputContent::Text { text: "hi".into() }],
+                timestamp_ms: 0,
+            },
+        ))],
+        model: "mock".into(),
+        system: None,
+        steering_queue: None,
+        follow_up_queue: None,
+        diagnostic_sink: Some(diagnostic_sink.clone()),
+        trace: None,
+    };
+
+    let messages = opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        Box::new({
+            let start_args = start_args.clone();
+            let end_errors = end_errors.clone();
+            move |event| match event {
+                AgentEvent::ToolExecutionStart { args, .. } => {
+                    start_args.lock().unwrap().push(args);
+                }
+                AgentEvent::ToolExecutionEnd { is_error, .. } => {
+                    end_errors.lock().unwrap().push(is_error);
+                }
+                _ => {}
+            }
+        }),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("malformed tool arguments are a normal runtime outcome");
+
+    assert_eq!(*call_count.lock().unwrap(), 2);
+    assert!(!*executed.lock().unwrap());
+    assert!(!*before_called.lock().unwrap());
+    assert_eq!(
+        start_args.lock().unwrap().as_slice(),
+        &[serde_json::Value::Null]
+    );
+    assert_eq!(end_errors.lock().unwrap().as_slice(), &[true]);
+    assert!(
+        diagnostic_sink
+            .snapshot()
+            .iter()
+            .any(|d| d.code == CODE_TOOL_VALIDATION_FAILED)
+    );
+
+    let error_result = messages
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::Llm(Message::ToolResult(trm)) if trm.tool_call_id == "call-1" => {
+                Some(trm.clone())
+            }
+            _ => None,
+        })
+        .expect("malformed arguments produce a persisted tool result");
+    assert!(error_result.is_error);
+    assert!(error_result.content.iter().any(
+        |c| matches!(c, OutputContent::Text { text } if text.contains("tool arguments were not valid JSON"))
+    ));
+}
+
+#[tokio::test]
+async fn phase8_malformed_tool_arguments_do_not_execute_parallel_permissive_tool() {
+    use opi_agent::diagnostic::code::CODE_TOOL_VALIDATION_FAILED;
+    use opi_agent::diagnostic_sink::RecordingSink;
+    use opi_agent::event::AgentEvent;
+
+    let executed = Arc::new(Mutex::new(false));
+    let before_called = Arc::new(Mutex::new(false));
+    let diagnostic_sink = Arc::new(RecordingSink::new());
+    let start_args = Arc::new(Mutex::new(Vec::new()));
+    let end_errors = Arc::new(Mutex::new(Vec::new()));
+
+    let provider = ScriptedProvider::new(vec![
+        tool_call_response("call-1", "echo_parallel", "{not-json"),
+        text_response("done"),
+    ]);
+    let call_count = provider.call_count.clone();
+
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(ParallelPermissiveProbeTool {
+        executed: executed.clone(),
+    })];
+    let hooks = ProbeHooks {
+        before_called: before_called.clone(),
+    };
+
+    let context = AgentLoopContext {
+        provider: Box::new(provider),
+        tools,
+        messages: vec![AgentMessage::Llm(Message::User(
+            opi_ai::message::UserMessage {
+                content: vec![InputContent::Text { text: "hi".into() }],
+                timestamp_ms: 0,
+            },
+        ))],
+        model: "mock".into(),
+        system: None,
+        steering_queue: None,
+        follow_up_queue: None,
+        diagnostic_sink: Some(diagnostic_sink.clone()),
+        trace: None,
+    };
+
+    let messages = opi_agent::agent_loop(
+        context,
+        AgentLoopConfig::default(),
+        &hooks,
+        Box::new({
+            let start_args = start_args.clone();
+            let end_errors = end_errors.clone();
+            move |event| match event {
+                AgentEvent::ToolExecutionStart { args, .. } => {
+                    start_args.lock().unwrap().push(args);
+                }
+                AgentEvent::ToolExecutionEnd { is_error, .. } => {
+                    end_errors.lock().unwrap().push(is_error);
+                }
+                _ => {}
+            }
+        }),
+        CancellationToken::new(),
+    )
+    .await
+    .expect("malformed tool arguments are a normal runtime outcome");
+
+    assert_eq!(*call_count.lock().unwrap(), 2);
+    assert!(!*executed.lock().unwrap());
+    assert!(!*before_called.lock().unwrap());
+    assert_eq!(
+        start_args.lock().unwrap().as_slice(),
+        &[serde_json::Value::Null]
+    );
+    assert_eq!(end_errors.lock().unwrap().as_slice(), &[true]);
+    assert!(
+        diagnostic_sink
+            .snapshot()
+            .iter()
+            .any(|d| d.code == CODE_TOOL_VALIDATION_FAILED)
+    );
+
+    let error_result = messages
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::Llm(Message::ToolResult(trm)) if trm.tool_call_id == "call-1" => {
+                Some(trm.clone())
+            }
+            _ => None,
+        })
+        .expect("malformed arguments produce a persisted tool result");
+    assert!(error_result.is_error);
+    assert!(error_result.content.iter().any(
+        |c| matches!(c, OutputContent::Text { text } if text.contains("tool arguments were not valid JSON"))
+    ));
 }

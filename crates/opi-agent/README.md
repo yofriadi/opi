@@ -162,6 +162,11 @@ in-flight assistant message is discarded: it is only pushed to the message
 buffer when the stream's `Done` event arrives, so a cancel mid-stream writes
 no partial assistant message.
 
+Trace consumers must tolerate open turns on early provider exits. Provider
+failure and provider-stream cancellation may emit `TurnStarted` without a
+matching `TurnEnded`; the terminal boundary for those paths is `AgentEnd` plus
+trace `RunEnded` and the linked diagnostic.
+
 `Agent::abort` (and the harness `cancel` / `cancel_token` helpers) cancel the
 active run's token; the token is reset before the next turn, so a cancelled
 runtime returns to idle and accepts a new prompt. A tool that observes its
@@ -261,19 +266,22 @@ versions and pin exact crate versions when needed.
 | `Agent` | supported 0.x | Stateful loop wrapper; contract-tested. |
 | `agent_loop` | supported 0.x | Core async entry point; runtime event-order contract tested. |
 | `AgentHooks` | supported 0.x | Six lifecycle hooks; hook-order and failure contract tested. |
-| `Tool` | supported 0.x | JSON-Schema tool contract; scheduling and termination contract tested. |
-| `AgentEvent` | supported 0.x | In-process runtime event stream; `#[non_exhaustive]` (new variants may arrive across 0.x). |
+| `AgentLoopConfig`, `AgentLoopContext`, `AgentError`, `AgentMessage` | supported 0.x | Required by the supported low-level `agent_loop` entry point. |
+| `Tool`, `ToolDef`, `ToolResult`, `ToolError`, `ExecutionMode` | supported 0.x | JSON-Schema tool contract plus result/error/scheduling types used by embedders. |
+| `AgentEvent`, `AgentEventSink` | supported 0.x | In-process runtime event stream; `AgentEvent` is `#[non_exhaustive]` because new variants may arrive across 0.x. |
 | `AgentSessionEvent` | unstable internal | `opi --json` wire protocol (`NDJSON_SCHEMA_VERSION = 2`, owned by `opi-coding-agent`); `#[non_exhaustive]`. Check the schema version. |
 | `SessionEntry` | unstable internal | Session JSONL storage layout; lives at `session::SessionEntry`, not re-exported at the crate root; `#[non_exhaustive]`. |
-| `Extension` | unstable internal | Extension lifecycle surface; the `extension` module marks it `# Unstable`. |
-| `ExtensionRegistry` | unstable internal | Hook/tool/command composition; the `extension` module marks it `# Unstable`. |
-| `SdkCommand` | unstable internal | RPC/SDK command model (`SDK_SCHEMA_VERSION = 3`); the `sdk` module marks it unstable 0.x. |
-| `SdkResponse` | unstable internal | RPC/SDK response model (`SDK_SCHEMA_VERSION = 3`); the `sdk` module marks it unstable 0.x. |
-| `StreamingProxy` (and `ProxyConfig`, `ProxyEvent`, `ProxyHandler`, `SecretRedactor`, `StreamingProxyError`) | unstable internal | Streaming-proxy primitives; the `streaming_proxy` module marks them unstable 0.x. |
+| `Extension`, `ExtensionCommand`, `ExtensionError`, `ExtensionHookResult`, `ExtensionRegistry` | unstable internal | Extension lifecycle and composition surface; the `extension` module marks it `# Unstable`. |
+| `SdkCommand`, `SdkResponse`, `SDK_SCHEMA_VERSION` | unstable internal | RPC/SDK command model (`SDK_SCHEMA_VERSION = 3`); the `sdk` module marks it unstable 0.x. |
+| `StreamingProxy`, `ProxyConfig`, `ProxyEvent`, `ProxyHandler`, `SecretRedactor`, `StreamingProxyError` | unstable internal | Streaming-proxy primitives; the `streaming_proxy` module marks them unstable 0.x. |
+| `Diagnostic`, `DiagnosticPayload`, `RedactionMode`, `Severity`, `redact`, `redact_text`, `DiagnosticSink`, `NullSink`, `RecordingSink` | unstable internal | Diagnostic payload and sink plumbing used by runtime surfaces; current contract is redaction/schema-version behavior, not a stable API shape. |
+| `FileTraceSink`, `RecordingTraceSink`, `TRACE_SCHEMA_VERSION`, `TraceCollector`, `TraceError`, `TraceKind`, `TraceRecord`, `TraceSink` | unstable internal | Local trace envelope plumbing; the `trace` module marks it unstable 0.x and carries `TRACE_SCHEMA_VERSION = 1`. |
+| `AgentState` | unstable internal | Runtime state holder exposed for crate layout and harness integration; not a supported embedder contract. |
 
-This review found no candidate-removal surfaces: every public item above is
-either a supported 0.x runtime surface or an unstable internal surface that
-crate layout requires to stay public.
+This review found no candidate-removal crate-root re-exports. Every crate-root
+`pub use` in `src/lib.rs` is named in the table above. Public modules may expose
+additional items through module paths; unless those items are named as supported
+0.x surfaces here, they are unstable internal 0.x APIs.
 
 There is no stable 1.0 API promise. Stability is enforced today by
 `#[non_exhaustive]` on `AgentEvent`, `AgentSessionEvent`, `SessionEntry`, and

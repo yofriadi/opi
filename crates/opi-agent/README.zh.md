@@ -144,6 +144,10 @@ Rate limit 和 timeout 等可重试 Provider 错误可通过 `AgentLoopConfig.re
 部分流式内容会被丢弃：只有当流的 `Done` 事件到达时才会被推入消息缓冲区，因此流式
 过程中取消不会写入任何部分 assistant 消息。
 
+Trace 消费方必须容忍 provider 提前退出时留下的 open turn。Provider failure 和
+provider-stream cancellation 可能发出 `TurnStarted` 而没有匹配的 `TurnEnded`；
+这些路径的终止边界是 `AgentEnd`、trace `RunEnded` 以及关联的诊断。
+
 `Agent::abort`（以及 harness 的 `cancel` / `cancel_token` 辅助方法）会取消活跃 run
 的 token；token 会在下一 turn 之前被重置，因此被取消的运行时会回到 idle 并接受新的
 prompt。观察到自身 `CancellationToken` 的工具会立即返回——进程 adapter 工具在向 adapter
@@ -230,18 +234,21 @@ JSONL 模式与嵌入方共享的不稳定 0.x 命令集合。每条命令携带
 | `Agent` | 支持的 0.x | 对主循环的有状态封装；经契约测试。 |
 | `agent_loop` | 支持的 0.x | 核心异步入口；运行时事件顺序契约已测试。 |
 | `AgentHooks` | 支持的 0.x | 六个生命周期 hooks；hook 顺序与失败契约已测试。 |
-| `Tool` | 支持的 0.x | 基于 JSON-Schema 的工具契约；调度与终止契约已测试。 |
-| `AgentEvent` | 支持的 0.x | 进程内运行时事件流；`#[non_exhaustive]`（0.x 内可能新增变体）。 |
+| `AgentLoopConfig`、`AgentLoopContext`、`AgentError`、`AgentMessage` | 支持的 0.x | 受支持的底层 `agent_loop` 入口所需的类型。 |
+| `Tool`、`ToolDef`、`ToolResult`、`ToolError`、`ExecutionMode` | 支持的 0.x | JSON-Schema 工具契约，以及嵌入方使用的结果、错误和调度类型。 |
+| `AgentEvent`、`AgentEventSink` | 支持的 0.x | 进程内运行时事件流；`AgentEvent` 是 `#[non_exhaustive]`，因为 0.x 内可能新增变体。 |
 | `AgentSessionEvent` | 不稳定内部 | `opi --json` 线协议（`NDJSON_SCHEMA_VERSION = 2`，由 `opi-coding-agent` 拥有）；`#[non_exhaustive]`。请检查 schema 版本。 |
 | `SessionEntry` | 不稳定内部 | 会话 JSONL 存储布局；位于 `session::SessionEntry`，未在 crate root 重新导出；`#[non_exhaustive]`。 |
-| `Extension` | 不稳定内部 | 扩展生命周期表面；`extension` 模块标注为 `# Unstable`。 |
-| `ExtensionRegistry` | 不稳定内部 | hook/tool/command 组合；`extension` 模块标注为 `# Unstable`。 |
-| `SdkCommand` | 不稳定内部 | RPC/SDK 命令模型（`SDK_SCHEMA_VERSION = 3`）；`sdk` 模块标注为不稳定 0.x。 |
-| `SdkResponse` | 不稳定内部 | RPC/SDK 响应模型（`SDK_SCHEMA_VERSION = 3`）；`sdk` 模块标注为不稳定 0.x。 |
-| `StreamingProxy`（及 `ProxyConfig`、`ProxyEvent`、`ProxyHandler`、`SecretRedactor`、`StreamingProxyError`） | 不稳定内部 | streaming-proxy 原语；`streaming_proxy` 模块标注为不稳定 0.x。 |
+| `Extension`、`ExtensionCommand`、`ExtensionError`、`ExtensionHookResult`、`ExtensionRegistry` | 不稳定内部 | 扩展生命周期与组合表面；`extension` 模块标注为 `# Unstable`。 |
+| `SdkCommand`、`SdkResponse`、`SDK_SCHEMA_VERSION` | 不稳定内部 | RPC/SDK 命令模型（`SDK_SCHEMA_VERSION = 3`）；`sdk` 模块标注为不稳定 0.x。 |
+| `StreamingProxy`、`ProxyConfig`、`ProxyEvent`、`ProxyHandler`、`SecretRedactor`、`StreamingProxyError` | 不稳定内部 | streaming-proxy 原语；`streaming_proxy` 模块标注为不稳定 0.x。 |
+| `Diagnostic`、`DiagnosticPayload`、`RedactionMode`、`Severity`、`redact`、`redact_text`、`DiagnosticSink`、`NullSink`、`RecordingSink` | 不稳定内部 | 运行时表面使用的诊断 payload 与 sink plumbing；当前契约是 redaction/schema-version 行为，不是稳定 API 形状。 |
+| `FileTraceSink`、`RecordingTraceSink`、`TRACE_SCHEMA_VERSION`、`TraceCollector`、`TraceError`、`TraceKind`、`TraceRecord`、`TraceSink` | 不稳定内部 | 本地 trace envelope plumbing；`trace` 模块标注为不稳定 0.x，并携带 `TRACE_SCHEMA_VERSION = 1`。 |
+| `AgentState` | 不稳定内部 | 为 crate 布局与 harness 集成暴露的运行时状态持有器；不是受支持的嵌入方契约。 |
 
-本次评审没有候选移除表面：上述每一项要么是支持的 0.x 运行时表面，要么是 crate
-布局要求保持公开的不稳定内部表面。
+本次审查没有发现候选移除的 crate-root re-export。`src/lib.rs` 中的每个
+crate-root `pub use` 都已在上表点名。公共模块可能还会通过模块路径暴露其他项；
+除非这些项在这里被点名为支持的 0.x 表面，否则它们都属于不稳定内部 0.x API。
 
 不会给出稳定 1.0 API 承诺。当前稳定性由 `AgentEvent`、`AgentSessionEvent`、
 `SessionEntry` 及 trace/hook 结果枚举上的 `#[non_exhaustive]`，以及 `sdk`、
