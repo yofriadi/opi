@@ -286,9 +286,7 @@ pub async fn agent_loop(
                                         })
                                         .collect();
                                     let results = futures_util::future::join_all(futures).await;
-                                    for (parsed, result) in
-                                        parsed_calls.iter().zip(results.into_iter())
-                                    {
+                                    for (parsed, result) in parsed_calls.iter().zip(results) {
                                         let is_error = result.is_error;
                                         let details = result.details.clone();
                                         terminate_flags.push(result.terminate);
