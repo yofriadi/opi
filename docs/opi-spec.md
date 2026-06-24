@@ -10,11 +10,15 @@
 | Spec version | 0.5-draft |
 | Last updated | 2026-06-24 |
 | Repository | `https://github.com/OdradekAI/opi` |
-| Upstream studied | `pi` 0.75.3 at `.repo/pi-0.75.3/` |
+| Upstream studied | `pi` 0.80.2 at `.repo/pi-0.80.2/`; durable evidence lives in [`docs/pi-alignment-matrix.md`](pi-alignment-matrix.md) |
 | Current implementation | `opi` 0.5.4 workspace, Phase 8 runtime stabilization complete; Phase 7 reliability/observability and Phase 5 package/process-adapter surfaces are present |
-| Next milestone | Continue hardening 0.x runtime/API contracts before any stable 1.0 promise |
+| Next milestone | Phase 9 baseline realignment and Phase 10 core architecture deepening before feature breadth |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
+
+The current upstream evidence baseline is `.repo/pi-0.80.2`. The alignment
+matrix records architecture anchors, version-evolution signals, and the current
+`opi` alignment dashboard.
 
 Normative terms:
 
@@ -31,7 +35,9 @@ Opi mirrors pi's package structure with four Rust crates:
 - `opi-tui`: terminal UI components.
 - `opi-coding-agent`: the `opi` CLI binary.
 
-The repository has completed the Phase 4 extensibility substrate on top of the Phase 3 terminal coding agent: RPC JSONL mode, shared SDK types, extension hooks/tools/state, resource discovery, skills, prompt fragments, themes, packages, custom provider/model registration, session branch selection, and streaming proxy primitives are present. Phase 5 adds a Rust-native package and process-adapter MVP: local and git package sources, a `package add/remove/list/doctor` CLI, manifest V2 with `[adapter]` declarations, `process-jsonl` adapter hosting with the `opi-extension-jsonl-v1` protocol, and adapter-to-runtime bridging for tools, commands, hooks, events, state, and cancellation. It does not claim pi package ecosystem parity and does not support npm package install, marketplace behavior, TypeScript extension live reload, provider stream interception through adapters, custom terminal UI adapter rendering, or package permission policy enforcement. MCP, sub-agents, plan mode, todos, permission gates, and dynamic plugin loading should build on that substrate rather than become core features.
+The repository has completed the Phase 4 extensibility substrate on top of the Phase 3 terminal coding agent: RPC JSONL mode, shared SDK types, extension hooks/tools/state, resource discovery, skills, prompt fragments, themes, packages, custom provider/model registration, session branch selection, and streaming proxy primitives are present. Phase 5 adds a Rust-native package and process-adapter MVP: local and git package sources, a `package add/remove/list/doctor` CLI, manifest V2 with `[adapter]` declarations, `process-jsonl` adapter hosting with the `opi-extension-jsonl-v1` protocol, and adapter-to-runtime bridging for tools, commands, hooks, events, state, and cancellation. Phase 8 has stabilized the runtime contracts around event ordering, hooks, tool scheduling, cancellation, and SDK/RPC state. The next work is not ecosystem breadth; Phase 9 rebases the project against `pi` 0.80.2 evidence, and Phase 10 deepens `Models/Auth`, generic harness, and session-facade seams before the old tooling/provider/session/TUI phases continue.
+
+Opi does not claim pi package ecosystem parity and does not support npm package install, marketplace behavior, TypeScript extension live reload, provider stream interception through adapters, custom terminal UI adapter rendering, package permission policy enforcement, provider OAuth login, image generation, or web/share flows. MCP, sub-agents, plan mode, todos, permission gates, and dynamic plugin loading should build on the substrate rather than become core features.
 
 The central design rule:
 
@@ -39,12 +45,12 @@ The central design rule:
 
 ## 2. Design Philosophy
 
-| Principle | pi 0.75.3 | opi design |
+| Principle | pi 0.80.2 | opi design |
 |---|---|---|
 | Minimal core | `CONTRIBUTING.md` and coding-agent docs keep workflow-specific features outside core | Phase 1-3 avoid MCP, dynamic plugin, sub-agent, plan-mode, todo, and background-bash scope creep |
 | Layered runtime | `agentLoop` -> `Agent` -> `AgentHarness` / `AgentSession` | `agent_loop` -> `Agent` -> `Harness` / `CodingHarness` |
 | Streaming first | `AssistantMessageEventStream` and agent event streams | `Stream<Item = Result<Event, Error>>` with terminal events |
-| Provider agnostic | API, provider, and model are separate concepts | `Provider` trait, registry, provider adapters |
+| Provider agnostic | provider owns model catalog, auth, and stream behavior through `Models` | `Provider` trait, registry, provider adapters, and planned provider collection/auth seam |
 | Agent vs LLM messages | `AgentMessage[] -> transformContext -> convertToLlm -> Message[]` | app messages in `opi-agent`, provider messages in `opi-ai` |
 | Tool isolation | TypeBox schema at LLM boundary | typed Rust tool inputs, generated JSON Schema at the LLM boundary |
 | Errors in band | provider failures become `error` stream events | provider/runtime failures surface as events, not panics |
@@ -63,13 +69,18 @@ Opi is not an extensibility platform in its MVP. MCP is not a built-in core feat
 
 ### 2.2 pi Design Boundaries
 
-Pi 0.75.3 is a minimal terminal coding harness. Opi should preserve these boundaries unless a later design explicitly chooses to depart:
+Pi 0.80.2 is broader than the original terminal coding harness, but it still
+preserves boundaries that `opi` should keep unless a later design explicitly
+chooses to depart:
 
 - CLI/TUI remains the primary product surface.
 - Core ships useful defaults, not workflow-heavy opinions.
 - MCP, sub-agents, plan mode, permission gates, and todos belong in extensions, packages, or external tools rather than built-in core.
 - Tool safety is primarily controlled through tool selection, visibility, containers/sandboxes, and extension hooks.
 - RPC and SDK surfaces support composition without making the terminal product secondary.
+- Provider OAuth, image generation, custom extension UI, npm/gallery workflows,
+  and web/share flows are ecosystem surfaces that need reviewed designs before
+  entering `opi`.
 
 ## 3. Relationship to pi
 
@@ -112,7 +123,9 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 | binary | Phase 0 placeholder, Phase 1 useful | ship `opi`, not `pi` |
 | provider streaming | Phase 1 | preserve stream lifecycle and in-band errors |
 | Anthropic provider | Phase 1 | first provider implementation |
+| `Models` / provider-owned auth | Phase 10 | Rust-native provider collection/auth seam in `opi-ai`, without near-term OAuth parity |
 | `agentLoop` / `Agent` | Phase 1 | preserve loop, hook, queue, and tool batching semantics |
+| `AgentHarness` / session repo | Phase 10/13 | generic harness/session facade in `opi-agent`, coding product wrapper in `opi-coding-agent` |
 | default coding tools | Phase 1 | interactive defaults are `read`, `write`, `edit`, and `bash` |
 | read-only file navigation | Phase 1/3 | `read`, `grep`, `find`, and `ls` cover the pi read-only tool set; `glob` is an additional read-only convenience and core workflows must not depend on it |
 | interactive TUI | Phase 1 | terminal-first user surface |
@@ -124,6 +137,8 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 | tool selection and safety hooks | Phase 3 | allowlists, visibility, and hooks; no permanent core permission-popup subsystem |
 | RPC/SDK/extensions/skills/packages | Phase 4 | primary composition and customization path |
 | MCP adapter | Phase 4+ | extension/package example after extension APIs are stable |
+| custom extension UI/message renderers | future | ecosystem candidate after built-in TUI and a UI/RPC subprotocol are designed |
+| image generation | future | ecosystem candidate after chat provider collection/auth is stable |
 
 The maintained package/phase drift ledger lives in
 [`docs/pi-alignment-matrix.md`](pi-alignment-matrix.md).
@@ -141,12 +156,13 @@ tracked consistently across phases:
 | `Missing` | pi has the capability and opi does not, but the capability may still belong on the roadmap | file or link a future phase/task before claiming parity |
 | `Out of Scope` | pi has the capability, but opi explicitly does not plan to carry it in core | keep the capability out of core unless a later design changes the scope |
 
-At minimum, the drift ledger SHOULD track agent loop semantics, built-in tools,
-session format, session tree semantics, provider catalog, OAuth/subscription
-login, image input, image generation, package ecosystem, TypeScript extension
-compatibility, TUI renderer architecture, and workflow
-features that pi keeps out of core such as MCP, sub-agents, plan mode, todos,
-permission popups, and background bash.
+At minimum, the drift ledger SHOULD track core semantic parity, product parity,
+and ecosystem parity across agent loop semantics, generic harness ownership,
+built-in tools, session format, session tree semantics, provider collection,
+auth, provider catalog, OAuth/subscription login, image input, image
+generation, package ecosystem, TypeScript extension compatibility, TUI renderer
+architecture, and workflow features that pi keeps out of core such as MCP,
+sub-agents, plan mode, todos, permission popups, and background bash.
 
 ## 4. Current Baseline
 
@@ -317,11 +333,22 @@ opi-ai Provider
 
 ### 6.2 Harness Boundary
 
-Pi 0.75.3 has both reusable `AgentHarness` code and the coding agent's `AgentSession`. Opi should not accidentally duplicate that split.
+Pi 0.80.2 makes `AgentHarness` a central reusable orchestration layer above the
+low-level loop. It owns session persistence, runtime configuration, resource
+resolution, operation locking, turn snapshots, save points, and
+extension-facing mutation semantics. Opi should preserve that ownership
+direction in Rust without copying TypeScript APIs.
 
-- `opi-agent` SHOULD own generic harness primitives needed by non-CLI consumers.
-- `opi-coding-agent` SHOULD own coding-specific behavior: built-in file tools, project context, tool allowlists, CLI config, and app-level session commands.
-- If a feature is required by both library consumers and the CLI, it belongs in `opi-agent`; otherwise it stays in `opi-coding-agent`.
+- `opi-agent` SHOULD own generic harness primitives needed by non-CLI consumers:
+  phase guards, turn snapshots, save points, ordered pending session writes,
+  session repo/facade traits, and generic resources/system-prompt hooks.
+- `opi-coding-agent` SHOULD own coding-specific behavior: built-in file tools,
+  project context, package/resource discovery, tool allowlists, CLI config,
+  interactive commands, and app-level session commands.
+- `CodingHarness` SHOULD be a product wrapper over generic runtime seams, not
+  the only owner of reusable orchestration semantics.
+- If a feature is required by both library consumers and the CLI, it belongs in
+  `opi-agent`; otherwise it stays in `opi-coding-agent`.
 
 ### 6.3 Runtime Flow
 
@@ -510,7 +537,13 @@ Steering messages are delivered after the current assistant turn and its tool ca
 
 ### 8.1 `opi-ai`
 
-`opi-ai` owns provider-facing message types, model metadata, provider registry, credential helpers, and streaming adapters.
+`opi-ai` owns provider-facing message types, model metadata, provider registry,
+credential helpers, and streaming adapters. The Phase 10 target is to deepen
+this into a provider collection/auth seam inspired by `pi-ai` `Models`: provider
+and model lookup, optional refresh, provider-owned auth resolution,
+stream/complete dispatch, and compatibility metadata should live in `opi-ai`.
+CLI config, env loading, package inputs, and product defaults remain
+construction inputs owned by `opi-coding-agent`.
 
 ```rust
 pub trait Provider: Send + Sync {
@@ -562,6 +595,10 @@ Provider expansion policy:
 - Use extension/SDK provider registration for embedders and external adapters.
 
 OAuth remains a separate product decision. Anthropic OAuth, OpenAI Codex OAuth, and GitHub Copilot OAuth require login commands, credential storage, refresh behavior, and user-facing revocation semantics; they MUST NOT be silently added as a side effect of provider profile expansion.
+
+Image generation is also a separate product decision. `pi-ai` 0.80.2 mirrors
+chat-side provider collection/auth for image generation, but `opi` should not
+add that surface before chat provider collection/auth semantics are stable.
 
 Credential precedence:
 
@@ -845,8 +882,8 @@ Subsequent lines are tree entries:
 {"type":"compaction","id":"c3d4e5f6","parent_id":"b2c3d4e5","timestamp":"2026-05-20T13:00:00Z","summary":"The session inspected CLI scaffolding.","first_kept_entry_id":"b2c3d4e5","tokens_before":45000,"tokens_after":8000}
 ```
 
-Session entry types are separated into the current v1 surface and the Phase 11
-v2 target. Phase 11 may introduce `version = 2`, but it MUST keep v1 files
+Session entry types are separated into the current v1 surface and the Phase 13
+v2 target. Phase 13 may introduce `version = 2`, but it MUST keep v1 files
 readable and MUST NOT require an automatic migration command as a precondition
 for normal resume.
 
@@ -856,14 +893,14 @@ for normal resume.
 | `compaction` | v1 | summary plus first kept entry | yes |
 | `leaf` | v1 | current branch pointer | no |
 | `extension_state` | v1 | persisted extension state | no |
-| `session_info` | Phase 11 v2 target | session name and metadata | no |
-| `model_change` | Phase 11 v2 target | selected provider/model changed | no |
-| `thinking_level_change` | Phase 11 v2 target | thinking level changed | no |
-| `label` | Phase 11 v2 target | user marker or bookmark | no |
-| `branch_summary` | Phase 11 v2 target | parent branch summary used by tree/context reconstruction | yes |
-| `custom_message` | Phase 11 v2 target | extension-provided context message | configurable |
+| `session_info` | Phase 13 v2 target | session name and metadata | no |
+| `model_change` | Phase 13 v2 target | selected provider/model changed | no |
+| `thinking_level_change` | Phase 13 v2 target | thinking level changed | no |
+| `label` | Phase 13 v2 target | user marker or bookmark | no |
+| `branch_summary` | Phase 13 v2 target | parent branch summary used by tree/context reconstruction | yes |
+| `custom_message` | Phase 13 v2 target | extension-provided context message | configurable |
 
-Phase 11 success criteria:
+Phase 13 success criteria:
 
 - new writes use the chosen session v2 shape when v2 entries are needed;
 - v1 sessions remain readable and resumable;
@@ -1161,7 +1198,7 @@ Status: complete in 0.1.0.
 
 | Task | Status |
 |---|---|
-| five-crate workspace | done |
+| four-crate workspace | done |
 | lockstep versioning | done |
 | placeholder modules and re-exports | done |
 | CI gates | done |
@@ -1297,11 +1334,130 @@ Phase 5 adds package management and executable adapter hosting so that external 
 
 Exit criteria: `opi package add/remove/list/doctor` works for local and git package declarations; packages with `[adapter]` sections start as child processes using `opi-extension-jsonl-v1`; adapter tools, commands, hooks, state, and cancellation bridge into the existing extension API; example packages (todo, permission-gate, protected-paths) exercise the full pipeline; documentation is truthful and guard tests reject claims about npm, marketplace, hot reload, provider streaming adapters, custom TUI adapters, package update/config/enable/disable workflows, or package permission enforcement.
 
+### Phase 6 - Alignment and Reliability Hardening
+
+Status: complete in the current `0.5.4` workspace.
+
+Phase 6 tightened documentation, package/runtime integration, provider
+configuration behavior, and reliability around the Phase 4-5 surfaces. It did
+not change the core scope: package adapters and workflow examples remain
+substrate-level extension paths, not built-in product workflows.
+
+### Phase 7 - Reliability and Observability Hardening
+
+Status: complete in the current `0.5.4` workspace.
+
+Phase 7 added shared diagnostics, redaction, provider/runtime error
+classification, opt-in local trace envelopes, and `opi doctor`. Observability
+is local and explicit; it does not introduce telemetry, analytics, automatic
+session sharing, or a stable 1.0 trace protocol.
+
+### Phase 8 - Runtime Stabilization
+
+Status: complete in the current `0.5.4` workspace.
+
+Phase 8 documented and tested runtime event order, hook semantics, tool
+scheduling/termination, cancellation, SDK/RPC command state, diagnostics/trace
+wire behavior, and public API surface classifications. It keeps public APIs at
+0.x maturity and does not add TypeScript extension API compatibility, package
+ecosystem expansion, provider OAuth login, MCP runtime, a shared `opi-types`
+crate, or a whole-loop rewrite.
+
+### Phase 9 - pi 0.80.2 Baseline Realignment
+
+Status: planned documentation/evidence gate.
+
+Phase 9 updates the project baseline from the earlier studied upstream snapshot
+to `.repo/pi-0.80.2`. It maintains
+[`docs/pi-alignment-matrix.md`](pi-alignment-matrix.md) as the durable evidence
+and alignment baseline, and documents the revised Phase 9-14 roadmap. It is
+documentation-only: no runtime behavior changes, code migration, OAuth, image
+generation, custom UI protocol, npm/gallery workflow, web/share flow, or `pi`
+session compatibility promise belongs in this phase.
+
+Exit criteria: the alignment matrix contains the evidence baseline; English and
+Chinese normative docs name `.repo/pi-0.80.2` as the current baseline;
+`opi-agent` alignment reflects the generic harness gap honestly; and future
+ecosystem candidates have entry conditions.
+
+### Phase 10 - Core Architecture Deepening
+
+Status: planned architecture phase.
+
+Phase 10 deepens existing capabilities before breadth:
+
+| Workstream | Owner | Purpose |
+|---|---|---|
+| `Models/Auth` seam | `opi-ai` | provider collection/model lookup, refresh if supported, provider-owned auth, compatibility metadata, stream/complete dispatch |
+| Generic `AgentHarness` | `opi-agent` | phase guards, turn snapshots, save points, ordered pending writes, runtime config mutation semantics |
+| Session repo/facade | `opi-agent` | stable durable append/load/list/fork traits and ordered read/write facade for Phase 13 |
+| Runtime hook boundaries | `opi-agent` / `opi-coding-agent` | keep current hooks narrow while preserving future provider/UI/session lifecycle paths |
+
+Non-goals: OAuth login, subscription auth, broad provider catalog expansion,
+image generation, custom TUI extension protocol, npm/package marketplace work,
+browser/web UI work, `pi` TypeScript API compatibility, `pi` session file
+compatibility, a shared `opi-types` crate, or a whole-loop rewrite.
+
+### Phase 11 - Tooling Quality
+
+Status: planned; recast from the previous Phase 9.
+
+Phase 11 hardens built-in tools after Phase 10 clarifies harness/tool
+scheduling boundaries. It focuses on path normalization, encoding, truncation,
+diagnostics, cancellation, error results, and consistent mutating-tool policy.
+It must not add persistent background shells or broad permission-popup systems.
+
+### Phase 12 - Provider Correctness
+
+Status: planned; recast from the previous Phase 10.
+
+Phase 12 hardens the existing provider families and OpenAI-compatible profiles
+through fixture-backed lifecycle, error, auth, image-input, thinking, usage,
+retry, rate-limit, and compatibility tests. It should test through the Phase 10
+provider collection/auth seam. It is not a provider breadth phase and must not
+add OAuth login, image generation, or a broad catalog as a side effect.
+
+### Phase 13 - Session Tree and Context Reconstruction
+
+Status: planned; recast from the previous Phase 11.
+
+Phase 13 deepens session-native context after Phase 10 defines generic
+harness/session facade semantics. It may add v2 entries for session metadata,
+model/thinking changes, labels, branch summaries, and custom messages while
+keeping v1 files readable. Exports are local files; web/share/session
+publishing remains future ecosystem scope.
+
+### Phase 14 - TUI Product Polish
+
+Status: planned; recast from the previous Phase 12.
+
+Phase 14 polishes the built-in terminal product: model/session/branch pickers,
+transcript rendering, command discovery, status/error feedback, accessibility,
+terminal compatibility, and image/diff presentation. It does not promise
+custom extension UI, message renderer parity, web UI parity, or a general TUI
+framework.
+
+### Future Ecosystem Candidates
+
+These capabilities are aligned with `pi` but are not scheduled phases until
+their entry conditions are met.
+
+| Candidate | Entry condition |
+|---|---|
+| Provider OAuth / subscription auth | `Models/Auth` seam is stable; credential store, redaction, doctor, session interaction, login UX, refresh, and revocation are designed. |
+| Broad provider catalog | Phase 12 provider correctness is stable; OpenAI-compatible profile quirks have a documented compatibility model. |
+| Image generation | Chat-side provider collection, auth, model metadata, cost, and error semantics are stable. |
+| Custom extension UI / message renderer | Phase 14 built-in TUI is stable; a separate RPC/UI subprotocol is designed. |
+| npm/package gallery/update/enable/disable | Package adapter lifecycle, trust/source model, diagnostics, and lock/update policy are stable. |
+| Web/share/session publishing | Phase 13 export, redaction, and session sensitivity rules are stable. |
+| Provider request/response adapter hooks | Core provider seam, hook ordering, redaction, and trace semantics are stable. |
+| `pi` session import/migration | `opi` session v2 is stable; user value is clear; normal resume remains unaffected. |
+
 ## 16. Decision Log
 
 | # | Decision | Choice | Reason |
 |---|---|---|---|
-| ADR-001 | Workspace shape | five crates mirroring pi packages | preserves conceptual boundaries |
+| ADR-001 | Workspace shape | four crates mirroring pi packages | preserves conceptual boundaries |
 | ADR-002 | Versioning | lockstep workspace version | simplifies compatibility and release order |
 | ADR-003 | No shared types crate | types live with semantic owner | avoids hub dependency |
 | ADR-004 | pi compatibility | semantic alignment, not API/file compatibility | Rust-native implementation |
@@ -1320,6 +1476,7 @@ Exit criteria: `opi package add/remove/list/doctor` works for local and git pack
 | ADR-018 | crates.io timing | quality-gated first publish | publish only after placeholder APIs are hidden or replaced and release gates pass |
 | ADR-019 | Tool safety | allowlists, visibility, and hooks over core permission profiles | pi explicitly avoids built-in permission popups; environment-specific gates belong in extensions/packages or external sandboxes |
 | ADR-020 | Context files | `AGENTS.md` / `CLAUDE.md` before `OPI.md` | preserves pi behavior and ecosystem convention |
+| ADR-021 | Current upstream baseline | `.repo/pi-0.80.2` plus durable alignment matrix | `pi` architecture moved materially around `Models/Auth`, `AgentHarness`, sessions, and extension UI surfaces after the earlier baseline |
 
 ## 17. Non-Functional Requirements
 
@@ -1351,7 +1508,12 @@ Maintainability requirements:
 
 ## 18. Future Considerations
 
-The architecture should not preclude MCP tools, remote tool execution, streaming proxy services, editor integrations, pi session migration, or plugin runtimes. These are not core Phase 1-3 requirements and should generally arrive through RPC, SDK, extensions, packages, or later reviewed plugin runtimes.
+The architecture should not preclude MCP tools, remote tool execution, streaming
+proxy services, editor integrations, pi session migration, provider OAuth,
+image generation, custom extension UI, web/share flows, or plugin runtimes.
+These are not core Phase 1-8 requirements and should generally arrive through
+RPC, SDK, extensions, packages, or later reviewed ecosystem designs after the
+Phase 10-14 depth work is stable.
 
 ## 19. Glossary
 
@@ -1378,13 +1540,13 @@ The architecture should not preclude MCP tools, remote tool execution, streaming
 ## 20. References
 
 - [pi source](https://github.com/earendil-works/pi)
-- `.repo/pi-0.75.3/CONTRIBUTING.md`
-- `.repo/pi-0.75.3/packages/agent/README.md`
-- `.repo/pi-0.75.3/packages/agent/src/types.ts`
-- `.repo/pi-0.75.3/packages/ai/src/types.ts`
-- `.repo/pi-0.75.3/packages/coding-agent/src/core/session-manager.ts`
-- `.repo/pi-0.75.3/packages/coding-agent/docs/json.md`
-- `.repo/pi-0.75.3/packages/coding-agent/docs/rpc.md`
+- [`docs/pi-alignment-matrix.md`](pi-alignment-matrix.md)
+- `.repo/pi-0.80.2/packages/ai/README.md`
+- `.repo/pi-0.80.2/packages/ai/CHANGELOG.md`
+- `.repo/pi-0.80.2/packages/agent/src/index.ts`
+- `.repo/pi-0.80.2/packages/agent/docs/agent-harness.md`
+- `.repo/pi-0.80.2/packages/agent/docs/durable-harness.md`
+- `.repo/pi-0.80.2/packages/coding-agent/docs/extensions.md`
 - `Cargo.toml`
 - `CHANGELOG.md`
 - `.github/workflows/ci.yml`

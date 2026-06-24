@@ -6,8 +6,9 @@ description: Use when executing opi-spec.md tasks or reviewed supplemental opi p
 # opi-implement
 
 Long-running-agent harness that drives `docs/opi-spec.md` implementation, plus
-reviewed supplemental Phase 5-12 product-hardening specs listed in this skill,
-one task at a time with TDD, tiered verification, and JSON-ledger checkpointing.
+reviewed supplemental Phase 5-14 product-hardening specs listed in this skill,
+one task at a time with TDD for code tasks, documentation guard verification
+for docs-only tasks, tiered verification, and JSON-ledger checkpointing.
 
 This is a **harness**, not a coding assistant. It encodes opinions about state,
 evidence, failure recovery, and escalation. It does NOT edit `opi-spec.md`,
@@ -31,15 +32,17 @@ registry. Do not auto-parse arbitrary files from `docs/superpowers/specs/`.
 | 6 | `docs/superpowers/specs/2026-06-15-phase6-alignment-hardening-design.md` |
 | 7 | `docs/superpowers/specs/2026-06-15-phase7-reliability-observability-design.md` |
 | 8 | `docs/superpowers/specs/2026-06-15-phase8-agent-runtime-stabilization-design.md` |
-| 9 | `docs/superpowers/specs/2026-06-15-phase9-tooling-quality-design.md` |
-| 10 | `docs/superpowers/specs/2026-06-15-phase10-provider-correctness-design.md` |
-| 11 | `docs/superpowers/specs/2026-06-15-phase11-session-long-term-memory-design.md` |
-| 12 | `docs/superpowers/specs/2026-06-15-phase12-tui-product-polish-design.md` |
+| 9 | `docs/superpowers/specs/2026-06-24-phase9-pi-0-80-2-baseline-realignment-design.md` |
+| 10 | `docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md` |
+| 11 | `docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md` |
+| 12 | `docs/superpowers/specs/2026-06-24-phase12-provider-correctness-design.md` |
+| 13 | `docs/superpowers/specs/2026-06-24-phase13-session-tree-context-reconstruction-design.md` |
+| 14 | `docs/superpowers/specs/2026-06-24-phase14-tui-product-polish-design.md` |
 
 When a ledger is initialized or reconciled for a supplemental phase, the
 phase's registered source files MUST be included in `spec_files` and hashed in
 `spec_files_sha256` alongside `docs/opi-spec.md`. Phase 5 uses its reviewed
-implementation plan for task rows; phases 6-12 derive draft task rows from the
+implementation plan for task rows; phases 6-14 derive draft task rows from the
 registered design's workstreams, testing strategy, documentation updates, and
 success criteria, then require task-graph review before execution.
 
@@ -354,11 +357,13 @@ Supplemental Phase 5 design: `docs/superpowers/specs/2026-06-08-productized-exte
 
 Supplemental Phase 5 implementation plan: `docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md`
 
-Supplemental Phase 6-12 designs:
+Supplemental Phase 6-14 designs:
 - `docs/superpowers/specs/2026-06-15-phase6-alignment-hardening-design.md`
 - `docs/superpowers/specs/2026-06-15-phase7-reliability-observability-design.md`
 - `docs/superpowers/specs/2026-06-15-phase8-agent-runtime-stabilization-design.md`
-- `docs/superpowers/specs/2026-06-15-phase9-tooling-quality-design.md`
-- `docs/superpowers/specs/2026-06-15-phase10-provider-correctness-design.md`
-- `docs/superpowers/specs/2026-06-15-phase11-session-long-term-memory-design.md`
-- `docs/superpowers/specs/2026-06-15-phase12-tui-product-polish-design.md`
+- `docs/superpowers/specs/2026-06-24-phase9-pi-0-80-2-baseline-realignment-design.md`
+- `docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md`
+- `docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md`
+- `docs/superpowers/specs/2026-06-24-phase12-provider-correctness-design.md`
+- `docs/superpowers/specs/2026-06-24-phase13-session-tree-context-reconstruction-design.md`
+- `docs/superpowers/specs/2026-06-24-phase14-tui-product-polish-design.md`

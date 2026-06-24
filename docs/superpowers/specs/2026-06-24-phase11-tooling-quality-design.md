@@ -1,9 +1,15 @@
-# Phase 9 Tooling Quality Design
+# Phase 11 Tooling Quality Design
+
+Historical note: this design was originally drafted as Phase 9. After the
+`.repo/pi-0.80.2` baseline review, Phase 9 became the documentation/evidence
+realignment gate and Phase 10 became core architecture deepening. Tooling
+quality is now Phase 11 and depends on the Phase 10 harness/provider/session
+seams.
 
 ## Overview
 
-Phase 9 improves the built-in coding tools and their policy surface. Earlier
-phases made packages and runtime behavior auditable; Phase 9 focuses on the
+Phase 11 improves the built-in coding tools and their policy surface. Earlier
+phases made packages and runtime behavior auditable; Phase 11 focuses on the
 daily workhorse tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`,
 and `glob`.
 
@@ -40,7 +46,7 @@ Linux, Unicode paths, large files, line endings, and cancellation.
 ## Relationship to pi
 
 Pi ships a small default tool set and expects workflow-specific behavior to be
-customized through extensions. Phase 9 preserves that model. The Rust version
+customized through extensions. Phase 11 preserves that model. The Rust version
 may improve correctness and safety around filesystem operations, but it should
 not turn core tools into a broad IDE subsystem.
 
@@ -80,7 +86,7 @@ Path-handling behavior should be consistent:
 - distinguish not found, not a file, not a directory, permission denied, binary
   file, and unsupported encoding.
 
-Phase 9 should not forbid access outside the workspace by default unless an
+Phase 11 should not forbid access outside the workspace by default unless an
 existing policy says so. Restriction belongs to tool selection, mutating opt-in,
 extension hooks, containers, or future sandbox work.
 
@@ -137,7 +143,7 @@ Improve or verify:
 - mutating-tool classification;
 - sequential execution mode.
 
-Phase 9 must not add persistent background shells. Pi explicitly keeps
+Phase 11 must not add persistent background shells. Pi explicitly keeps
 background bash out of core; users who need it should use tmux or a package.
 
 ## Read-Only Navigation Tools
@@ -202,7 +208,7 @@ Update tool docs and help output to clarify:
 
 ## Success Criteria
 
-Phase 9 is complete when:
+Phase 11 is complete when:
 
 1. Built-in tool result details follow a consistent contract.
 2. `edit` handles CRLF/LF and conflict cases predictably.
@@ -216,8 +222,8 @@ Phase 9 is complete when:
 8. No permission popup, background bash, remote execution, sandbox, or workflow
    tool is added to core.
 
-## Phase 10 Handoff
+## Phase 12 Handoff
 
-Phase 10 should apply the same correctness discipline to provider adapters:
+Phase 12 should apply the same correctness discipline to provider adapters:
 fixture-based tests, clear error taxonomy, stable diagnostics, and no feature
 breadth unless a provider's existing supported behavior is wrong or ambiguous.

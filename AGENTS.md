@@ -447,7 +447,7 @@ bundles `cargo build`, `cargo fmt --check --all`,
 `cargo clippy --workspace --all-targets -- -D warnings`, and
 `cargo test --workspace --all-targets`.
 
-Reviewed supplemental implementation specs for phases 5-12 are registered in
+Reviewed supplemental implementation specs for phases 5-14 are registered in
 `.claude/skills/opi-implement/skill.md`; do not treat arbitrary
 `docs/superpowers/specs/` files as normative without that registry.
 

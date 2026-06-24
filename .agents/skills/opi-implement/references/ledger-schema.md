@@ -116,7 +116,7 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | `tasks[].status` | enum | runtime | `failing`/`in_progress`/`passing`/`blocked`/`archived` |
 | `tasks[].depends_on` | array | const | Task IDs that must be `passing` |
 | `tasks[].inference_notes` | array | const | Reasons for inferred fields. Phase non-goal guards are recorded with `field = "forbidden_scope"` and an exact source heading. |
-| `tasks[].tier` | enum | const | `workspace`/`library`/`cli-tool`/`cli-runtime`/`tui` |
+| `tasks[].tier` | enum | const | `documentation`/`workspace`/`library`/`cli-tool`/`cli-runtime`/`tui` |
 | `tasks[].commit_type` | enum | const | `feat`/`fix`/`docs`/`refactor`/`test`/`chore`/`perf` |
 | `tasks[].parallelize` | array | const | Sub-unit names for parallel dispatch |
 | `tasks[].evaluator_required` | bool | const | Static risk flag |
@@ -143,7 +143,12 @@ Validation rule: every path listed in `tasks[].verification.behavioral_tests` MU
 
 Validation rule: when `behavioral_tests` references more than one crate, either `tier` MUST be `workspace` or `verification.library_gates` MUST include mechanical gates for every referenced crate. Snapshot-bearing tests also require `snapshot_tests` and explicit snapshot approval under the `tui` rules.
 
-Validation rule: `task_owned_paths` MUST NOT include broad documentation globs such as `docs/**` when a narrower subtree can satisfy the task. Use a purpose-specific path such as `docs/extension-examples/**` for example packages. `docs/opi-spec.md` is normative input and MUST NOT be task-owned.
+Validation rule: `task_owned_paths` MUST NOT include broad documentation globs
+such as `docs/**` when a narrower subtree can satisfy the task. Use a
+purpose-specific path such as `docs/extension-examples/**` for example
+packages. `docs/opi-spec.md` is normative input and MUST NOT be task-owned
+unless the task is a reviewed documentation/alignment task whose DoD explicitly
+requires updating `docs/opi-spec.md` and its localized counterpart.
 
 Validation rule: every source-spec success criterion, exit criterion, goal, or
 named user workflow for the active phase MUST be represented by at least one
@@ -152,7 +157,7 @@ criterion is intentionally deferred, the scenario must be assigned to a
 documentation/alignment task that updates the source spec or records an exact
 current-spec citation for the deferral.
 
-Validation rule: for phases 5-12, `spec_files` MUST include the registered
+Validation rule: for phases 5-14, `spec_files` MUST include the registered
 supplemental source file(s) for the active phase as listed in `skill.md`.
 Unregistered design docs, snapshot files, skill source files, `AGENTS.md`, and
 `CLAUDE.md` MUST NOT be added to `spec_files`.

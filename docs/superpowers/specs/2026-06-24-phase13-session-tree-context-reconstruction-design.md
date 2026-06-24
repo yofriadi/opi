@@ -1,8 +1,13 @@
-# Phase 11 Session Tree and Context Reconstruction Design
+# Phase 13 Session Tree and Context Reconstruction Design
+
+Historical note: this design was originally drafted as Phase 11. After the
+`.repo/pi-0.80.2` baseline review, Phase 11 became tooling quality and Phase 12
+became provider correctness. Session tree and context reconstruction is now
+Phase 13 and depends on the Phase 10 generic harness/session facade seam.
 
 ## Overview
 
-Phase 11 deepens opi's session system and long-running workflow support. The
+Phase 13 deepens opi's session system and long-running workflow support. The
 scope is session-native context: branch trees, labels, names, summaries, model
 and thinking changes, exports, recovery, and deterministic context
 reconstruction. It is not a global memory system, vector database, RAG layer,
@@ -43,7 +48,7 @@ changes, compaction, branch summaries, extension custom entries, custom
 messages, labels, and session info. Opi should learn from that shape but should
 not promise pi file compatibility.
 
-Phase 11 should define opi's own session v2 only if new entries cannot be added
+Phase 13 should define opi's own session v2 only if new entries cannot be added
 cleanly to the existing v1 format. Compatibility means opi can load its own
 older sessions and explain migration, not that opi can read arbitrary pi
 sessions.
@@ -51,7 +56,7 @@ sessions.
 The current opi session format already records messages, compaction entries,
 leaf pointers, and extension state. It does not yet make pi-inspired branch
 summaries, extension custom messages, labels, or session info first-class in
-context reconstruction. Phase 11 closes that semantic gap without claiming pi
+context reconstruction. Phase 13 closes that semantic gap without claiming pi
 session v3 file compatibility.
 
 ## Session-Native Context Boundary
@@ -127,7 +132,7 @@ Branch summaries should be explicit and optional. They may be generated:
 - manually by command;
 - by an extension hook if the runtime supports it.
 
-Phase 11 should not require live provider calls for every branch operation.
+Phase 13 should not require live provider calls for every branch operation.
 If a summary cannot be generated, the branch action should still work and
 record a diagnostic.
 
@@ -141,7 +146,7 @@ Add local export support for:
 | json | structured local tooling |
 | html | optional static transcript if low-cost and aligned with existing rendering |
 
-Exports are local files. No sharing service is part of Phase 11.
+Exports are local files. No sharing service is part of Phase 13.
 
 Export should support:
 
@@ -171,7 +176,7 @@ opi --export-session <id-or-path> --format markdown --output <file>
 ```
 
 Only implement commands that have clear tests and do not require a broad TUI
-redesign. Phase 12 can polish interactive presentation.
+redesign. Phase 14 can polish interactive presentation.
 
 ## Data Flow
 
@@ -230,7 +235,7 @@ Update docs to state:
 
 ## Success Criteria
 
-Phase 11 is complete when:
+Phase 13 is complete when:
 
 1. Session metadata and context-entry needs are either implemented or
    explicitly deferred.
@@ -246,8 +251,8 @@ Phase 11 is complete when:
 8. No vector memory, global profile, cloud sync, session sharing service, or pi
    session compatibility claim is added.
 
-## Phase 12 Handoff
+## Phase 14 Handoff
 
-Phase 12 should improve the terminal presentation of the session model:
+Phase 14 should improve the terminal presentation of the session model:
 pickers, tree views, command palette, keyboard flow, and transcript rendering.
 It should not change session semantics without updating this design.

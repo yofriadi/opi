@@ -1,7 +1,10 @@
 # Verification Tiers Reference
 
 Each task carries a `tier` field; the skill selects gates from this table.
-All tiers also run the cross-cutting gates at the bottom.
+All non-documentation tiers also run the cross-cutting gates at the bottom.
+Documentation-only tasks run the documentation tier gates and must be promoted
+to the relevant non-documentation tier if they touch Rust code, Cargo manifests,
+runtime scripts, or generated build artifacts.
 
 ## `workspace` Tier
 
@@ -14,6 +17,21 @@ Gates:
 3. `cargo test --workspace --all-targets`
 4. `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`
 5. Smoke script runs
+
+## `documentation` Tier
+
+Use for documentation/alignment tasks whose source spec explicitly says no
+runtime behavior or code migration is allowed.
+
+Gates:
+1. `git diff --check` exits 0.
+2. Task-owned paths are exact documentation paths, not broad `docs/**` globs.
+3. English and localized counterparts are updated together when both exist.
+4. Required docs guard commands from the source spec or
+   `acceptance_scenarios[].verification` exit with the expected result.
+5. `git diff --name-only` shows no Rust source, Cargo manifest, lockfile,
+   runtime script, fixture, snapshot, or generated build artifact changes. If
+   it does, reclassify the task before implementation continues.
 
 ## `library` Tier
 
@@ -161,7 +179,47 @@ Additional gates:
 5. No plan mode, sub-agent system, todo system, permission popup, MCP runtime,
    package ecosystem expansion, or web UI product enters core.
 
-### Phase 9 Tooling Quality
+### Phase 9 pi 0.80.2 Baseline Realignment
+
+Additional gates:
+1. Documentation tier is required unless a reviewed source update changes
+   Phase 9 scope.
+2. `docs/pi-alignment-matrix.md` contains document control, `pi` architecture,
+   version evolution signals, evidence index, alignment dashboard, roadmap
+   implications, and maintenance rules.
+3. English and Chinese normative docs name `.repo/pi-0.80.2` as the current
+   studied upstream baseline.
+4. Stale `.repo/pi-0.75.3` references appear only as historical notes, not as
+   current baseline statements.
+5. Docs guards reject current-scope overclaims for OAuth parity, image
+   generation, custom extension UI parity, npm/gallery/update/enable/disable,
+   web/share, and `pi` session compatibility.
+6. No Rust code, runtime behavior, provider auth, image generation, custom UI,
+   package ecosystem, web/share flow, `pi` session compatibility, or
+   `opi-types` crate is added.
+
+### Phase 10 Core Architecture Deepening
+
+Additional gates:
+1. Provider collection/auth work includes tests for model lookup, provider
+   dispatch, auth status/diagnostics, compatibility metadata, and existing
+   provider construction through `opi-coding-agent`.
+2. Generic harness work includes contract tests for phase guards, turn
+   snapshots, save points, busy rejection, runtime config mutation timing,
+   cancellation, and ordered pending session writes.
+3. Session repo/facade work preserves existing session readability and proves
+   deterministic branch/leaf reconstruction.
+4. `CodingHarness` remains the coding-agent product wrapper; generic behavior
+   moved into `opi-agent` is exercised through at least one production CLI,
+   JSON, RPC, or interactive path.
+5. Hook-boundary changes keep current core/product hooks narrow and document
+   future provider/UI/session lifecycle paths without implementing them.
+6. No OAuth login, subscription auth, broad provider catalog expansion, image
+   generation, custom TUI extension protocol, npm/gallery, browser/web UI,
+   `pi` TypeScript API compatibility, `pi` session file compatibility,
+   `opi-types`, or whole-loop rewrite is added.
+
+### Phase 11 Tooling Quality
 
 Additional gates:
 1. Built-in tool results expose consistent `content`, `details`, `is_error`,
@@ -177,7 +235,7 @@ Additional gates:
    index, language server, automatic formatting, sandbox, or workflow tool is
    added to core.
 
-### Phase 10 Provider Correctness
+### Phase 12 Provider Correctness
 
 Additional gates:
 1. Every existing provider family has fixture coverage for request
@@ -193,7 +251,7 @@ Additional gates:
    generation, browser usage feature, provider streaming adapter protocol, or
    broad provider catalog expansion is added.
 
-### Phase 11 Session Tree and Context Reconstruction
+### Phase 13 Session Tree and Context Reconstruction
 
 Additional gates:
 1. New session entries round-trip and rebuild context deterministically, or are
@@ -209,7 +267,7 @@ Additional gates:
    session sharing service, web UI product, or pi session v3 compatibility
    claim is added.
 
-### Phase 12 TUI Product Polish
+### Phase 14 TUI Product Polish
 
 Additional gates:
 1. Snapshot tests cover changed branch/session/model pickers, command palette,
@@ -226,7 +284,7 @@ Additional gates:
    extension overlay/widget system, permission popup subsystem, or package
    ecosystem expansion is added.
 
-## Cross-Cutting Gates (Every Tier)
+## Cross-Cutting Gates (Non-Documentation Tiers)
 
 Run after tier-specific gates:
 
@@ -294,7 +352,7 @@ Before confirming an init or reinit graph:
 12. Vague DoD verbs (`works`, `supports`, `loads`, `integrates`, `bridges`,
     `productizes`, `handles`) must be expanded into observable assertions before
     graph confirmation.
-13. For phases 5-12, `spec_files` must match the reviewed source registry in
+13. For phases 5-14, `spec_files` must match the reviewed source registry in
     `skill.md` for the active phase; arbitrary docs under
     `docs/superpowers/specs/` are not normative.
 14. Phase non-goals must appear as `forbidden_scope` inference notes or

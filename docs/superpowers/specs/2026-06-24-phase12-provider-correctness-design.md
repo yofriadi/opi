@@ -1,8 +1,13 @@
-# Phase 10 Provider Correctness Design
+# Phase 12 Provider Correctness Design
+
+Historical note: this design was originally drafted as Phase 10. After the
+`.repo/pi-0.80.2` baseline review, Phase 10 became core architecture
+deepening. Provider correctness is now Phase 12 and should test through the
+Phase 10 `Models/Auth` seam where that seam exists.
 
 ## Overview
 
-Phase 10 improves correctness for the provider adapters that already exist in
+Phase 12 improves correctness for the provider adapters that already exist in
 opi. The phase focuses on wire-format fidelity, streaming lifecycle, tool call
 conversion, image handling, thinking/reasoning support, usage and cost mapping,
 retry behavior, proxy handling, OpenAI-compatible profile compatibility, and
@@ -68,8 +73,8 @@ thinking format, response IDs, and session affinity headers.
 |---|---|---|
 | Provider trait | `opi-ai` | Stable request/stream/capability contract |
 | Provider adapters | `opi-ai` | Wire-specific serialization, streaming, usage, and errors |
-| Provider registry | `opi-ai` | Model and provider resolution |
-| Provider construction | `opi-coding-agent` | Config, env, proxy, and runtime wiring |
+| Provider collection / registry | `opi-ai` | Model/provider resolution, compatibility metadata, and provider-owned auth semantics from Phase 10 |
+| Provider construction | `opi-coding-agent` | Config, env, proxy, packages, and product runtime wiring into the `opi-ai` seam |
 | Diagnostics | `opi-ai`, `opi-coding-agent` | Safe provider error and config reporting |
 | Tests | `opi-ai/tests`, `opi-coding-agent/tests` | Fixture and wiring coverage |
 
@@ -141,7 +146,7 @@ Config-driven OpenAI-compatible profiles should have fixture coverage for:
 - unsupported capability diagnostics that fail before a bad request where
   possible.
 
-If a profile requires behavior outside these flags, Phase 10 should document
+If a profile requires behavior outside these flags, Phase 12 should document
 why it needs a first-class adapter or defer it as future provider breadth.
 
 ### Images
@@ -153,7 +158,7 @@ For providers that support image input:
 - verify image size/count limits where configured;
 - verify unsupported image diagnostics.
 
-Image generation is not part of Phase 10.
+Image generation is not part of Phase 12.
 
 ### Usage and Cost
 
@@ -246,7 +251,7 @@ Update provider docs to clarify:
 
 ## Success Criteria
 
-Phase 10 is complete when:
+Phase 12 is complete when:
 
 1. Every existing provider has fixture coverage for request serialization,
    streaming lifecycle, and error mapping.
@@ -263,8 +268,8 @@ Phase 10 is complete when:
 9. No OAuth, subscription auth, image generation, or broad provider catalog
    expansion is added.
 
-## Phase 11 Handoff
+## Phase 13 Handoff
 
-Phase 11 should rely on provider-correct usage, model, thinking, and error data
+Phase 13 should rely on provider-correct usage, model, thinking, and error data
 when deepening sessions. Session metadata should record what users need to
 understand past work without depending on provider-specific internals.
