@@ -10,7 +10,7 @@
 
 ## 当前状态
 
-`Cargo.toml` 中的 workspace 包版本是 `0.5.3`。`opi` 既可以作为终端编程
+`Cargo.toml` 中的 workspace 包版本是 `0.5.4`。`opi` 既可以作为终端编程
 Agent 使用，也可以作为一组 Rust crate 嵌入到其他 Agent 运行时中。仓库中
 可能包含基于该版本的未发布变更；当前差异见 [CHANGELOG.md](CHANGELOG.md)。
 

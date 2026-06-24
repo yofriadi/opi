@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.5.3`, inherited from the workspace package version.
+Current crate version: `0.5.4`, inherited from the workspace package version.
 
 `opi-agent` owns the agent loop and runtime primitives: tool contracts,
 JSON Schema argument validation, parallel/sequential tool execution, lifecycle
