@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-24
+
+### Changed
+
+- Realigned the implementation roadmap against the `pi` 0.80.2 evidence baseline, adding Phase 9 baseline realignment, Phase 10 architecture deepening, and refreshed Phase 11-14 planning documents.
+- Updated the English and Chinese technical specification and pi alignment matrix to reflect the current roadmap and phase boundaries.
+- This release is published to GitHub only; crates.io publishing is intentionally skipped because it contains planning and documentation changes only.
+
 ## [0.5.4] - 2026-06-24
 
 ### Added
@@ -300,6 +308,7 @@ boundaries; functional implementations land in subsequent releases.
 - This release is published as a GitHub Release only; crates.io publish
   is deferred until the crates have real implementations.
 
+[0.6.0]: https://github.com/OdradekAI/opi/releases/tag/v0.6.0
 [0.5.4]: https://github.com/OdradekAI/opi/releases/tag/v0.5.4
 [0.5.3]: https://github.com/OdradekAI/opi/releases/tag/v0.5.3
 [0.5.2]: https://github.com/OdradekAI/opi/releases/tag/v0.5.2

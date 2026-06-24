@@ -12,7 +12,7 @@
 |---|---|
 | 上游路径 | `.repo/pi-0.80.2` |
 | 上游包版本 | `@earendil-works/pi-ai`、`@earendil-works/pi-agent-core`、`@earendil-works/pi-tui` 和 `@earendil-works/pi-coding-agent` 均为 `0.80.2` |
-| Opi workspace 版本 | `0.5.4` |
+| Opi workspace 版本 | `0.6.0` |
 | 采样日期 | 2026-06-24 |
 | 证据范围 | `.repo/pi-0.80.2` 下的本地文件、当前 `docs/opi-spec.md`、当前 `docs/pi-alignment-matrix.md` 和当前 `crates/*` 布局 |
 | 更新策略 | 当研究的 `pi` 基线变化，或 `opi` 关闭本文列出的缺口时更新本文。保留有价值的旧证据作为历史上下文，不要静默重写。 |
@@ -54,7 +54,7 @@
 
 `pi-coding-agent` 是产品层：CLI/TUI modes、tools、sessions、extensions、package workflows、export/share/update surfaces，以及丰富的 extension integration。其 extension 文档展示了比当前 `opi` 更宽的表面：user prompts、custom UI components、custom commands、event interception、session lifecycle hooks、provider hooks、message renderers 和 example extensions（`.repo/pi-0.80.2/packages/coding-agent/docs/extensions.md:10-14,297-299,438-440,2177-2185,2397-2403,2524-2526,2628-2632`）。
 
-对 `opi` 来说，这些是未来生态证据，不是当前范围。现有 Rust process-adapter 路径是好的基底，但不意味着已经对等 TypeScript custom UI、npm package gallery 行为、provider payload hooks 或 session publishing。
+对 `opi` 来说，这些是未来生态证据，不是当前范围。现有 Rust process-adapter 路径是好的基底，但不意味着已经对等 TypeScript custom UI、npm/gallery 行为、provider payload hooks 或 session publishing。
 
 ## 版本演进信号
 
@@ -167,7 +167,7 @@
 | Built-in tools | 部分 | `read`、`write`、`edit`、`bash`、`grep`、`find`、`ls` 和 `glob` 已存在，并有 mode-aware policy。 | 第 11 阶段加固 paths、encodings、truncation、cancellation 和 diagnostics。 |
 | Config/resource discovery | 部分 | TOML layers、provider profiles、context files、resources、skills、prompt fragments、themes、packages 和 extensions 已存在。 | 保持 precedence 和 diagnostics 显式。 |
 | Sessions 和 branch workflows | 部分 | Resume/list/delete/fork、`/tree`、`/branch`、`/fork`、`/clone`、active branch continuation 和 compaction 已存在。 | 第 13 阶段增加稳定 metadata、summaries、labels 和 export。 |
-| Package/process adapter substrate | 部分 | Local/git package sources、manifest V2、`process-jsonl`、adapter tools/commands/hooks/events/state/cancellation 和 examples 已存在。 | 稳定后再考虑 npm/gallery/update/enable/disable。 |
+| Package/process adapter substrate | 部分 | Local/git package sources、manifest V2、`process-jsonl`、adapter tools/commands/hooks/events/state/cancellation 和 examples 已存在。通过 `opi-extension-jsonl-v1` 运行的 process-JSONL adapter 会把 package command、tool、hook、event、state 和 cancellation 桥接进 runtime。 | 稳定后再考虑 npm/gallery/update/enable/disable。 |
 | Provider hooks/login UX | 缺失 | Custom provider registration 已存在；provider request/response hook parity 和 login flows 不存在。 | 第 10/12 阶段 provider seam 与 redaction/trace 设计后作为未来候选。 |
 | Export/share/web surfaces | 缺失 | 本地 session/export 方向计划中；web/share 未实现。 | 第 13 阶段 sensitivity 和 redaction 规则之后作为未来候选。 |
 
@@ -179,7 +179,7 @@
 | 2 | Multi-provider、sessions、compaction、JSON mode、retry/cost/thinking | `opi-ai`、`opi-agent`、`opi-coding-agent`、`opi-tui` | 部分 | 核心已存在；provider collection/auth 和更丰富 sessions 仍是缺口。 |
 | 3 | Production hardening：enterprise providers、image input、context files、tool policy、completions、proxy | 全部 crate | 部分 | Image input 已存在；图像生成仍是未来。 |
 | 4 | Extensibility substrate：RPC、SDK、extensions、resources、skills、themes、packages、custom providers、branch UI、streaming proxy | 全部 crate | 部分 | 基底较强，但不是 TypeScript extension 或 custom UI 对等。 |
-| 5 | Package/process-adapter MVP | `opi-coding-agent`、`opi-agent` | 部分 | Local/git/process-jsonl 路径已存在；npm/gallery/update/enable/disable 仍是未来。 |
+| 5 | Package store / process-adapter MVP | `opi-coding-agent`、`opi-agent` | 部分 | Local/git/process-jsonl 路径已存在，包含 process-JSONL adapter hosting（`opi-extension-jsonl-v1`）；npm/gallery/update/enable/disable 仍是未来。 |
 | 6 | Alignment and reliability hardening | workspace | 部分 | 文档和 runtime integration 加固，但不扩张生态范围。 |
 | 7 | Reliability and observability | `opi-agent`、`opi-coding-agent`、`opi-ai` | 部分 | Diagnostics、redaction、trace envelopes、doctor checks 均为本地且显式。 |
 | 8 | Runtime stabilization | `opi-agent`、`opi-coding-agent` | 部分 | Event order、hooks、tool scheduling、cancellation、SDK/RPC contracts 和 API surface classification 已测试。 |
@@ -206,7 +206,7 @@
 
 | 优先级 | 领域 | 状态 | 下一步 |
 |---|---|---|---|
-| P0 | 基线真实性 | 当前文档使用 `.repo/pi-0.80.2` 作为研究的上游基线。 | 保持本矩阵和 `opi-spec` 同步；保留内嵌证据锚点。 |
+| P0 | 基线真实性 | 当前文档描述 `0.6.0` workspace，并使用 `.repo/pi-0.80.2` 作为研究的上游基线。 | 保持本矩阵和 `opi-spec` 同步；保留内嵌证据锚点。 |
 | P1 | `Models/Auth` | Registry/profile/provider construction 已存在，但 `opi-ai` 尚未拥有完整 collection/auth runtime。 | 第 10 阶段先设计/实现，再进入第 12 阶段 provider correctness。 |
 | P1 | Generic harness | `CodingHarness` 拥有过多通用编排行为。 | 在 `opi-agent` 中移动或定义 generic phase/snapshot/save-point/session facade 语义。 |
 | P1 | Session facade | Sessions 可用，但 richer context 不应通过临时 CLI-only writes 增加。 | 先第 10 阶段缝合点，再第 13 阶段 entries。 |
@@ -221,7 +221,7 @@
 | 广泛 provider catalog | 部分 | 第 12 阶段 provider correctness 稳定；compatibility-profile quirks 已文档化。 |
 | 图像生成 | 缺失 | Chat provider collection/auth/model metadata/cost/error semantics 稳定。 |
 | Custom extension UI / message renderer | 缺失 | 第 14 阶段内置 TUI 稳定；UI/RPC 子协议已设计。 |
-| npm/package gallery/update/enable/disable | 缺失 | Package adapter lifecycle、trust/source model、diagnostics 和 lock/update policy 稳定。 |
+| npm/gallery/update/enable/disable | 缺失 | Package adapter lifecycle、trust/source model、diagnostics 和 lock/update policy 稳定。 |
 | Web/share/session publishing | 缺失 | 第 13 阶段 export、redaction 和 session sensitivity 规则稳定。 |
 | Provider request/response adapter hooks | 缺失 | Provider seam、hook ordering、redaction 和 trace semantics 稳定。 |
 | `pi` session import/migration | 缺失 | `opi` session v2 稳定且用户价值明确。 |

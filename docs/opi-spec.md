@@ -7,11 +7,11 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Spec version | 0.5-draft |
+| Spec version | 0.6-draft |
 | Last updated | 2026-06-24 |
 | Repository | `https://github.com/OdradekAI/opi` |
 | Upstream studied | `pi` 0.80.2 at `.repo/pi-0.80.2/`; durable evidence lives in [`docs/pi-alignment-matrix.md`](pi-alignment-matrix.md) |
-| Current implementation | `opi` 0.5.4 workspace, Phase 8 runtime stabilization complete; Phase 7 reliability/observability and Phase 5 package/process-adapter surfaces are present |
+| Current implementation | `opi` 0.6.0 workspace, Phase 8 runtime stabilization complete; Phase 7 reliability/observability and Phase 5 package/process-adapter surfaces are present |
 | Next milestone | Phase 9 baseline realignment and Phase 10 core architecture deepening before feature breadth |
 
 This document is normative for the current design. Changes that alter public APIs, event protocols, session storage, release behavior, or phase boundaries SHOULD update this file in the same change.
@@ -123,7 +123,7 @@ Pi is the behavioral reference. The following behavior should be treated as inhe
 | binary | Phase 0 placeholder, Phase 1 useful | ship `opi`, not `pi` |
 | provider streaming | Phase 1 | preserve stream lifecycle and in-band errors |
 | Anthropic provider | Phase 1 | first provider implementation |
-| `Models` / provider-owned auth | Phase 10 | Rust-native provider collection/auth seam in `opi-ai`, without near-term OAuth parity |
+| `Models` / provider-owned auth | Phase 10 | Rust-native provider collection/auth seam in `opi-ai`; does not provide near-term OAuth parity |
 | `agentLoop` / `Agent` | Phase 1 | preserve loop, hook, queue, and tool batching semantics |
 | `AgentHarness` / session repo | Phase 10/13 | generic harness/session facade in `opi-agent`, coding product wrapper in `opi-coding-agent` |
 | default coding tools | Phase 1 | interactive defaults are `read`, `write`, `edit`, and `bash` |
@@ -160,18 +160,18 @@ At minimum, the drift ledger SHOULD track core semantic parity, product parity,
 and ecosystem parity across agent loop semantics, generic harness ownership,
 built-in tools, session format, session tree semantics, provider collection,
 auth, provider catalog, OAuth/subscription login, image input, image
-generation, package ecosystem, TypeScript extension compatibility, TUI renderer
-architecture, and workflow features that pi keeps out of core such as MCP,
+generation, package ecosystem, TypeScript extension compatibility (does not
+claim), TUI renderer architecture, and workflow features that pi keeps out of core such as MCP,
 sub-agents, plan mode, todos, permission popups, and background bash.
 
 ## 4. Current Baseline
 
-### 4.1 Version 0.5.4
+### 4.1 Version 0.6.0
 
 | Area | Current state |
 |---|---|
 | Workspace | four crates under one Cargo workspace |
-| Versioning | lockstep `0.5.4` |
+| Versioning | lockstep `0.6.0` |
 | Edition | Rust 2024 |
 | Internal dependencies | `opi-agent -> opi-ai`, `opi-coding-agent -> opi-ai + opi-agent + opi-tui` |
 | External dependencies | Rust-native async, HTTP/SSE, schema, config, TUI, search, tracing, and test stacks from workspace dependencies |
@@ -1164,6 +1164,7 @@ All crates share one workspace version.
 | 0.5.2 workspace | Phase 6 alignment and reliability hardening | GitHub + crates.io for publishable crates |
 | 0.5.3 workspace | Phase 7 reliability and observability hardening | GitHub + crates.io for publishable crates |
 | 0.5.4 workspace | Phase 8 runtime stabilization | GitHub + crates.io for publishable crates |
+| 0.6.0 workspace | Phase 9-14 roadmap realignment | GitHub-only planning/docs release |
 
 The first crates.io publish is gated by quality, not by the version number alone.
 It MAY happen at 0.2.0 if all published crates expose real, documented behavior
@@ -1293,7 +1294,7 @@ Exit criteria: enterprise providers work, image and terminal-image flows work, p
 
 ### Phase 4 - Extensibility Substrate
 
-Status: substrate implemented in the current `0.5.4` workspace.
+Status: substrate implemented in the current `0.6.0` workspace.
 
 Phase 4 is ordered so the reusable substrate lands before workflow-heavy
 features. Later tasks may depend on earlier tasks, but examples must not become
@@ -1316,7 +1317,7 @@ Exit criteria: third parties can compose and extend opi through RPC, SDK, extens
 
 ### Phase 5 - Rust-Native Package and Process-Adapter MVP
 
-Status: implemented in the current `0.5.4` workspace.
+Status: implemented in the current `0.6.0` workspace.
 
 Phase 5 adds package management and executable adapter hosting so that external packages can provide tools, commands, hooks, and events through child process adapters without patching core crates. It deliberately does not claim parity with pi's npm package ecosystem, TypeScript extension runtime, hot reload behavior, marketplace conventions, provider streaming adapters, custom TUI adapters, or package permission enforcement.
 
@@ -1336,7 +1337,7 @@ Exit criteria: `opi package add/remove/list/doctor` works for local and git pack
 
 ### Phase 6 - Alignment and Reliability Hardening
 
-Status: complete in the current `0.5.4` workspace.
+Status: complete in the current `0.6.0` workspace.
 
 Phase 6 tightened documentation, package/runtime integration, provider
 configuration behavior, and reliability around the Phase 4-5 surfaces. It did
@@ -1345,7 +1346,7 @@ substrate-level extension paths, not built-in product workflows.
 
 ### Phase 7 - Reliability and Observability Hardening
 
-Status: complete in the current `0.5.4` workspace.
+Status: complete in the current `0.6.0` workspace.
 
 Phase 7 added shared diagnostics, redaction, provider/runtime error
 classification, opt-in local trace envelopes, and `opi doctor`. Observability
@@ -1354,14 +1355,14 @@ session sharing, or a stable 1.0 trace protocol.
 
 ### Phase 8 - Runtime Stabilization
 
-Status: complete in the current `0.5.4` workspace.
+Status: complete in the current `0.6.0` workspace.
 
 Phase 8 documented and tested runtime event order, hook semantics, tool
 scheduling/termination, cancellation, SDK/RPC command state, diagnostics/trace
 wire behavior, and public API surface classifications. It keeps public APIs at
 0.x maturity and does not add TypeScript extension API compatibility, package
-ecosystem expansion, provider OAuth login, MCP runtime, a shared `opi-types`
-crate, or a whole-loop rewrite.
+ecosystem expansion, provider OAuth work, MCP core runtime work, a shared
+`opi-types` crate, or a whole-loop rewrite.
 
 ### Phase 9 - pi 0.80.2 Baseline Realignment
 
@@ -1393,10 +1394,10 @@ Phase 10 deepens existing capabilities before breadth:
 | Session repo/facade | `opi-agent` | stable durable append/load/list/fork traits and ordered read/write facade for Phase 13 |
 | Runtime hook boundaries | `opi-agent` / `opi-coding-agent` | keep current hooks narrow while preserving future provider/UI/session lifecycle paths |
 
-Non-goals: OAuth login, subscription auth, broad provider catalog expansion,
-image generation, custom TUI extension protocol, npm/package marketplace work,
-browser/web UI work, `pi` TypeScript API compatibility, `pi` session file
-compatibility, a shared `opi-types` crate, or a whole-loop rewrite.
+Non-goals do not claim: OAuth login, subscription auth, broad provider catalog
+expansion, image generation, custom TUI extension protocol, npm/package
+marketplace work, browser/web work, `pi` TypeScript API compatibility, `pi`
+session file compatibility, a shared `opi-types` crate, or a whole-loop rewrite.
 
 ### Phase 11 - Tooling Quality
 
@@ -1433,8 +1434,8 @@ Status: planned; recast from the previous Phase 12.
 
 Phase 14 polishes the built-in terminal product: model/session/branch pickers,
 transcript rendering, command discovery, status/error feedback, accessibility,
-terminal compatibility, and image/diff presentation. It does not promise
-custom extension UI, message renderer parity, web UI parity, or a general TUI
+terminal compatibility, and image/diff presentation. It does not promise web UI
+parity, custom extension UI, message renderer parity, or a general TUI
 framework.
 
 ### Future Ecosystem Candidates
@@ -1448,7 +1449,7 @@ their entry conditions are met.
 | Broad provider catalog | Phase 12 provider correctness is stable; OpenAI-compatible profile quirks have a documented compatibility model. |
 | Image generation | Chat-side provider collection, auth, model metadata, cost, and error semantics are stable. |
 | Custom extension UI / message renderer | Phase 14 built-in TUI is stable; a separate RPC/UI subprotocol is designed. |
-| npm/package gallery/update/enable/disable | Package adapter lifecycle, trust/source model, diagnostics, and lock/update policy are stable. |
+| npm/gallery/update/enable/disable | Package adapter lifecycle, trust/source model, diagnostics, and lock/update policy are stable. |
 | Web/share/session publishing | Phase 13 export, redaction, and session sensitivity rules are stable. |
 | Provider request/response adapter hooks | Core provider seam, hook ordering, redaction, and trace semantics are stable. |
 | `pi` session import/migration | `opi` session v2 is stable; user value is clear; normal resume remains unaffected. |

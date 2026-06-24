@@ -10,7 +10,7 @@
 
 ## Status
 
-The workspace package version in `Cargo.toml` is `0.5.4`. `opi` is usable as a
+The workspace package version in `Cargo.toml` is `0.6.0`. `opi` is usable as a
 terminal coding agent and as a set of Rust crates for embedding agent runtime
 pieces. The repository may also contain unreleased changes on top of that
 version; check [CHANGELOG.md](CHANGELOG.md) for the current delta.

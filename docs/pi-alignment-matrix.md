@@ -18,7 +18,7 @@ deeper and more stable.
 |---|---|
 | Upstream path | `.repo/pi-0.80.2` |
 | Upstream package version | `0.80.2` for `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui`, and `@earendil-works/pi-coding-agent` |
-| Opi workspace version | `0.5.4` |
+| Opi workspace version | `0.6.0` |
 | Date sampled | 2026-06-24 |
 | Evidence scope | Local files under `.repo/pi-0.80.2`, current `docs/opi-spec.md`, current `docs/pi-alignment-matrix.md`, and current `crates/*` layout |
 | Update policy | Update this document whenever the studied `pi` baseline changes or when `opi` closes one of the listed gaps. Preserve useful old evidence as historical context instead of silently rewriting it. |
@@ -115,8 +115,8 @@ example extensions
 
 For `opi`, this is future ecosystem evidence, not immediate scope. The current
 Rust process-adapter path is a good substrate, but it does not imply parity
-with TypeScript custom UI, npm package gallery behavior, provider payload
-hooks, or session publishing.
+with TypeScript custom UI, npm/gallery behavior, provider payload hooks, or
+session publishing.
 
 ## Version Evolution Signals
 
@@ -269,7 +269,7 @@ with the older `.repo/pi-0.75.3` baseline.
 
 | Priority | Area | Status | Next move |
 |---|---|---|---|
-| P0 | Baseline truth | Current docs use `.repo/pi-0.80.2` as the studied upstream baseline. | Keep this matrix and `opi-spec` synchronized; preserve embedded evidence anchors. |
+| P0 | Baseline truth | Current docs describe the `0.6.0` workspace and use `.repo/pi-0.80.2` as the studied upstream baseline. | Keep this matrix and `opi-spec` synchronized; preserve embedded evidence anchors. |
 | P1 | `Models/Auth` | Registry/profile/provider construction exists, but `opi-ai` does not yet own a full collection/auth runtime. | Phase 10 design/implementation before Phase 12 provider correctness. |
 | P1 | Generic harness | `CodingHarness` owns too much generic orchestration. | Move or define generic phase/snapshot/save-point/session facade semantics in `opi-agent`. |
 | P1 | Session facade | Sessions work, but richer context should not be added through ad hoc CLI-only writes. | Phase 10 seam first, Phase 13 entries second. |
@@ -284,7 +284,7 @@ with the older `.repo/pi-0.75.3` baseline.
 | Broad provider catalog | Partial | Phase 12 provider correctness stable; compatibility-profile quirks documented. |
 | Image generation | Missing | Chat provider collection/auth/model metadata/cost/error semantics stable. |
 | Custom extension UI / message renderer | Missing | Phase 14 built-in TUI stable; UI/RPC subprotocol designed. |
-| npm/package gallery/update/enable/disable | Missing | Package adapter lifecycle, trust/source model, diagnostics, and lock/update policy stable. |
+| npm/gallery/update/enable/disable | Missing | Package adapter lifecycle, trust/source model, diagnostics, and lock/update policy stable. |
 | Web/share/session publishing | Missing | Phase 13 export, redaction, and session sensitivity rules stable. |
 | Provider request/response adapter hooks | Missing | Provider seam, hook ordering, redaction, and trace semantics stable. |
 | `pi` session import/migration | Missing | `opi` session v2 stable and user value clear. |
