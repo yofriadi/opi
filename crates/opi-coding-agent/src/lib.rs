@@ -19,6 +19,7 @@ pub mod policy;
 pub mod pricing;
 pub mod prompt;
 pub mod prompt_fragment;
+pub mod provider_factory;
 pub mod resource;
 pub mod rpc;
 pub mod runner;

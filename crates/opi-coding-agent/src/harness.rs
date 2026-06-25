@@ -17,15 +17,15 @@ use opi_agent::tool::Tool;
 use opi_agent::trace::TraceKind;
 use opi_agent::{Agent, DiagnosticSink, RecordingSink, TraceCollector, TraceSink};
 use opi_ai::message::Message;
-use opi_ai::provider::{EventStream, ModelInfo, Provider, ThinkingConfig};
+use opi_ai::provider::{ModelInfo, Provider, ThinkingConfig};
 use serde::Serialize;
 
 use crate::config::OpiConfig;
 use crate::context_files;
 use crate::diagnostic_bridge::{
-    diagnostic_for_model_registry_error, diagnostic_for_package_discovery_error,
-    diagnostic_for_resource_discovery_error, diagnostic_for_resource_layer_message,
-    diagnostic_from_package, diagnostic_from_package_resolution_error,
+    diagnostic_for_package_discovery_error, diagnostic_for_resource_discovery_error,
+    diagnostic_for_resource_layer_message, diagnostic_from_package,
+    diagnostic_from_package_resolution_error,
 };
 use crate::package_discovery::PackageResource;
 use crate::policy::{RunMode, ToolRuntimeConfig, ToolSelection};
@@ -66,7 +66,7 @@ pub struct CodingHarness {
     config: OpiConfig,
     system_prompt: String,
     resources: HarnessResources,
-    model_registry: opi_ai::ProviderRegistry,
+    model_registry: opi_ai::ProviderCollection,
     extension_registry: Option<ExtensionRegistry>,
     session: Option<SessionCoordinator>,
     /// Message count before the current turn — used to slice only new messages for persistence.
@@ -122,34 +122,6 @@ pub struct ResourceMetadataEntry {
 struct HarnessResources {
     metadata: DiscoveredResourceMetadata,
     theme_resources: Vec<crate::theme_discovery::ThemeResource>,
-}
-
-struct MetadataProvider {
-    id: String,
-    models: Vec<ModelInfo>,
-}
-
-impl MetadataProvider {
-    fn from_provider(provider: &dyn Provider) -> Self {
-        Self {
-            id: provider.id().to_owned(),
-            models: provider.models().to_vec(),
-        }
-    }
-}
-
-impl Provider for MetadataProvider {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn models(&self) -> &[ModelInfo] {
-        &self.models
-    }
-
-    fn stream(&self, _request: opi_ai::provider::Request) -> EventStream {
-        Box::pin(futures_util::stream::empty())
-    }
 }
 
 impl DiscoveredResourceMetadata {
@@ -702,7 +674,10 @@ impl CodingHarness {
             .map(|info| info.diagnostics.clone())
             .unwrap_or_default();
         let (model_registry, model_registry_diagnostics) =
-            Self::build_model_registry(provider.as_ref(), extension_registry.as_ref());
+            crate::provider_factory::assemble_harness_collection(
+                provider.as_ref(),
+                extension_registry.as_ref(),
+            );
         if let Some(registry) = extension_registry.as_ref() {
             extension_event_registry = Some(registry.clone());
             injected_extension_names = registry
@@ -872,7 +847,7 @@ impl CodingHarness {
     /// Return model picker items from the active provider.
     pub fn model_picker_items(&self) -> Vec<opi_tui::SelectItem> {
         let current_provider = self.agent.provider().id();
-        crate::picker::model_picker_items(&self.model_registry)
+        crate::picker::model_picker_items(self.model_registry.registry())
             .into_iter()
             .filter(|item| item.metadata == current_provider)
             .collect()
@@ -885,7 +860,8 @@ impl CodingHarness {
 
     /// Validate and change the model used by subsequent prompts.
     pub fn set_model_validated(&mut self, model: String) -> Result<&str, String> {
-        let (requested_provider, requested_model) = parse_model_spec(&model)?;
+        let (requested_provider, requested_model) =
+            crate::provider_factory::parse_model_spec(&model)?;
         let current_provider = self.agent.provider().id();
         if requested_provider != current_provider {
             return Err(format!(
@@ -943,7 +919,9 @@ impl CodingHarness {
     }
 
     fn active_model_info(&self) -> Option<ModelInfo> {
-        let Ok((provider_id, model_id)) = parse_model_spec(self.agent.model()) else {
+        let Ok((provider_id, model_id)) =
+            crate::provider_factory::parse_model_spec(self.agent.model())
+        else {
             return None;
         };
         if provider_id != self.agent.provider().id() {
@@ -1768,44 +1746,6 @@ impl CodingHarness {
             theme_resources,
         }
     }
-
-    fn build_model_registry(
-        provider: &dyn Provider,
-        extension_registry: Option<&ExtensionRegistry>,
-    ) -> (opi_ai::ProviderRegistry, Vec<Diagnostic>) {
-        let mut registry = opi_ai::ProviderRegistry::new();
-        let mut diagnostics = Vec::new();
-
-        if let Some(extension_registry) = extension_registry {
-            for provider in extension_registry.collect_providers() {
-                if let Err(e) = registry.register_provider(provider) {
-                    diagnostics.push(diagnostic_for_model_registry_error(format!(
-                        "extension provider registration failed: {e}"
-                    )));
-                }
-            }
-        }
-
-        if let Err(e) =
-            registry.register_provider(Box::new(MetadataProvider::from_provider(provider)))
-        {
-            diagnostics.push(diagnostic_for_model_registry_error(format!(
-                "active provider metadata registration failed: {e}"
-            )));
-        }
-
-        if let Some(extension_registry) = extension_registry {
-            for (provider_id, model) in extension_registry.collect_model_overrides() {
-                if let Err(e) = registry.register_model(&provider_id, model) {
-                    diagnostics.push(diagnostic_for_model_registry_error(format!(
-                        "extension model override registration failed: {e}"
-                    )));
-                }
-            }
-        }
-
-        (registry, diagnostics)
-    }
 }
 
 fn merge_package_resources(
@@ -1831,18 +1771,8 @@ fn merge_package_resources(
     });
 }
 
-fn parse_model_spec(spec: &str) -> Result<(&str, &str), String> {
-    let Some((provider, model)) = spec.split_once(':') else {
-        return Err("invalid model spec: expected provider:model".into());
-    };
-    if provider.is_empty() || model.is_empty() {
-        return Err("invalid model spec: expected provider:model".into());
-    }
-    Ok((provider, model))
-}
-
 fn initial_thinking_request_config(
-    registry: &opi_ai::ProviderRegistry,
+    collection: &opi_ai::ProviderCollection,
     model: &str,
     config: &OpiConfig,
 ) -> (Option<ThinkingConfig>, Option<u64>) {
@@ -1856,7 +1786,7 @@ fn initial_thinking_request_config(
         return (None, None);
     };
 
-    if let Ok((_, model)) = registry.resolve(model) {
+    if let Ok((_, model)) = collection.resolve(model) {
         if !model.supports_thinking {
             return (None, None);
         }
