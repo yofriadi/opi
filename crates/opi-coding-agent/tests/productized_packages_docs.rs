@@ -950,6 +950,7 @@ fn first_class_provider_set_is_unchanged() {
         "message",
         "model",
         "provider",
+        "provider_collection",
         "registry",
         "retry",
         "stream",

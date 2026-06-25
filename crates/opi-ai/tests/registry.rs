@@ -179,3 +179,101 @@ fn get_provider_unknown() {
     let reg = anthropic_registry();
     assert!(reg.get_provider("nonexistent").is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Phase 10.1 regression: every built-in provider still resolves (SC1).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn registry_resolves_all_builtin_providers() {
+    use std::sync::Arc;
+
+    use opi_ai::anthropic::AnthropicProvider;
+    use opi_ai::azure_openai::AzureOpenAIProvider;
+    use opi_ai::bedrock::BedrockProvider;
+    use opi_ai::bedrock::sigv4::AwsCredentials;
+    use opi_ai::gemini::GeminiProvider;
+    use opi_ai::http::HttpClient;
+    use opi_ai::mistral::mistral_provider;
+    use opi_ai::openai_chat::OpenAiChatProvider;
+    use opi_ai::openai_responses::OpenAiResponsesProvider;
+    use opi_ai::openrouter::openrouter_provider;
+    use opi_ai::vertex::VertexProvider;
+
+    let dummy_key = "test-key".to_string();
+    let bedrock_creds = AwsCredentials {
+        access_key_id: "AKIATEST".into(),
+        secret_access_key: "secret".into(),
+        session_token: None,
+        region: "us-east-1".into(),
+    };
+    let azure = AzureOpenAIProvider::from_config(
+        dummy_key.clone(),
+        Some("https://example.openai.azure.com".into()),
+        vec!["gpt-4o".into()],
+        None,
+    )
+    .unwrap();
+
+    let mut reg = ProviderRegistry::new();
+    reg.register_provider(Box::new(AnthropicProvider::new(dummy_key.clone(), None)))
+        .unwrap();
+    reg.register_provider(Box::new(OpenAiChatProvider::new(dummy_key.clone(), None)))
+        .unwrap();
+    reg.register_provider(Box::new(openrouter_provider(dummy_key.clone(), None)))
+        .unwrap();
+    reg.register_provider(Box::new(mistral_provider(dummy_key.clone(), None)))
+        .unwrap();
+    reg.register_provider(Box::new(OpenAiResponsesProvider::new(
+        dummy_key.clone(),
+        None,
+    )))
+    .unwrap();
+    reg.register_provider(Box::new(GeminiProvider::new(dummy_key.clone(), None)))
+        .unwrap();
+    reg.register_provider(Box::new(BedrockProvider::new(
+        bedrock_creds,
+        None,
+        Arc::new(HttpClient::new()),
+    )))
+    .unwrap();
+    reg.register_provider(Box::new(azure)).unwrap();
+    reg.register_provider(Box::new(VertexProvider::new(
+        "test-token".into(),
+        "test-project".into(),
+        "us-central1".into(),
+        None,
+    )))
+    .unwrap();
+
+    // The full built-in provider set is present.
+    assert_eq!(
+        reg.provider_ids(),
+        vec![
+            "anthropic",
+            "azure",
+            "bedrock",
+            "gemini",
+            "mistral",
+            "openai",
+            "openai-responses",
+            "openrouter",
+            "vertex"
+        ]
+    );
+
+    // Each built-in provider resolves its first advertised model spec.
+    for provider_id in reg.provider_ids() {
+        let provider = reg.get_provider(provider_id).unwrap();
+        let first_model = provider
+            .models()
+            .first()
+            .unwrap_or_else(|| panic!("provider '{provider_id}' advertises no models"));
+        let spec = format!("{}:{}", provider_id, first_model.id);
+        let (resolved_provider, resolved_model) = reg
+            .resolve(&spec)
+            .unwrap_or_else(|e| panic!("resolve {spec} failed: {e}"));
+        assert_eq!(resolved_provider.id(), provider_id);
+        assert_eq!(resolved_model.id, first_model.id);
+    }
+}

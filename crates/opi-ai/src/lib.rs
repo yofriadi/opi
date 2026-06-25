@@ -17,6 +17,7 @@ pub mod openai_chat;
 pub mod openai_responses;
 pub mod openrouter;
 pub mod provider;
+pub mod provider_collection;
 pub mod registry;
 pub mod retry;
 pub mod stream;
@@ -27,6 +28,10 @@ pub mod vertex;
 pub use config::{Config, Error};
 pub use model::Model;
 pub use provider::Provider;
+pub use provider_collection::{
+    AuthDescriptor, AuthStatus, CollectionError, CompatMetadata, CompletedRequest,
+    ProviderCollection, SecretKey,
+};
 pub use registry::{ProviderRegistry, RegistrationError, RegistryError};
 pub use stream::AssistantStreamEvent;
 pub use stream::{CostBreakdown, CumulativeUsage, Pricing, calculate_cost};
