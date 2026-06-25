@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-25
+
+### Added
+
+- `opi-coding-agent`: Phase 9 pi 0.80.2 baseline documentation guard tests pin the durable alignment-matrix evidence baseline, the normative specification, and the pi alignment matrix against `.repo/pi-0.80.2` as the current studied upstream, keep the Phase 9-14 roadmap consistent across English and Chinese counterparts, and reject current-scope overclaims for deferred ecosystem breadth (OAuth parity, image generation, custom extension UI parity, npm/gallery, web/share, and pi session compatibility).
+
+### Changed
+
+- Recorded the Phase 9.1 alignment-matrix, Phase 9.2 normative-specification, and Phase 9.3 supplemental-design baseline evidence, and archived the opi-implement Phase 9 ledger snapshot.
+- Bumped the workspace version to `0.6.1` and refreshed the Phase 4 specification-hash ledger to match the current `docs/opi-spec.md`.
+- This release is published to GitHub only; crates.io publishing is intentionally skipped because it contains documentation and guard-test changes only.
+
 ## [0.6.0] - 2026-06-24
 
 ### Changed
@@ -308,6 +320,7 @@ boundaries; functional implementations land in subsequent releases.
 - This release is published as a GitHub Release only; crates.io publish
   is deferred until the crates have real implementations.
 
+[0.6.1]: https://github.com/OdradekAI/opi/releases/tag/v0.6.1
 [0.6.0]: https://github.com/OdradekAI/opi/releases/tag/v0.6.0
 [0.5.4]: https://github.com/OdradekAI/opi/releases/tag/v0.5.4
 [0.5.3]: https://github.com/OdradekAI/opi/releases/tag/v0.5.3
