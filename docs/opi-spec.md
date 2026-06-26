@@ -1395,6 +1395,32 @@ Phase 10 deepens existing capabilities before breadth:
 | Session repo/facade | `opi-agent` | stable durable append/load/list/fork traits and ordered read/write facade for Phase 13 |
 | Runtime hook boundaries | `opi-agent` / `opi-coding-agent` | keep current hooks narrow while preserving future provider/UI/session lifecycle paths |
 
+#### Runtime hook boundaries
+
+Phase 10 documents the runtime hook boundary model so `pi`'s broad TypeScript
+extension surfaces (provider hooks, session lifecycle hooks, custom UI, message
+renderers) do not get copied into Rust core. The narrow core loop hook contract
+(`opi-agent::hooks::AgentHooks`) is contract-tested and stays in `opi-agent`;
+product extensions and the process adapter do not migrate into `opi-agent`
+unless a concrete non-CLI embedder needs hosting. Provider request/response
+hooks and custom TUI UI/message renderers stay future ecosystem candidates with
+explicit prerequisites (see Future Ecosystem Candidates below).
+
+| Surface | Phase 10 owner | Phase 10 action |
+|---|---|---|
+| Core loop hooks | `opi-agent` | Contract-tested and narrow (`AgentHooks`: convert/transform/before/after/should_stop/prepare). |
+| Generic harness events/results | `opi-agent` | Typed event/result reducers only where needed by generic lifecycle. |
+| Coding-agent extension registry | `opi-coding-agent` / bridge to `opi-agent` | Product-specific commands, resources, and packages compose through `ExtensionRegistry`. |
+| Process adapter protocol | `opi-coding-agent` | Owns `opi-extension-jsonl-v1` parsing and child-process hosting; the process adapter protocol does not migrate into `opi-agent` unless a non-CLI host needs it. |
+| Provider request/response hooks | Future candidate | Deferred until the provider seam and trace/redaction semantics stabilize. |
+| Custom TUI UI / message renderer | Future candidate | Deferred until the Phase 14 built-in TUI is stable and a UI/RPC subprotocol is designed. |
+
+Typed hook result composition is covered by contract tests: extension hooks run
+after the base hook in registration order, a `Block`/`Deny` short-circuits the
+chain, and the coding-agent process adapter bridges through the same
+`ExtensionRegistry::wrap_hooks` composite (no bypass). Extension API docs do
+not claim `pi` TypeScript extension API compatibility as current `opi` scope.
+
 Non-goals do not claim: OAuth login, subscription auth, broad provider catalog
 expansion, image generation, custom TUI extension protocol, npm/package
 marketplace work, browser/web work, `pi` TypeScript API compatibility, `pi`

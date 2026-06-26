@@ -207,6 +207,13 @@ impl Tool for ProcessAdapterTool {
 /// Wraps an [`AdapterHost`] and exposes adapter capabilities (tools, commands,
 /// hooks, events, state, model overrides) through the [`Extension`] trait.
 ///
+/// This is the coding-agent product adapter boundary defined by Phase 10
+/// Workstream 10.4: process adapter protocol parsing and hosting stay in
+/// `opi-coding-agent`, and this bridge composes through the generic
+/// `opi_agent::extension::ExtensionRegistry::wrap_hooks` composite (base hook
+/// first, then extensions in registration order, `Block`/`Deny` short-circuit)
+/// rather than bypassing it.
+///
 /// # Construction
 ///
 /// Created via [`ProcessAdapter::from_host`] after the adapter host has

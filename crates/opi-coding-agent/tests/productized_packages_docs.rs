@@ -1514,3 +1514,257 @@ fn phase9_forbidden_current_scope_claims_rejected() {
         "opi-spec.zh Phase 14 must disclaim web UI / custom extension UI parity (ZH)"
     );
 }
+
+// ===========================================================================
+// Phase 10 guards: runtime hook boundary documentation + source structure.
+//
+// Workstream 10.4 requires runtime hook boundaries to be documented and tested:
+// core loop hooks stay narrow in opi-agent, coding-agent product extensions and
+// process adapter hosting stay in opi-coding-agent, typed hook result
+// composition is tested where it affects runtime behavior (covered by the
+// Phase 8.2 hook-order/short-circuit contract tests in opi-agent/tests plus the
+// adapter_runtime product-adapter-boundary suite), and provider request/
+// response hooks plus custom TUI UI/message renderer hooks stay deferred with
+// explicit prerequisites. These guards pin the documentation claims and the
+// positive source-structure assertion that process adapter protocol parsing/
+// hosting remains out of opi-agent.
+// ===========================================================================
+
+/// Strip Rust line and (nested) block comments while preserving string/char
+/// literal contents, so doc prose naming adapter types does not trip the
+/// source-structure scan. Mirrors the task 10.5 session_facade boundary guard.
+fn strip_rust_comments(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'/' && i + 1 < bytes.len() {
+            if bytes[i + 1] == b'/' {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            } else if bytes[i + 1] == b'*' {
+                let mut depth = 1;
+                i += 2;
+                while i < bytes.len() && depth > 0 {
+                    if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                        depth += 1;
+                        i += 2;
+                    } else if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+        }
+        if c == b'"' || c == b'\'' {
+            let quote = c;
+            out.push(c as char);
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    out.push(bytes[i] as char);
+                    out.push(bytes[i + 1] as char);
+                    i += 2;
+                    continue;
+                }
+                out.push(bytes[i] as char);
+                if bytes[i] == quote {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        out.push(c as char);
+        i += 1;
+    }
+    out
+}
+
+/// Recursively collect `.rs` file paths under `dir`.
+fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            collect_rs_files(&p, out);
+        } else if p.extension().is_some_and(|e| e == "rs") {
+            out.push(p);
+        }
+    }
+}
+
+#[test]
+fn phase10_runtime_hook_boundaries() {
+    // SC 6 + Workstream 10.4 SC1/SC2: a dedicated normative section documents
+    // the 6-surface runtime hook boundary model (EN + ZH), the provider-hook
+    // and UI/renderer deferral prerequisites exist, and no doc implies pi
+    // TypeScript extension API surfaces are current opi scope.
+    let spec_en = ws_normalized(&read_repo_file("docs/opi-spec.md"));
+    let spec_zh = ws_normalized(&read_repo_file("docs/opi-spec.zh.md"));
+
+    // (a) Dedicated boundary section naming the 6 surfaces + the narrowness and
+    // no-migration claims (EN).
+    assert!(
+        spec_en.contains("Runtime hook boundaries"),
+        "opi-spec must have a dedicated Runtime hook boundaries section (EN)"
+    );
+    for phrase in [
+        "Core loop hooks",
+        "Generic harness events/results",
+        "Coding-agent extension registry",
+        "Process adapter protocol",
+        "Provider request/response hooks",
+        "Custom TUI UI / message renderer",
+    ] {
+        assert!(
+            spec_en.contains(phrase),
+            "opi-spec Runtime hook boundaries section must name the `{phrase}` surface (EN)"
+        );
+    }
+    assert!(
+        spec_en.contains("Contract-tested and narrow"),
+        "opi-spec must state core loop hooks stay narrow in opi-agent (EN)"
+    );
+    assert!(
+        spec_en.contains("does not migrate into `opi-agent`"),
+        "opi-spec must state the process adapter does not migrate into opi-agent (EN)"
+    );
+
+    // (b) ZH counterpart carries the same boundary model.
+    assert!(
+        spec_zh.contains("运行时钩子边界"),
+        "opi-spec.zh must have a dedicated runtime hook boundaries section (ZH)"
+    );
+    for phrase in [
+        "核心循环钩子",
+        "进程适配器协议",
+        "Provider 请求/响应钩子",
+        "自定义 TUI UI / 消息渲染器",
+    ] {
+        assert!(
+            spec_zh.contains(phrase),
+            "opi-spec.zh runtime hook boundaries section must name the `{phrase}` surface (ZH)"
+        );
+    }
+
+    // (c) Provider-hook + UI/renderer DEFERRAL prerequisites are documented in
+    // the Future Ecosystem Candidates table (presence checks so the
+    // prerequisite text must accompany each deferral).
+    assert!(
+        spec_en.contains("Provider request/response adapter hooks")
+            && spec_en.contains("hook ordering, redaction, and trace semantics are stable"),
+        "opi-spec must document the provider request/response hook deferral prerequisite (EN)"
+    );
+    assert!(
+        spec_en.contains("Custom extension UI / message renderer")
+            && spec_en.contains("Phase 14 built-in TUI is stable"),
+        "opi-spec must document the custom UI/message renderer deferral prerequisite (EN)"
+    );
+
+    // (d) SC1: docs must not imply pi TypeScript extension API surfaces are
+    // current opi scope. Complementary to the Phase 5/9 TypeScript-extension
+    // guards already in this file.
+    let docs = [
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+    ];
+    for needle in [
+        "TypeScript extension API compatibility",
+        "TypeScript 扩展 API 兼容",
+        "pi TypeScript extension API parity",
+    ] {
+        assert_docs_reject_claim(
+            &docs,
+            needle,
+            "a pi TypeScript extension API current-scope claim",
+        );
+    }
+}
+
+#[test]
+fn phase10_process_adapter_stays_out_of_opi_agent() {
+    // Workstream 10.4 SC3 + Crate Boundary Rules: process adapter protocol
+    // parsing and hosting remain out of opi-agent unless a concrete non-CLI
+    // host needs them. Positive source-structure assertion: a comment-stripped
+    // scan of opi-agent/src finds ZERO adapter tokens, while the same tokens
+    // remain present in opi-coding-agent/src (non-vacuous sanity) and the
+    // narrow core loop hook trait lives in opi-agent.
+    let opi_agent_src = repo_root().join("crates/opi-agent/src");
+    let opi_coding_src = repo_root().join("crates/opi-coding-agent/src");
+
+    // CamelCase type names + the protocol string + the startup fn + the kind
+    // are unambiguous: opi-agent's only adapter-adjacent text is the
+    // `adapter_protocol_unsupported` / `adapter_host_diagnostic` snake_case
+    // diagnostic constants (substrings that do not match these tokens) and a
+    // doc-comment name-drop of `ProcessAdapter` (removed by strip_rust_comments).
+    let adapter_tokens = [
+        "AdapterHost",
+        "ProcessAdapter",
+        "AdapterCapabilities",
+        "AdapterManifest",
+        "start_adapters_from_packages",
+        "opi-extension-jsonl-v1",
+        "process-jsonl",
+    ];
+
+    let mut agent_files = Vec::new();
+    collect_rs_files(&opi_agent_src, &mut agent_files);
+    assert!(
+        !agent_files.is_empty(),
+        "expected opi-agent src files to scan"
+    );
+    for file in &agent_files {
+        let src = std::fs::read_to_string(file)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", file.display()));
+        let stripped = strip_rust_comments(&src);
+        for token in adapter_tokens {
+            assert!(
+                !stripped.contains(token),
+                "adapter token `{token}` leaked into opi-agent non-comment code at {} \
+                 (process adapter hosting must stay in opi-coding-agent)",
+                file.display()
+            );
+        }
+    }
+
+    // Non-vacuous sanity: the same tokens DO live in opi-coding-agent, and the
+    // narrow core loop hook trait lives in opi-agent.
+    let mut coding_files = Vec::new();
+    collect_rs_files(&opi_coding_src, &mut coding_files);
+    assert!(
+        !coding_files.is_empty(),
+        "expected opi-coding-agent src files"
+    );
+    let coding_blob: String = coding_files
+        .iter()
+        .map(|f| std::fs::read_to_string(f).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for token in ["AdapterHost", "ProcessAdapter", "opi-extension-jsonl-v1"] {
+        assert!(
+            coding_blob.contains(token),
+            "non-vacuous sanity: `{token}` must remain present in opi-coding-agent/src"
+        );
+    }
+    let agent_blob: String = agent_files
+        .iter()
+        .map(|f| std::fs::read_to_string(f).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        agent_blob.contains("trait AgentHooks"),
+        "non-vacuous sanity: the narrow AgentHooks core loop trait must live in opi-agent/src"
+    );
+}
