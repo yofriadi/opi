@@ -959,6 +959,293 @@ async fn harness_metadata_includes_adapter_extensions() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 10 task 10.4: CodingHarness product-wrapper boundary.
+//
+// CodingHarness is the coding-agent product wrapper over the generic opi-agent
+// runtime seams (Agent, AgentHooks, ExtensionRegistry, session storage,
+// ProviderCollection, CompactionEngine). Generic turn lifecycle / phase /
+// save-point / pending-write semantics live in opi_agent::harness. These two
+// contract tests pin (a) that the wrapper composes product inputs over the
+// generic seams at runtime, and (b) that product/CLI/package policy never leaks
+// into opi-agent. See docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md
+// Workstream 10.2 + Phase 10 Success Criterion 4.
+// ---------------------------------------------------------------------------
+
+/// Strip Rust line and (nested) block comments while preserving string/char
+/// literal contents, so a source-structure guard scans code, not doc prose.
+/// Product types legitimately appear in opi-agent doc comments explaining the
+/// boundary; they must NOT appear in opi-agent code.
+fn strip_rust_comments(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+    let mut block_depth = 0i32;
+    while i < bytes.len() {
+        let two = if i + 1 < bytes.len() {
+            Some((bytes[i], bytes[i + 1]))
+        } else {
+            None
+        };
+        if block_depth > 0 {
+            match two {
+                Some((b'/', b'*')) => {
+                    block_depth += 1;
+                    i += 2;
+                    continue;
+                }
+                Some((b'*', b'/')) => {
+                    block_depth -= 1;
+                    i += 2;
+                    continue;
+                }
+                _ => {
+                    if bytes[i] == b'\n' {
+                        out.push('\n');
+                    }
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        match two {
+            Some((b'/', b'/')) => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            Some((b'/', b'*')) => {
+                block_depth += 1;
+                i += 2;
+                continue;
+            }
+            _ => {
+                let c = bytes[i];
+                if c == b'"' || c == b'\'' {
+                    let quote = c;
+                    out.push(c as char);
+                    i += 1;
+                    while i < bytes.len() {
+                        let cc = bytes[i];
+                        out.push(cc as char);
+                        if cc == b'\\' && i + 1 < bytes.len() {
+                            out.push(bytes[i + 1] as char);
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        if cc == quote {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                out.push(c as char);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Collect every `.rs` file under `dir` recursively.
+fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs_files(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+#[tokio::test]
+async fn coding_harness_composes_generic_opi_agent_seams() {
+    // The product wrapper must drive a turn through the generic opi-agent
+    // runtime seams: the Agent (provider/tool loop), the AgentHooks, the
+    // AgentControl / CancellationToken control surface, and the generic
+    // SessionWriter/SessionReader durable storage. Build via the production
+    // builder on a MockProvider and prove each seam is observable end-to-end.
+    let workspace = tempfile::tempdir().unwrap();
+    let global_config = tempfile::tempdir().unwrap();
+
+    // Pre-create a session file the harness adopts (ResumeInfo), so the test
+    // never touches the real user session dir or OPI_SESSIONS_DIR.
+    let session_path = workspace.path().join("compose-session.jsonl");
+    let header = SessionHeader::new(
+        "sess-compose".into(),
+        "2026-06-26T00:00:00Z".into(),
+        workspace.path().display().to_string(),
+        None,
+    );
+    let seed = SessionEntry::Message(MessageEntry {
+        id: "msg-seed".into(),
+        parent_id: None,
+        timestamp: "2026-06-26T00:00:00Z".into(),
+        message: Message::User(UserMessage {
+            content: vec![InputContent::Text {
+                text: "seed".into(),
+            }],
+            timestamp_ms: 0,
+        }),
+    });
+    {
+        let mut writer = SessionWriter::create(&session_path, header).unwrap();
+        writer.append(&seed).unwrap();
+    }
+    let seed_entries = vec![seed];
+    let initial_messages = opi_coding_agent::session_cli::reconstruct_context(&seed_entries);
+
+    let provider = MockProvider::new(
+        "mock",
+        vec![opi_ai::test_support::text_response("composed-turn")],
+    );
+    let resume = ResumeInfo {
+        path: session_path.clone(),
+        session_id: "sess-compose".into(),
+        entries: seed_entries,
+        original_cwd: workspace.path().to_path_buf(),
+        diagnostics: Vec::new(),
+    };
+    let mut harness = CodingHarness::builder(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+    )
+    .hooks(Box::new(opi_coding_agent::harness::CodingAgentHooks))
+    .global_config_dir(global_config.path().to_path_buf())
+    .initial_messages(initial_messages)
+    .resume(resume)
+    .build();
+
+    // Control surface delegates to the generic opi-agent Agent seam.
+    let _control: opi_agent::agent::AgentControl = harness.control_handle();
+    let cancel_token: tokio_util::sync::CancellationToken = harness.cancel_token();
+    assert!(!cancel_token.is_cancelled(), "pre-abort token must be live");
+
+    // Drive a turn through the generic Agent seam (provider stream consumed).
+    let messages: Vec<opi_agent::message::AgentMessage> =
+        harness.prompt("drive the seam").await.unwrap();
+    assert!(
+        messages
+            .iter()
+            .any(|m| matches!(m, opi_agent::message::AgentMessage::Llm(Message::Assistant(a))
+                if a.content.iter().any(|block| matches!(block,
+                    opi_ai::message::AssistantContent::Text { text } if text.contains("composed-turn"))))),
+        "assistant turn must come back through the generic AgentMessage seam"
+    );
+
+    // The wrapper persisted the new turn through the generic session-storage
+    // seam: SessionReader::read_all now holds more Message entries than the
+    // single seed entry written before the turn.
+    let (_hdr, entries) = opi_agent::session::SessionReader::read_all(&session_path)
+        .expect("session readable via generic SessionReader seam");
+    let message_count = entries
+        .iter()
+        .filter(|e| matches!(e, SessionEntry::Message(_)))
+        .count();
+    assert!(
+        message_count > 1,
+        "wrapper must persist the new turn through the generic session seam; got {message_count} message entries"
+    );
+}
+
+#[test]
+fn coding_harness_wrapper_keeps_product_policy_out_of_opi_agent() {
+    // Mechanical proof of the acceptance-scenario boundary: "without moving
+    // package or CLI policy into opi-agent." None of these product-policy
+    // tokens may appear in opi-agent CODE (comments are stripped, since the
+    // generic seam legitimately names product types in doc prose that explains
+    // the boundary). opi-agent cannot even depend on opi-coding-agent, so any
+    // code occurrence would be a policy leak or a naming collision.
+    let opi_agent_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("opi-agent")
+        .join("src");
+
+    let product_policy_tokens = [
+        "CodingHarness",
+        "CodingHarnessBuilder",
+        "CodingAgentHooks",
+        "InteractiveCodingHooks",
+        "SessionCoordinator",
+        "OpiConfig",
+        "ToolRuntimeConfig",
+        "ToolSelection",
+        "DiscoveredResourceMetadata",
+        "HarnessResources",
+        "PackageStore",
+        "PackageResource",
+        "PackageManifest",
+        "RuntimePackageStartup",
+        "NonInteractiveRunner",
+        "RpcRunner",
+        "run_interactive_tui",
+        "provider_factory",
+        "assemble_harness_collection",
+        "build_provider",
+        "start_installed_package_runtime",
+        "resolve_installed_packages",
+    ];
+
+    let mut files = Vec::new();
+    collect_rs_files(&opi_agent_src, &mut files);
+    assert!(!files.is_empty(), "opi-agent/src must contain .rs files");
+
+    let mut violations: Vec<String> = Vec::new();
+    let mut generic_seam_seen = false;
+    for file in &files {
+        let rel = file
+            .strip_prefix(&opi_agent_src)
+            .unwrap_or(file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let raw = std::fs::read_to_string(file).unwrap_or_default();
+        let code = strip_rust_comments(&raw);
+        if code.contains("AgentHarness") {
+            generic_seam_seen = true;
+        }
+        for token in product_policy_tokens {
+            if code.contains(token) {
+                violations.push(format!(
+                    "product token `{token}` leaked into opi-agent `{rel}`"
+                ));
+            }
+        }
+    }
+    // Sanity / non-vacuousness: the generic harness seam must be present in
+    // opi-agent code (proves the scan is live and the boundary is "generic
+    // seam present, product policy absent").
+    assert!(
+        generic_seam_seen,
+        "expected opi-agent to own the generic AgentHarness seam"
+    );
+    assert!(
+        violations.is_empty(),
+        "product/CLI/package policy leaked into opi-agent:\n{}",
+        violations.join("\n")
+    );
+
+    // Phase 8 API-surface classification: the generic harness types must stay
+    // module-path only (no crate-root `pub use harness::` re-export).
+    let lib_rs = std::fs::read_to_string(opi_agent_src.join("lib.rs")).unwrap_or_default();
+    let lib_code = strip_rust_comments(&lib_rs);
+    for line in lib_code.lines() {
+        let trimmed = line.trim();
+        assert!(
+            !trimmed.starts_with("pub use harness::")
+                && !trimmed.starts_with("pub use crate::harness::"),
+            "crate-root harness re-export breaks Phase 8 module-path-only classification: {line}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 14/15. Phase 6 (task 6.4) startup diagnostic contract.
 //
 // The design Error Handling section requires startup diagnostics to identify

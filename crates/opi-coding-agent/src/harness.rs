@@ -1,7 +1,28 @@
-//! Interactive CLI harness (S8.4).
+//! Interactive CLI harness (S8.4) and coding-agent product wrapper over the
+//! generic opi-agent runtime seams (Phase 10, Workstream 10.2).
 //!
-//! Wires together config, tools, system prompt, hooks, and Agent into a
-//! single entry point for the interactive coding agent.
+//! `CodingHarness` is the coding-agent product wrapper. It composes
+//! coding-agent product inputs over the generic opi-agent runtime and owns the
+//! product policy the design keeps out of `opi-agent`:
+//! - the eight built-in file tools and [`ToolRuntimeConfig`] selection;
+//! - CLI/project config ([`OpiConfig`]) and context-file discovery;
+//! - package resources/adapters, skills, fragments, and themes;
+//! - interactive commands and product defaults;
+//! - extension-state restore/persist and session resume/fork/branch.
+//!
+//! The generic turn lifecycle, phase guards, save points, runtime-config
+//! snapshots, and pending-write ordering live in [`opi_agent::harness`] (the
+//! `AgentHarness` seam). `CodingHarness` drives turns through the generic
+//! [`opi_agent::Agent`] loop and persists through the generic
+//! [`opi_agent::session`] storage today; routing the product turn loop through
+//! `AgentHarness` itself is a later incremental migration (see the
+//! `opi_agent::harness` module docs), intentionally not a thin adapter.
+//!
+//! Boundary contract: product/CLI/package policy must not move into `opi-agent`.
+//! This is pinned by `coding_harness_wrapper_keeps_product_policy_out_of_opi_agent`,
+//! and the wrapper composition is exercised by
+//! `coding_harness_composes_generic_opi_agent_seams`. Existing CLI/RPC/JSON/
+//! interactive behavior continues to run through this wrapper unchanged.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -60,7 +81,16 @@ pub struct TraceConfig {
     pub mode: RedactionMode,
 }
 
-/// Harness wiring config, tools, system prompt, hooks, and Agent.
+/// Coding-agent product wrapper over the generic opi-agent runtime seams.
+///
+/// Owns coding-agent product policy (built-in file tools, CLI/project config,
+/// context files, package resources/adapters, interactive commands, product
+/// defaults, extension-state restore/persist) and composes it over the generic
+/// [`Agent`] loop, [`AgentHooks`], [`ExtensionRegistry`], generic session
+/// storage, [`opi_ai::ProviderCollection`], and compaction. Generic turn
+/// lifecycle / phase / save-point / pending-write semantics are owned by
+/// [`opi_agent::harness`]. See the module docs for the product-vs-generic
+/// boundary and the incremental `AgentHarness`-adoption note.
 pub struct CodingHarness {
     agent: Agent,
     config: OpiConfig,

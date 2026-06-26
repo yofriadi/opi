@@ -17,11 +17,23 @@
 //!
 //! `Agent` remains the low-level loop + provider + hooks runtime. `AgentHarness`
 //! wraps an `Agent` by value and delegates control/cancel/message accessors to
-//! it unchanged. In Phase 10.3 the phase transitions are state-machine guards
-//! plus snapshot/save-point discipline: they do not themselves invoke the agent
-//! loop. The coding-agent product harness (`opi_coding_agent::CodingHarness`)
-//! will route its turn loop through this seam in task 10.4; until then this is a
-//! published, contract-tested, unstable-0.x library surface.
+//! it unchanged. The phase transitions are state-machine guards plus
+//! snapshot/save-point discipline; `AgentHarness` exposes no prompt/continue/step
+//! method and never drives the loop itself.
+//!
+//! This is a published, contract-tested, unstable-0.x library surface and the
+//! generic seam the coding-agent product wrapper (`opi_coding_agent::CodingHarness`)
+//! composes over. The product wrapper owns coding-agent policy (built-in file
+//! tools, CLI config, context files, package resources, interactive commands,
+//! product defaults); this module owns the generic turn lifecycle, phase guards,
+//! save points, runtime-config snapshots, and pending-write ordering. Routing
+//! the product turn loop *through* `AgentHarness` is a later incremental
+//! migration, not a thin adapter: `AgentHarness::new` takes the `Agent` by
+//! value, so product adoption needs either a harness API extension or the
+//! session-facade migration tracked in Workstream 10.3 (task 10.5). The Phase 10
+//! design's implementation notes explicitly prefer letting existing product
+//! behavior continue while generic seams are introduced, so this surface ships
+//! ahead of that migration.
 //!
 //! Branch summaries are a guarded lifecycle phase here, but their durable entry
 //! representation is intentionally deferred to the session-facade work (task
