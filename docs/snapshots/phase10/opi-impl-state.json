@@ -1,0 +1,1659 @@
+{
+  "schema_version": 2,
+  "spec_files": [
+    "docs/opi-spec.md",
+    "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md"
+  ],
+  "spec_files_sha256": {
+    "docs/opi-spec.md": "138c8438bebf36344623987a3102daee4f32ddd5f2344c6919aea59dd4944f38",
+    "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md": "9a2ccb00a56018346c63d7967036cccfe32ffa2728f794155911808fa250d3c4"
+  },
+  "task_graph_confirmed_at": "2026-06-25T09:14:55Z",
+  "current_phase": 10,
+  "tasks": [
+    {
+      "id": "10.1",
+      "phase": 10,
+      "title": "Provider collection/auth seam",
+      "crate": "opi-ai",
+      "parent_spec_row": null,
+      "definition_of_done": "opi-ai exposes a provider collection/auth contract that owns provider and model lookup, static API-key and env-auth descriptors, optional refresh capability, OpenAI-compatible compatibility metadata, stream dispatch, an explicit complete-dispatch decision compatible with the current streaming Provider trait, redacted missing/invalid auth diagnostics, and a registry regression asserting all built-in providers still resolve; no OAuth login, subscription auth, broad catalog expansion, or image generation is implemented.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "9.4"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Expanded Workstream 10.1 into concrete provider collection, auth, metadata, dispatch, diagnostics, and non-goal assertions.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.1"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Phase 10 starts after Phase 9 documentation guards and baseline realignment have passed.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Revised Phase Dependencies"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No provider OAuth login, subscription auth, broad provider catalog expansion, image generation, custom TUI extension protocol, npm/package marketplace work, browser/web UI work, pi TypeScript API compatibility, pi session file compatibility, shared opi-types crate, or whole-loop rewrite.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Replaced the vague existing-provider \"work\" regression with a named registry assertion, and surfaced the stream/complete dispatch decision required by Workstream 10.1.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.1"
+        },
+        {
+          "field": "required_decisions",
+          "reason": "Workstream 10.1 decisions D1 (evolve ProviderRegistry versus wrap it in a new collection type) and D2 (resolve auth per request, run, or turn snapshot) are implementation-time design choices; any choice is acceptable only if SC1, SC2, and SC4 remain satisfied.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Required decisions"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Task 10.1 adds opi_ai::provider_collection under crates/opi-ai/src, which trips the existing Phase 6 guard first_class_provider_set_is_unchanged in productized_packages_docs.rs. The guard classifies every non-provider opi-ai/src module against an infra allowlist; provider_collection is infrastructure (the collection/auth seam), not a new first-class provider, so the infra allowlist must be extended. No new provider is added (Phase 6 non-goal preserved).",
+          "source": "crates/opi-coding-agent/tests/productized_packages_docs.rs::first_class_provider_set_is_unchanged"
+        }
+      ],
+      "tier": "library",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo test -p opi-ai --test provider_collection",
+          "cargo test -p opi-ai --test registry",
+          "cargo clippy -p opi-ai --all-targets -- -D warnings",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc -p opi-ai --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-ai/tests/provider_collection.rs",
+          "crates/opi-ai/tests/registry.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase10-provider-collection-auth-seam",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 1",
+          "scenario": "A library caller builds the opi-ai provider collection, looks up a configured model, resolves static or env-described auth without exposing secret values, and receives a provider stream through the collection dispatch path.",
+          "verification": [
+            "cargo test -p opi-ai --test provider_collection provider_collection_dispatches_with_redacted_auth"
+          ],
+          "production_call_sites": [
+            "opi_ai::provider_collection::ProviderCollection",
+            "opi_ai::ProviderRegistry"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase10-provider-fixture-target",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.1 Success Criteria 5",
+          "scenario": "Provider correctness tests can exercise collection-level model lookup, compatibility metadata, auth diagnostics, and stream dispatch without constructing the CLI product harness.",
+          "verification": [
+            "cargo test -p opi-ai --test provider_collection collection_supports_provider_correctness_fixtures"
+          ],
+          "production_call_sites": [
+            "opi_ai::provider_collection::ProviderCollection"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase10-existing-provider-regression",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.1 Success Criteria 1",
+          "scenario": "The ProviderRegistry regression named registry_resolves_all_builtin_providers resolves every built-in provider/model family after the provider collection/auth seam is introduced.",
+          "verification": [
+            "cargo test -p opi-ai --test registry registry_resolves_all_builtin_providers"
+          ],
+          "production_call_sites": [
+            "opi_ai::ProviderRegistry"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "opi_ai::provider_collection::ProviderCollection",
+        "opi_ai::ProviderRegistry"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "f0f3e0c58fe66f9fcc98a33fb41a0ea8b500b6d3",
+      "baseline_dirty_files": [],
+      "task_owned_paths": [
+        "crates/opi-ai/**",
+        "Cargo.toml",
+        "crates/opi-coding-agent/tests/productized_packages_docs.rs"
+      ],
+      "last_attempt": {
+        "result": "passing",
+        "commit": "4a9916b250a948a1c8815bdd0a1904363fd1bede",
+        "note": "Single TDD red-green cycle; one commit."
+      },
+      "verified_at_commit": "4a9916b250a948a1c8815bdd0a1904363fd1bede",
+      "evidence": {
+        "commit": "4a9916b250a948a1c8815bdd0a1904363fd1bede",
+        "opi_task": "10.1",
+        "opi_dod_sha256": "4467bd07b486d911a94902553a3d1d1cd8c614821adfa5108a605891c2d213c7",
+        "opi_verification": "library; cargo test -p opi-ai (all suites, 0 failed) + provider_collection_dispatches_with_redacted_auth + collection_supports_provider_correctness_fixtures + registry_resolves_all_builtin_providers green; clippy -p opi-ai --all-targets -- -D warnings clean; rustdoc -p opi-ai -D warnings clean; fmt --check --all clean; workspace clippy + rustdoc -D warnings clean; bash scripts/opi-impl-smoke.sh PASSED",
+        "opi_evaluator": "passed",
+        "opi_acceptance": "phase10-provider-collection-auth-seam, phase10-provider-fixture-target, phase10-existing-provider-regression; ProviderCollection + ProviderRegistry exercised via dispatch_stream/dispatch_complete/resolve/capabilities/auth_status/compat plus the all-builtin-providers registry regression"
+      },
+      "blocker": null,
+      "session_notes": [
+        "2026-06-25: started task 10.1 (auto-pick). D1=wrap ProviderRegistry in new ProviderCollection; D2=resolve auth at dispatch; complete-dispatch built on streaming Provider trait. start_commit=f0f3e0c.",
+        "2026-06-25: appended productized_packages_docs.rs to task_owned_paths (C.1a) to extend the infra allowlist for provider_collection.",
+        "2026-06-25: task 10.1 PASSED @ 4a9916b. D1=wrap, D2=resolve-at-dispatch, complete-dispatch=drain streaming trait (Provider trait unchanged). D.2 evaluator PASS. Extended Phase 6 first-class-provider guard infra allowlist for provider_collection (C.1a task_owned_paths append recorded). No push."
+      ]
+    },
+    {
+      "id": "10.2",
+      "phase": 10,
+      "title": "Coding-agent provider factory routing",
+      "crate": "opi-coding-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "opi-coding-agent provider construction routes CLI config, env, package/custom provider inputs, model listing, and run-mode startup through the opi-ai provider collection/auth seam; the provider_policy_is_centralized regression scans crates/opi-coding-agent/src and asserts ProviderRegistry::new, resolve_model_spec, and equivalent provider/model/auth policy calls appear only in the provider_factory allowlist; existing --list-models, non-interactive, JSON, RPC, and interactive startup behavior remains covered by regression tests.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "10.1"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Expanded Workstream 10.1 coding-agent responsibilities into factory routing, product-owned inputs, behavior preservation, and regression tests.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.1"
+        },
+        {
+          "field": "depends_on",
+          "reason": "The product factory must consume the opi-ai provider collection/auth seam from task 10.1.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Target responsibilities"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No provider OAuth login, subscription auth, broad provider catalog expansion, image generation, custom TUI extension protocol, npm/package marketplace work, browser/web UI work, pi TypeScript API compatibility, pi session file compatibility, shared opi-types crate, or whole-loop rewrite.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Replaced an unobservable anti-scattering claim with the named provider_policy_is_centralized grep-style regression.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.1 Success Criteria 2"
+        }
+      ],
+      "tier": "cli-runtime",
+      "commit_type": "refactor",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo test -p opi-coding-agent --test provider_factory",
+          "cargo test -p opi-coding-agent --test list_models_json",
+          "cargo test -p opi-coding-agent --test custom_provider_registration",
+          "cargo test -p opi-coding-agent --test json_mode",
+          "cargo clippy -p opi-coding-agent --all-targets -- -D warnings"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/provider_factory.rs",
+          "crates/opi-coding-agent/tests/list_models_json.rs",
+          "crates/opi-coding-agent/tests/custom_provider_registration.rs",
+          "crates/opi-coding-agent/tests/json_mode.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase10-provider-construction-through-collection",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 2",
+          "scenario": "The opi binary startup paths construct providers from CLI config/env/package extension inputs through the opi-ai provider collection, preserve existing list-models and run-mode behavior, and keep provider/model/auth policy calls inside the provider_factory allowlist.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test provider_factory provider_factory_routes_through_collection",
+            "cargo test -p opi-coding-agent --test provider_factory provider_policy_is_centralized",
+            "cargo test -p opi-coding-agent --test list_models_json"
+          ],
+          "production_call_sites": [
+            "opi_coding_agent::provider_factory",
+            "opi_coding_agent::harness::CodingHarness::builder",
+            "opi_coding_agent::main"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase10-provider-regression",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 7",
+          "scenario": "Existing provider startup paths for non-interactive JSON/RPC-style product flows continue to work through the collection-backed factory.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test json_mode",
+            "cargo test -p opi-coding-agent --test custom_provider_registration"
+          ],
+          "production_call_sites": [
+            "opi_coding_agent::runner::NonInteractiveRunner",
+            "opi_coding_agent::rpc::RpcRunner"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "opi_coding_agent::provider_factory",
+        "opi_coding_agent::harness::CodingHarness::builder",
+        "opi_coding_agent::main",
+        "opi_coding_agent::runner::NonInteractiveRunner",
+        "opi_coding_agent::rpc::RpcRunner"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "4a9916b250a948a1c8815bdd0a1904363fd1bede",
+      "baseline_dirty_files": [],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/**",
+        "crates/opi-ai/**",
+        "Cargo.toml"
+      ],
+      "last_attempt": {
+        "result": "passing",
+        "commit": "c069853415c5586623c5ed07eb657882ebc4d588",
+        "note": "Single TDD cycle: centralized construction into provider_factory.rs producing ProviderCollection; rewired harness (model_registry -> ProviderCollection) + main (run-mode + list-models) through the factory; grep regression + routes-through-collection tests; one commit."
+      },
+      "verified_at_commit": "c069853415c5586623c5ed07eb657882ebc4d588",
+      "evidence": {
+        "commit": "c069853415c5586623c5ed07eb657882ebc4d588",
+        "opi_task": "10.2",
+        "opi_dod_sha256": "11650be49b295e0258a044e8d209cb79c24b03f507627c930cf93d8029494289",
+        "opi_verification": "cli-runtime; provider_factory (19 tests, incl. provider_factory_routes_through_collection + provider_policy_is_centralized) + list_models_json + custom_provider_registration + json_mode + rpc_jsonl + extensions + picker_integration + model_listing + non_interactive green; clippy -p opi-coding-agent --all-targets -D warnings clean; workspace fmt --check --all + clippy --workspace --all-targets -D warnings + RUSTDOCFLAGS=-D\\ warnings cargo doc --workspace --no-deps clean; bash scripts/opi-impl-smoke.sh PASSED",
+        "opi_evaluator": "passed",
+        "opi_acceptance": "phase10-provider-construction-through-collection, phase10-provider-regression; provider_factory_routes_through_collection + provider_policy_is_centralized (35 construction tokens pinned to provider_factory.rs with vacuous-allowlist guard); listing registers via collection.register (auth/compat derived), harness via from_registry (no production dispatch through the collection so no auth gating); behavior-preservation suite + smoke green"
+      },
+      "blocker": null,
+      "session_notes": [
+        "2026-06-26: started task 10.2 (auto-pick). Design=Full centralization (user-confirmed): move build_provider/build_runtime_provider + 9 per-provider credential builders + openai_compatible profile builders + both registry assemblies (run-mode + list-models) + resolve_model_spec + config->AuthDescriptor assembly into new opi_coding_agent::provider_factory lib module producing a ProviderCollection (10.1 seam); harness retains the collection (model_registry field -> ProviderCollection) with model_listing/picker/thinking via .registry(); provider_policy_is_centralized grep regression + provider_factory_routes_through_collection TDD test. start_commit=4a9916b.",
+        "2026-06-26: task 10.2 PASSED @ c069853. Full centralization (user-confirmed Option A): new opi_coding_agent::provider_factory owns ProviderBuildError/ListModelsError, credential/http helpers, parse_model_spec, MetadataProvider, per-provider builders (runtime+listing verbatim), build_provider, build_collection_for_listing (->ProviderCollection via collection.register + derived auth/compat descriptors), assemble_harness_collection (->ProviderCollection via from_registry). harness model_registry field -> ProviderCollection; main run-mode + list-models rewired through factory; ~726 lines deleted from main. provider_policy_is_centralized pins 35 construction tokens to provider_factory.rs (vacuous-allowlist guarded); renamed home_dir->aws_home_dir to disambiguate from tool/mod.rs. D.2 evaluator PASS (no blocking issues; 1 documented nit: compat_metadata_for returns default for openrouter/mistral built-ins - informational, no behavior regression). All cross-cutting gates green. No push."
+      ]
+    },
+    {
+      "id": "10.3",
+      "phase": 10,
+      "title": "Generic AgentHarness core seam",
+      "crate": "opi-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "opi-agent exposes a documented generic AgentHarness seam covering idle/turn/compaction/branch-summary phase guards, turn snapshots, save points, runtime config mutation for future snapshots, pending session write ordering, busy rejections, queue safe points, cancellation cleanup, and abort semantics with contract tests.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "9.4"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Expanded Workstream 10.2 generic harness semantics into executable contract assertions.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.2"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Generic harness work starts after Phase 9 establishes the AgentHarness gap and Phase 10 scope.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Revised Phase Dependencies"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No provider OAuth login, subscription auth, broad provider catalog expansion, image generation, custom TUI extension protocol, npm/package marketplace work, browser/web UI work, pi TypeScript API compatibility, pi session file compatibility, shared opi-types crate, or whole-loop rewrite.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Selected the Phase 10 real-type delivery path and removed the accepted-design escape hatch so substrate_only=false matches executable harness tests and production call-site claims.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 3"
+        }
+      ],
+      "tier": "library",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo test -p opi-agent --test harness",
+          "cargo test -p opi-agent --test agent_loop_mock",
+          "cargo clippy -p opi-agent --all-targets -- -D warnings",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc -p opi-agent --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-agent/tests/harness.rs",
+          "crates/opi-agent/tests/agent_loop_mock.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase10-generic-harness-seam",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 3",
+          "scenario": "A non-CLI library caller can exercise the generic harness phase, snapshot, save-point, pending-write, and runtime-config semantics without depending on opi-coding-agent product policy.",
+          "verification": [
+            "cargo test -p opi-agent --test harness generic_harness_phase_snapshot_savepoint_contract"
+          ],
+          "production_call_sites": [
+            "opi_agent::harness::AgentHarness",
+            "opi_agent::Agent"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase10-harness-contracts",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.2 Success Criteria 3",
+          "scenario": "Contract tests prove phase guards, busy rejections, queued operations, cancellation cleanup, and session write ordering through the generic opi-agent harness surface.",
+          "verification": [
+            "cargo test -p opi-agent --test harness phase_guards_busy_rejections_and_abort_cleanup"
+          ],
+          "production_call_sites": [
+            "opi_agent::harness::AgentHarness"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "opi_agent::harness::AgentHarness",
+        "opi_agent::Agent"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "c069853415c5586623c5ed07eb657882ebc4d588",
+      "baseline_dirty_files": [],
+      "task_owned_paths": [
+        "crates/opi-agent/**",
+        "Cargo.toml"
+      ],
+      "last_attempt": {
+        "result": "passing",
+        "commit": "a644adc7e0dad48129667728214a43e593c33cb6",
+        "note": "Single TDD red-green cycle; one commit. RED = unresolved import opi_agent::harness; GREEN = harness module + 2 contract tests."
+      },
+      "verified_at_commit": "a644adc7e0dad48129667728214a43e593c33cb6",
+      "evidence": {
+        "commit": "a644adc7e0dad48129667728214a43e593c33cb6",
+        "opi_task": "10.3",
+        "opi_dod_sha256": "29c2313d770afdef08288566c9502a86eabe57924b0e6a1ef4698e0cc0979e61",
+        "opi_verification": "library; cargo test -p opi-agent --test harness (generic_harness_phase_snapshot_savepoint_contract + phase_guards_busy_rejections_and_abort_cleanup green) + full opi-agent suite green; clippy -p opi-agent --all-targets -D warnings clean; rustdoc -p opi-agent -D warnings clean; workspace fmt --check + clippy --workspace --all-targets -D warnings + RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps clean; bash scripts/opi-impl-smoke.sh PASSED",
+        "opi_evaluator": "passed",
+        "opi_acceptance": "phase10-generic-harness-seam, phase10-harness-contracts; generic_harness_phase_snapshot_savepoint_contract (non-CLI caller via opi_ai MockProvider: phase/snapshot/savepoint/pending-write + runtime-config snapshot discipline proven both halves, agent-before-extension durable order via SessionReader::read_all) + phase_guards_busy_rejections_and_abort_cleanup (begin_*/end_*/enqueue/flush phase guards, runtime-config setters never gated, abort cancels agent token + best-effort flush, flush-failure preserves queue count, abort-with-failed-flush returns AbortLeftPending(n) and resets to Idle with writes queued)"
+      },
+      "blocker": null,
+      "session_notes": [
+        "2026-06-26: started task 10.3 (auto-pick). Design via read-only discovery workflow (4 Explore agents + opus synthesis) + substrate verification. New opi-agent::harness module: AgentHarness wraps Agent + HarnessSession backend, owns Phase machine (Idle/Turn/Compaction/BranchSummary), PendingWriteQueue (agent-emitted before extension/session writes), HarnessRuntimeConfig snapshot discipline (future snapshots only), SavePoint/HarnessSnapshot, abort() flushes all accepted pending writes. Reuses Agent/AgentLoopConfig/SessionWriter/SessionEntry; no agent.rs changes. begin_turn/end_turn are state-machine guards + snapshot/flush in 10.3 (full loop wiring = 10.4). BranchSummary phase guarded but entry representation deferred to 10.5 (user-confirmed Proceed as planned). start_commit=c069853.",
+        "2026-06-26: task 10.3 PASSED @ a644adc. New opi_agent::harness module: AgentHarness wraps Agent + Box<dyn HarnessSession>, owns Phase machine (Idle/Turn/Compaction/BranchSummary), PendingWriteQueue (drain_ordered: AgentMessage-kind before ExtensionState-kind, stable by order), HarnessRuntimeConfig/Builder with snapshot discipline (begin_turn freezes turn_snapshot; snapshot() returns frozen during Turn, live builder otherwise; setters affect future turns only), SavePoint/HarnessSnapshot, abort() cancels agent + best-effort flushes all accepted writes (never discards; on flush failure returns AbortLeftPending(n), still resets to Idle, keeps queue). HarnessSession trait + JsonlHarnessSession impl over SessionWriter. Reuses Agent (delegated cancel_token/control_handle/messages_snapshot/abort), AgentLoopConfig, SessionWriter/SessionReader, SessionEntry/MessageEntry/CompactionEntry/ExtensionStateEntry, CompactionResult. No agent.rs changes (begin_turn is a guard + snapshot freeze; loop wiring is 10.4). BranchSummary phase guarded but no durable entry (representation deferred to 10.5). Types kept module-path public (opi_agent::harness::*) following session-module precedent -> avoided Phase 8 crate-root API-surface-classification churn. Design via read-only discovery Workflow (4 Explore + opus synth). D.2 evaluator PASS (no blocking; 3 info nits). All cross-cutting gates green. No push."
+      ]
+    },
+    {
+      "id": "10.4",
+      "phase": 10,
+      "title": "CodingHarness wrapper integration",
+      "crate": "opi-coding-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "CodingHarness is documented and exercised as a coding-agent product wrapper over generic opi-agent runtime seams while retaining built-in file tools, CLI config, context files, package resources/adapters, interactive commands, product defaults, extension state restore/persist behavior, and existing CLI/RPC/JSON/interactive behavior.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "10.2",
+        "10.3"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Expanded CodingHarness wrapper success criteria into production startup and behavior-preservation assertions.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.2"
+        },
+        {
+          "field": "depends_on",
+          "reason": "CodingHarness integration depends on the generic harness seam from task 10.3.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Target responsibilities"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No provider OAuth login, subscription auth, broad provider catalog expansion, image generation, custom TUI extension protocol, npm/package marketplace work, browser/web UI work, pi TypeScript API compatibility, pi session file compatibility, shared opi-types crate, or whole-loop rewrite.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Non-Goals"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Serialized CodingHarness wrapper work after provider factory routing because both slices own crates/opi-coding-agent/** and may edit CodingHarness::builder.",
+          "source": "task-graph review optimization"
+        }
+      ],
+      "tier": "cli-runtime",
+      "commit_type": "refactor",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo test -p opi-coding-agent --test harness_resource_integration",
+          "cargo test -p opi-coding-agent --test rpc_jsonl",
+          "cargo test -p opi-coding-agent --test json_mode",
+          "cargo test -p opi-coding-agent --test session_runtime",
+          "cargo clippy -p opi-coding-agent --all-targets -- -D warnings"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/harness_resource_integration.rs",
+          "crates/opi-coding-agent/tests/rpc_jsonl.rs",
+          "crates/opi-coding-agent/tests/json_mode.rs",
+          "crates/opi-coding-agent/tests/session_runtime.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase10-coding-harness-product-wrapper",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 4",
+          "scenario": "CodingHarness startup composes coding-agent product inputs over the generic opi-agent runtime seam, and CLI/RPC/JSON behavior continues to run through the wrapper without moving package or CLI policy into opi-agent.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test harness_resource_integration",
+            "cargo test -p opi-coding-agent --test rpc_jsonl",
+            "cargo test -p opi-coding-agent --test json_mode"
+          ],
+          "production_call_sites": [
+            "opi_coding_agent::harness::CodingHarness",
+            "opi_coding_agent::runner::NonInteractiveRunner",
+            "opi_coding_agent::rpc::RpcRunner",
+            "opi_coding_agent::interactive::run_interactive_tui"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase10-existing-product-behavior-preserved",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.2 Success Criteria 4",
+          "scenario": "Existing CLI, RPC, JSON, and interactive-facing product flows retain their current observable behavior unless a contract test exposes an existing bug.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test rpc_jsonl",
+            "cargo test -p opi-coding-agent --test json_mode",
+            "cargo test -p opi-coding-agent --test session_runtime"
+          ],
+          "production_call_sites": [
+            "opi_coding_agent::main",
+            "opi_coding_agent::runner::NonInteractiveRunner",
+            "opi_coding_agent::rpc::RpcRunner",
+            "opi_coding_agent::interactive::run_interactive_tui"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "opi_coding_agent::harness::CodingHarness",
+        "opi_coding_agent::runner::NonInteractiveRunner",
+        "opi_coding_agent::rpc::RpcRunner",
+        "opi_coding_agent::interactive::run_interactive_tui"
+      ],
+      "substrate_only": false,
+      "iteration_count": 1,
+      "max_iterations": 5,
+      "start_commit": "a644adc7e0dad48129667728214a43e593c33cb6",
+      "baseline_dirty_files": [],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/**",
+        "crates/opi-agent/**",
+        "Cargo.toml"
+      ],
+      "last_attempt": {
+        "result": "passing",
+        "commit": "d4fbdb73e4b34a6e7547932a35c2d92c20c5353d",
+        "note": "Single TDD cycle (docs + 2 pinning/guard tests). No production runtime change."
+      },
+      "verified_at_commit": "d4fbdb73e4b34a6e7547932a35c2d92c20c5353d",
+      "evidence": {
+        "commit": "d4fbdb73e4b34a6e7547932a35c2d92c20c5353d",
+        "opi_task": "10.4",
+        "opi_dod_sha256": "1d26417cdbab63bb3b28435015d6d8dea19a18ff636fa87186bc3ac3d3d5d289",
+        "opi_verification": "cli-runtime; cargo test -p opi-coding-agent --test harness_resource_integration (24 incl. 2 new: coding_harness_composes_generic_opi_agent_seams + coding_harness_wrapper_keeps_product_policy_out_of_opi_agent) + rpc_jsonl (82) + json_mode (19) + session_runtime (31) green; clippy -p opi-coding-agent + -p opi-agent + --workspace --all-targets -D warnings clean; RUSTDOCFLAGS=\"-D warnings\" cargo doc -p opi-coding-agent + -p opi-agent + --workspace --no-deps clean; cargo fmt --check --all clean; Phase 8 runtime_contract_docs (phase8_api_surface_classification + phase8_non_goals_not_claimed_or_implemented) + Phase 6 first_class_provider_set_is_unchanged green; bash scripts/opi-impl-smoke.sh PASSED; boundary guard mutation-verified non-vacuous (inject CodingHarness into opi-agent/src/lib.rs -> FAIL 'product token CodingHarness leaked into opi-agent lib.rs', revert -> green; comment-stripper proven to skip the 2 doc-comment mentions).",
+        "opi_evaluator": "passed",
+        "opi_acceptance": "phase10-coding-harness-product-wrapper, phase10-existing-product-behavior-preserved; coding_harness_composes_generic_opi_agent_seams (production CodingHarness::builder + opi_ai MockProvider with ResumeInfo over temp session -> drives prompt -> asserts opi_agent::agent::AgentControl + live CancellationToken + AgentMessage assistant text + SessionReader::read_all >1 Message entry) + coding_harness_wrapper_keeps_product_policy_out_of_opi_agent (recursive comment-stripped scan of opi-agent/src zero product-policy tokens, AgentHarness-present non-vacuous sanity, no pub use harness:: crate-root re-export) + behavior-preservation suites green"
+      },
+      "blocker": null,
+      "session_notes": [
+        "2026-06-26: started task 10.4 (auto-pick). Design via read-only discovery Workflow (4 Explore + opus-intent synthesis) + independent design-doc read. Decision: THIN composition slice, NOT a loop reroute. Authority: Phase 10 SC4 'documented as a product wrapper' + Implementation Notes 'avoid large migration / prefer thin adapters' + Non-Goal #11 'no whole-loop rewrite'. Synthesis recommended production AgentHarness adoption + begin_turn/end_turn bracket, but that is infeasible: AgentHarness::new takes Agent BY VALUE (harness.rs:330) and Agent is not Clone (Box<dyn AgentHooks> hooks, Arc<Mutex<Vec<Box<dyn Fn>>>> subscribers) -> product cannot keep driving Agent::prompt while handing Agent to AgentHarness; that path dead-ends into either adding a loop-driving method to the generic seam (Phase 8 classification risk + scope creep) or replacing SessionCoordinator with the harness session model (Workstream 10.3 / task 10.5, deferred). Rejected synthesis doc-edits: docs/pi-alignment-matrix.md (owned by 10.7, not in task_owned_paths) and the Phase 10 design doc (would change ledger hash -> spec drift; opi-implement forbids mutating normative specs). Deliverable: (1) CodingHarness module/struct rustoc names it as product wrapper over generic opi-agent seams + ownership split + incremental-adoption note; (2) fix stale 10.3 forward-pointer in opi-agent/src/harness.rs (lines ~20-24 'will route its turn loop through this seam in task 10.4'); (3) 2 new tests in harness_resource_integration.rs: coding_harness_composes_generic_opi_agent_seams (MockProvider runtime round-trip proving Agent+session seam composition) + coding_harness_wrapper_keeps_product_policy_out_of_opi_agent (source-structure guard: zero product-policy tokens in opi-agent/src, no crate-root harness re-export; mutation-verified non-vacuous). No production runtime behavior change. start_commit=a644adc.",
+        "2026-06-26: task 10.4 PASSED @ d4fbdb7. THIN documentation+exercise+guard slice, NOT a loop reroute. Authority: Phase 10 SC4 'documented as a product wrapper' + Implementation Notes 'avoid large migration / prefer thin adapters' + Non-Goal #11 'no whole-loop rewrite'. Design via read-only discovery Workflow (4 Explore + opus-intent synthesis on GLM-5.2) + independent design-doc read. Synthesis recommended production AgentHarness adoption + begin_turn/end_turn bracket but that is infeasible: AgentHarness::new takes Agent BY VALUE (harness.rs:342) and Agent is not Clone (Box<dyn AgentHooks> hooks, Arc<Mutex<Vec<Box<dyn Fn>>>> subscribers) -> product cannot keep driving Agent::prompt while handing Agent to AgentHarness; dead-ends into either a generic-seam loop-driving method (Phase 8 classification risk + scope creep) or replacing SessionCoordinator with the harness session model (Workstream 10.3 / task 10.5, deferred). Deliverable: (1) CodingHarness module+struct rustoc names it as product wrapper over generic seams + ownership split + incremental-adoption note; (2) opi-agent/src/harness.rs stale forward-pointer ('will route its turn loop through this seam in task 10.4') corrected to by-value-wall + incremental-migration explanation; (3) 2 new tests in harness_resource_integration.rs. No production runtime change. Rejected synthesis doc-edits as out-of-scope: docs/pi-alignment-matrix.md (owned by 10.7, not in task_owned_paths) + Phase 10 design doc (would change ledger hash -> spec drift; opi-implement forbids mutating normative specs). D.2 evaluator PASS (independent code-reviewer verified by-value wall, guard non-vacuity across 3 axes, composition test non-tautological, zero normative-docs diff; 3 non-blocking nits). All cross-cutting gates green. No push."
+      ]
+    },
+    {
+      "id": "10.5",
+      "phase": 10,
+      "title": "Session repo/facade boundaries",
+      "crate": "opi-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "opi-agent defines session entry, repo/storage trait, and harness session-facade boundaries for messages, compaction, leaf links, model/thinking changes, labels, branch summaries, custom entries, ordered append/load/list/fork behavior, unknown future entry handling, deterministic branch leaf reconstruction, pending write ordering, and durable-state ownership; the implementation explicitly decides additive-v1 versus session-v2 entry strategy, branch-summary representation, extension custom-message provider-context handling, and unfinished-operation recovery without replaying unsafe tools; existing v1 sessions remain readable and Phase 13 has a stable seam to extend.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "10.3"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Expanded Workstream 10.3 into concrete session entry, repo, facade, v1 compatibility, branch reconstruction, pending-write, and durable-state assertions.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.3"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Session facade semantics use the generic harness save-point and pending-write model from task 10.3.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.3"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No provider OAuth login, subscription auth, broad provider catalog expansion, image generation, custom TUI extension protocol, npm/package marketplace work, browser/web UI work, pi TypeScript API compatibility, pi session file compatibility, shared opi-types crate, or whole-loop rewrite.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Surfaced Workstream 10.3 required decisions for session versioning, branch summaries, extension custom messages, and unfinished-operation recovery.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Required decisions"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Removed normative docs from this code task; Phase 10 spec and alignment documentation updates remain owned by task 10.7.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria"
+        }
+      ],
+      "tier": "workspace",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo test -p opi-agent --test session_facade",
+          "cargo test -p opi-agent --test session_storage",
+          "cargo test -p opi-agent --test session_branching",
+          "cargo test -p opi-coding-agent --test session_runtime",
+          "cargo test -p opi-coding-agent --test session_cli",
+          "cargo clippy -p opi-agent --all-targets -- -D warnings",
+          "cargo clippy -p opi-coding-agent --all-targets -- -D warnings"
+        ],
+        "behavioral_tests": [
+          "crates/opi-agent/tests/session_facade.rs",
+          "crates/opi-agent/tests/session_storage.rs",
+          "crates/opi-agent/tests/session_branching.rs",
+          "crates/opi-coding-agent/tests/session_runtime.rs",
+          "crates/opi-coding-agent/tests/session_cli.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase10-session-facade-boundaries",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 5",
+          "scenario": "A generic opi-agent session repo/facade can append and read durable entries in order, preserve v1 session readability, reconstruct the active branch leaf deterministically, and leave product directory policy in opi-coding-agent.",
+          "verification": [
+            "cargo test -p opi-agent --test session_facade",
+            "cargo test -p opi-agent --test session_storage",
+            "cargo test -p opi-agent --test session_branching",
+            "cargo test -p opi-coding-agent --test session_runtime"
+          ],
+          "production_call_sites": [
+            "opi_agent::session",
+            "opi_agent::session_branch",
+            "opi_coding_agent::session_coordinator",
+            "opi_coding_agent::session_cli"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase10-pending-session-write-ordering",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.3 Success Criteria 4",
+          "scenario": "Pending session writes accepted during busy phases flush in documented order at save points and operation settlement without silently dropping accepted writes on abort.",
+          "verification": [
+            "cargo test -p opi-agent --test session_facade pending_writes_flush_in_order_at_save_points"
+          ],
+          "production_call_sites": [
+            "opi_agent::harness::SessionFacade",
+            "opi_agent::session::SessionWriter"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "opi_agent::session",
+        "opi_agent::session_branch",
+        "opi_agent::harness::SessionFacade",
+        "opi_coding_agent::session_coordinator",
+        "opi_coding_agent::session_cli"
+      ],
+      "substrate_only": false,
+      "iteration_count": 1,
+      "max_iterations": 5,
+      "start_commit": "d4fbdb73e4b34a6e7547932a35c2d92c20c5353d",
+      "baseline_dirty_files": [],
+      "task_owned_paths": [
+        "crates/opi-agent/**",
+        "crates/opi-coding-agent/**",
+        "Cargo.toml"
+      ],
+      "last_attempt": {
+        "result": "passing",
+        "commit": "8c946a286fe30c7979c34ec6cbe19d56c1f38364",
+        "note": "Single TDD cycle (RED unresolved imports -> GREEN SessionRepo+JsonlSessionRepo+SessionFacade). 7 contract tests. No production runtime change."
+      },
+      "verified_at_commit": "8c946a286fe30c7979c34ec6cbe19d56c1f38364",
+      "evidence": {
+        "commit": "8c946a286fe30c7979c34ec6cbe19d56c1f38364",
+        "opi_task": "10.5",
+        "opi_dod_sha256": "cc3745438cbe122ea9975b5be563e5d24e460f928750b2fe85a4dfaa93d0bd6d",
+        "opi_verification": "workspace; session_facade (7 incl. in-memory backend + forward-compat unknown-entry + deterministic active_tip + boundary guard) + session_storage/branching/contract + session_runtime/session_cli green; clippy --workspace --all-targets -D warnings + RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps + cargo fmt --check --all clean; Phase 8 phase8_api_surface_classification + phase8_non_goals_not_claimed_or_implemented green; cargo test --workspace --all-targets exit 0; boundary guard mutation-verified non-vacuous (inject SessionCoordinator via orphan probe -> FAIL 'product-policy token leaked', remove -> green); comment-stripper proven to skip doc-prose mentions.",
+        "opi_evaluator": "passed",
+        "opi_acceptance": "phase10-session-facade-boundaries, phase10-pending-session-write-ordering; SessionRepo trait + JsonlSessionRepo (append/load/message_count over v1 JSONL via SessionWriter/SessionReader) + SessionFacade (Agent-free ordered read/write facade reusing PendingWriteQueue; enqueue_message/enqueue_extension_state/flush save-point agent-before-extension drain/abort no-drop AbortLeftPending(n)/load/active_tip via SessionTree). Spec-strict minimal slice: NO new SessionEntry variants (spec S9.3 assigns model_change/thinking/label/branch_summary/custom_message to Phase 13 v2; docs/opi-spec.md owned by 10.7 not 10.5). 4 decisions documented on SessionFacade rustdoc (D1 additive-v1, D2 branch-summary metadata deferred, D3 extension-custom durable-seam-only, D4 unfinished-op mark-interrupted no-retry). Module-path-only -> Phase 8 guard unaffected."
+      },
+      "blocker": null,
+      "session_notes": [
+        "2026-06-26: started task 10.5 (auto-pick). Design via read-only discovery Workflow (4 Explore mappers) + independent spec S9.3 read. DECISION: spec-strict minimal slice. Overrode mapper-4 recommendation to add SessionEntry variants (contradicts normative spec S9.3 which assigns model_change/thinking/label/branch_summary/custom_message to Phase 13 v2 target; 10.5 cannot edit docs/opi-spec.md owned by 10.7). Deliverable: opi_agent::harness::SessionRepo trait + JsonlSessionRepo + SessionFacade (Agent-free ordered read/write facade reusing PendingWriteQueue) + 4 documented decisions + session_facade.rs (6 tests incl forward-compat unknown-entry proof + product-policy boundary guard). NO new variants, NO format change, NO migration. start_commit=d4fbdb7.",
+        "2026-06-26: task 10.5 PASSED @ 8c946a2. Spec-strict minimal slice (user-confirmed Proceed as planned). Design via read-only discovery Workflow (4 Explore mappers) + independent spec S9.3 read; overrode mapper-4 recommendation to add SessionEntry variants (contradicts normative spec S9.3 Phase-13-v2 assignment; docs/opi-spec.md not in 10.5 task_owned_paths -> would create spec drift owned by 10.7). New opi_agent::harness surface (module-path-only): SessionRepo trait (append/load(CrashRecovery)/message_count; list/fork documented as product/Phase-13 not in-trait) + JsonlSessionRepo (create/open over v1 JSONL via SessionWriter/SessionReader) + SessionFacade (Agent-free ordered read/write facade; reuses PendingWriteQueue TYPE not duplicate; enqueue_message/enqueue_extension_state/flush save-point agent-before-extension/abort no-drop AbortLeftPending(n)/load/active_tip via SessionTree). 4 decisions documented on SessionFacade rustdoc: D1 additive-v1 (non_exhaustive + forward-compatible reader; no new variants), D2 branch-summary=metadata deferred Phase 13, D3 extension-custom=durable seam only (include_in_llm_context flag exists; injection deferred), D4 unfinished-op=mark-interrupted no-retry. session_facade.rs (7 tests): in-memory repo backend, appends+reads in order, v1 readability vs unknown future entry (CrashRecovery.corrupt_count>=1), deterministic active_tip, pending_writes_flush_in_order_at_save_points (agent-before-extension), pending_writes_not_dropped_on_abort (AbortLeftPending(2) queue retained), boundary guard (zero product-policy tokens in opi-agent/src incl OPI_SESSIONS_DIR/session_cli/fork_session/list_sessions/delete_session/resume_session/SessionCoordinator; SessionFacade+SessionRepo non-vacuous sanity). No production runtime change (SessionEntry/SessionReader/SessionWriter/format/SessionTree/AgentHarness/all opi-coding-agent session code untouched). Module-path-only -> Phase 8 phase8_api_surface_classification green. D.2 evaluator PASS (independent code-reviewer verified spec alignment via direct S9.3 read, no-migration via git diff --name-only, Phase 8 guard via direct run, abort no-drop, mutation-verified boundary guard; 4 non-blocking nits: flush_internal/next_id/next_timestamp duplication with AgentHarness, OPI_SESSIONS_DIR doc-prose guard fragility, active_tip SessionTree recompute). All cross-cutting gates green. No push."
+      ]
+    },
+    {
+      "id": "10.6",
+      "phase": 10,
+      "title": "Runtime hook boundary hardening",
+      "crate": "workspace",
+      "parent_spec_row": null,
+      "definition_of_done": "Runtime hook boundaries are documented and tested so core loop hooks remain narrow in opi-agent, coding-agent product extensions/resources/packages stay in opi-coding-agent, process adapter hosting remains out of opi-agent, typed hook result composition is tested where it affects runtime behavior, and provider request/response hooks plus custom TUI UI/message renderer hooks are deferred with explicit prerequisites.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "10.3",
+        "10.4"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Expanded Workstream 10.4 into current/future hook boundary documentation, typed composition tests, and process-adapter ownership assertions.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.4"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Hook boundary documentation must reflect both generic harness and CodingHarness wrapper ownership.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Boundary model"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No provider OAuth login, subscription auth, broad provider catalog expansion, image generation, custom TUI extension protocol, npm/package marketplace work, browser/web UI work, pi TypeScript API compatibility, pi session file compatibility, shared opi-types crate, or whole-loop rewrite.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Non-Goals"
+        },
+        {
+          "field": "commit_type",
+          "reason": "Changed from docs to refactor because this task owns Rust hook-boundary tests and may adjust typed hook composition code.",
+          "source": "task-graph review optimization"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Editing docs/opi-spec.md (owned) changes its SHA256; the phase4 ledger drift-detector test phase4_ledger_spec_hash_matches_current_spec compares the current spec hash against the frozen docs/snapshots/phase4/opi-impl-state.json, so that snapshot must be resynced to keep the workspace test green. Per spec-edit-breaks-phase4-ledger: only the phase4 snapshot needs the update.",
+          "source": "crates/opi-coding-agent/tests/phase4_ledger.rs::phase4_ledger_spec_hash_matches_current_spec"
+        }
+      ],
+      "tier": "workspace",
+      "commit_type": "refactor",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo test -p opi-agent --test extensions",
+          "cargo test -p opi-coding-agent --test extensions",
+          "cargo test -p opi-coding-agent --test productized_packages_docs",
+          "cargo clippy --workspace --all-targets -- -D warnings"
+        ],
+        "behavioral_tests": [
+          "crates/opi-agent/tests/extensions.rs",
+          "crates/opi-coding-agent/tests/extensions.rs",
+          "crates/opi-coding-agent/tests/productized_packages_docs.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase10-runtime-hook-boundaries",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 6",
+          "scenario": "The documented and tested extension/hook surfaces distinguish current core runtime hooks, coding-agent product extensions, process adapter responsibilities, and future provider/UI/session lifecycle hooks without claiming pi TypeScript API compatibility, and a positive source-structure assertion proves process adapter protocol parsing stays out of opi-agent.",
+          "verification": [
+            "cargo test -p opi-agent --test extensions",
+            "cargo test -p opi-coding-agent --test extensions",
+            "cargo test -p opi-coding-agent --test productized_packages_docs phase10_runtime_hook_boundaries",
+            "cargo test -p opi-coding-agent --test productized_packages_docs phase10_process_adapter_stays_out_of_opi_agent"
+          ],
+          "production_call_sites": [
+            "opi_agent::extension::ExtensionRegistry",
+            "opi_agent::hooks::AgentHooks",
+            "opi_coding_agent::adapter_extension",
+            "opi_coding_agent::runtime_packages"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase10-hook-result-composition",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Workstream 10.4 Success Criteria 4",
+          "scenario": "Hook result composition that changes runtime behavior is typed and covered by tests for ordering, short-circuiting, and product adapter boundaries.",
+          "verification": [
+            "cargo test -p opi-agent --test extensions",
+            "cargo test -p opi-coding-agent --test extensions"
+          ],
+          "production_call_sites": [
+            "opi_agent::extension::ExtensionRegistry::wrap_hooks",
+            "opi_agent::hooks::AgentHooks"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "opi_agent::extension::ExtensionRegistry",
+        "opi_agent::hooks::AgentHooks",
+        "opi_coding_agent::adapter_extension",
+        "opi_coding_agent::runtime_packages"
+      ],
+      "substrate_only": false,
+      "iteration_count": 1,
+      "max_iterations": 5,
+      "start_commit": "8c946a286fe30c7979c34ec6cbe19d56c1f38364",
+      "baseline_dirty_files": [],
+      "task_owned_paths": [
+        "crates/opi-agent/**",
+        "crates/opi-coding-agent/**",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+        "Cargo.toml",
+        "docs/snapshots/phase4/opi-impl-state.json"
+      ],
+      "last_attempt": {
+        "result": "passing",
+        "commit": "4015ffeeb87d9c4de0b289996cd3c6c45e0785e2",
+        "note": "Single TDD cycle (RED: phase10_runtime_hook_boundaries failed on missing section -> GREEN: dedicated spec section EN+ZH + guards). C.1a phase4 snapshot resync. No production runtime change."
+      },
+      "verified_at_commit": "4015ffeeb87d9c4de0b289996cd3c6c45e0785e2",
+      "evidence": {
+        "commit": "4015ffeeb87d9c4de0b289996cd3c6c45e0785e2",
+        "opi_task": "10.6",
+        "opi_dod_sha256": "93a5eadff62cd5f80c88e358ff5a7e31b548dcc049436dce11eb7f7b90259c42",
+        "opi_verification": "workspace; phase10_runtime_hook_boundaries + phase10_process_adapter_stays_out_of_opi_agent green (boundary guard mutation-verified non-vacuous: inject ProcessAdapter into opi-agent/src/lib.rs -> FAIL, restore -> green); productized_packages_docs 43 passed; opi-agent extensions 29 + opi-coding-agent extensions 12 (phase10-hook-result-composition scenario met by existing Phase 8.2 phase8_hook_composition_* + phase8_hook_contract_* + adapter_runtime gate_adapter_in_registry_blocks_destructive_tools); phase4_ledger green after snapshot resync; cargo fmt --check --all + clippy --workspace --all-targets -D warnings + RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps clean; cargo test --workspace --all-targets exit 0 (0 failures)",
+        "opi_evaluator": "passed",
+        "opi_acceptance": "phase10-runtime-hook-boundaries, phase10-hook-result-composition; dedicated Runtime hook boundaries section (EN+ZH) with the 6-surface boundary model table (core loop hooks + generic harness events/results -> opi-agent narrow/contract-tested; coding-agent extension registry + process adapter protocol -> opi-coding-agent; provider request/response hooks + custom TUI UI/message renderer -> future deferred with prerequisites in Future Ecosystem Candidates); phase10_process_adapter_stays_out_of_opi_agent comment-stripped scan of opi-agent/src zero adapter tokens (AdapterHost/ProcessAdapter/AdapterCapabilities/AdapterManifest/start_adapters_from_packages/opi-extension-jsonl-v1/process-jsonl) + non-vacuous sanity (tokens present in opi-coding-agent; trait AgentHooks in opi-agent); hook-result-composition: phase8_hook_composition_base_then_extensions_in_order + phase8_hook_composition_block_stops_chain (opi-agent/tests/extensions.rs) + phase8_hook_contract_* (opi-agent/tests/hooks_queues.rs) + gate_adapter_in_registry_blocks_destructive_tools (opi-coding-agent/tests/adapter_runtime.rs product adapter composes through ExtensionRegistry::wrap_hooks, no bypass). C.1a append: docs/snapshots/phase4/opi-impl-state.json added to task_owned_paths (spec-edit resync); phase4 snapshot spec_files_sha256[docs/opi-spec.md] -> 1be82c57 (CRLF-normalized, as the test computes); live ledger spec_files_sha256[docs/opi-spec.md] -> bc3bfc01 (raw, as the Phase A gate computes)."
+      },
+      "blocker": null,
+      "session_notes": [
+        "2026-06-26: started task 10.6 (auto-pick). Design via read-only discovery Workflow (4 Explore mappers, 241k tokens) + independent design-doc/spec reads. DECISION: documentation + boundary-guard slice, NOT a code change (boundaries already exist: AgentHooks narrow 6-method trait; CompositeHooks typed composition w/ registration-order + Block/Deny short-circuit; ProcessAdapter + adapter_protocol/host fully opi-coding-agent-owned). Deliverable: dedicated 'Runtime hook boundaries' section in docs/opi-spec.md(+zh) + pi-alignment-matrix(+zh) with the 6-surface boundary model table; 2 guard tests (phase10_runtime_hook_boundaries + phase10_process_adapter_stays_out_of_opi_agent) mirroring the 10.5 comment-stripped positive-scan pattern; light ProcessAdapter rustdoc. NO new hook-composition tests (Phase 8.2 phase8_hook_composition_* + phase8_hook_contract_* + adapter_runtime gate_adapter_in_registry_blocks_destructive_tools already cover ordering/short-circuit/product-adapter-boundary -> phase10-hook-result-composition scenario met by existing suites). docs/opi-spec.md hash MUST be resynced in ledger at Phase E (spec edit). start_commit=8c946a2.",
+        "2026-06-26: C.1a task_owned_paths append. Editing docs/opi-spec.md (owned) changed its SHA256; the phase4 ledger drift-detector test phase4_ledger_spec_hash_matches_current_spec (crates/opi-coding-agent/tests/phase4_ledger.rs, owned via crates/opi-coding-agent/**) compares the current CRLF-normalized spec hash against the frozen git-tracked docs/snapshots/phase4/opi-impl-state.json. Resyncing that snapshot's spec_files_sha256[docs/opi-spec.md] -> 1be82c57... is required to keep the workspace test green (spec-edit-breaks-phase4-ledger memory: phase4 snapshot is a drift detector, not an immutability pin; phase6 snapshot has empty spec_files_sha256 -> no update). New spec hash recomputed exactly as the test does (CRLF-normalized sha256).",
+        "2026-06-26: task 10.6 PASSED @ 4015ffe. Documentation + boundary-guard slice, NOT a code change (boundaries already exist: AgentHooks narrow 6-method trait in opi-agent; CompositeHooks typed composition via ExtensionRegistry::wrap_hooks with registration-order + Block/Deny short-circuit + observer-only after_tool_call; ProcessAdapter + adapter_protocol/host + runtime_packages fully opi-coding-agent-owned). Design via read-only discovery Workflow (4 Explore mappers, 241k tokens) + independent design-doc/spec reads + D.2 independent code-reviewer PASS (all 6 claims CONFIRMED, 2 non-blocking nits: helper duplication across test files [documented intentional mirror of 10.5], single #### subsection asymmetry). Deliverable: (1) dedicated #### Runtime hook boundaries section in docs/opi-spec.md(+zh) with the 6-surface boundary model table + deferral prerequisites cross-ref; (2) 2 guard tests phase10_runtime_hook_boundaries + phase10_process_adapter_stays_out_of_opi_agent (comment-stripped positive source-structure scan mirroring 10.5; mutation-verified non-vacuous both directions); (3) light ProcessAdapter rustdoc. NO new hook-composition tests (Phase 8.2 phase8_hook_composition_* / phase8_hook_contract_* + adapter_runtime gate_adapter_in_registry_blocks_destructive_tools already cover ordering/short-circuit/product-adapter-boundary). C.1a: docs/snapshots/phase4/opi-impl-state.json appended to task_owned_paths (spec-edit-breaks-phase4-ledger drift detector; phase6 snapshot has empty spec_files_sha256 -> no update). Dual hash resync: phase4 snapshot -> 1be82c57 (CRLF-normalized, phase4_ledger test convention); live ledger -> bc3bfc01 (raw sha256sum, Phase A gate convention). All cross-cutting gates green. No push."
+      ]
+    },
+    {
+      "id": "10.7",
+      "phase": 10,
+      "title": "Docs guards and final Phase 10 gates",
+      "crate": "workspace",
+      "parent_spec_row": null,
+      "definition_of_done": "English and Chinese normative docs accurately describe Phase 10 ownership boundaries, CodingHarness as a coding-agent product wrapper, provider collection/auth seam status, session facade boundaries, and future ecosystem prerequisites; documentation guards reject OAuth, subscription auth, broad catalog, image generation, custom UI, npm/gallery, browser/web, pi TypeScript API compatibility, pi session compatibility, shared opi-types, and whole-loop rewrite overclaims; a phase-exit trace guard reconstructs SC1-SC8, the 11 non-goals, and the four workstream goals from the current source files; focused regression tests and final workspace fmt, clippy, doc, test, and smoke gates pass.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "10.1",
+        "10.2",
+        "10.3",
+        "10.4",
+        "10.5",
+        "10.6"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Expanded final Phase 10 success criteria into EN/ZH doc synchronization, non-goal guard coverage, regression tests, and final gates.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Final guards and phase gates run after every Phase 10 runtime/documentation slice is passing.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No provider OAuth login, subscription auth, broad provider catalog expansion, image generation, custom TUI extension protocol, npm/package marketplace work, browser/web UI work, pi TypeScript API compatibility, pi session file compatibility, shared opi-types crate, or whole-loop rewrite.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Added an explicit phase-exit trace completeness guard so Phase F.1a is represented as executable task evidence.",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Task 10.7 edits docs/opi-spec.md (owned), which changes its SHA256 and trips the phase4 ledger drift-detector test phase4_ledger_spec_hash_matches_current_spec (crates/opi-coding-agent/tests/phase4_ledger.rs). The frozen git-tracked docs/snapshots/phase4/opi-impl-state.json spec_files_sha256[docs/opi-spec.md] must be resynced (CRLF-normalized, as the test computes) to keep the workspace test green. Per spec-edit-breaks-phase4-ledger: only the phase4 snapshot is test-pinned (phase6 snapshot has no test consumer -> not touched).",
+          "source": "crates/opi-coding-agent/tests/phase4_ledger.rs::phase4_ledger_spec_hash_matches_current_spec"
+        }
+      ],
+      "tier": "workspace",
+      "commit_type": "test",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo test -p opi-coding-agent --test productized_packages_docs phase10",
+          "cargo fmt --check --all",
+          "cargo clippy --workspace --all-targets -- -D warnings",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps",
+          "cargo test --workspace --all-targets",
+          ".\\scripts\\opi-impl-smoke.ps1",
+          "cargo test -p opi-coding-agent --test productized_packages_docs phase10_exit_trace_completeness"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/productized_packages_docs.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase10-docs-guards-nongoals",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 8",
+          "scenario": "Documentation guards fail if Phase 10 docs claim ecosystem-breadth features or forbidden pi parity work as current opi scope.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test productized_packages_docs phase10"
+          ],
+          "production_call_sites": [],
+          "status": "met"
+        },
+        {
+          "id": "phase10-focused-regression-and-final-gates",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria 7",
+          "scenario": "The phase closes only after focused regression tests plus workspace fmt, clippy, doc, tests, and smoke gates pass.",
+          "verification": [
+            "cargo fmt --check --all",
+            "cargo clippy --workspace --all-targets -- -D warnings",
+            "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps",
+            "cargo test --workspace --all-targets",
+            ".\\scripts\\opi-impl-smoke.ps1"
+          ],
+          "production_call_sites": [],
+          "status": "met"
+        },
+        {
+          "id": "phase10-exit-trace-completeness",
+          "source": "docs/superpowers/specs/2026-06-24-phase10-core-architecture-deepening-design.md#Success Criteria",
+          "scenario": "The final documentation guard reconstructs Phase 10 SC1-SC8, all 11 non-goals, and the four workstream goals from the current spec files and records a phase-exit trace shape with met, deferred-by-updated-design, or not-met statuses.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test productized_packages_docs phase10_exit_trace_completeness"
+          ],
+          "production_call_sites": [],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [],
+      "substrate_only": false,
+      "iteration_count": 1,
+      "max_iterations": 5,
+      "start_commit": "4015ffeeb87d9c4de0b289996cd3c6c45e0785e2",
+      "baseline_dirty_files": [],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/tests/productized_packages_docs.rs",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+        "docs/snapshots/phase4/opi-impl-state.json"
+      ],
+      "last_attempt": {
+        "result": "passing",
+        "commit": "d16c364367370a2bf53e77fd207a96d79ece1036",
+        "note": "Single TDD cycle (RED: phase10_exit_trace_completeness failed at SC2/SC5/SC7 absent -> GREEN: status refresh + initial-seams paragraph + Session facade subsection EN+ZH). Clippy const_is_empty fix: trace shape restructured to (criterion,status) loop. phase4 snapshot CRLF-normalized resync. No production runtime change."
+      },
+      "verified_at_commit": "d16c364367370a2bf53e77fd207a96d79ece1036",
+      "evidence": {
+        "commit": "d16c364367370a2bf53e77fd207a96d79ece1036",
+        "opi_task": "10.7",
+        "opi_dod_sha256": "5decf224aafe601d9365dd5c56a6da295037c30fa76586b26ac6eeaeab33c6f0",
+        "opi_verification": "workspace; phase10_forbidden_current_scope_claims_rejected + phase10_exit_trace_completeness green (test B mutation-verified non-vacuous: inject 'supports subscription auth' -> FAIL 'appeared outside a negation context', revert -> green); productized_packages_docs 45 passed; phase4_ledger green after snapshot resync (1be82c57 -> e7e8eade CRLF-normalized); cargo fmt --check --all + clippy --workspace --all-targets -D warnings + RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps clean; cargo test --workspace --all-targets exit 0; bash scripts/opi-impl-smoke.sh PASSED",
+        "opi_evaluator": "passed",
+        "opi_acceptance": "phase10-docs-guards-nongoals, phase10-focused-regression-and-final-gates, phase10-exit-trace-completeness; phase10_forbidden_current_scope_claims_rejected (6 Phase-10-NOVEL non-goal overclaim needles EN+ZH via claim-verb form to avoid Future Ecosystem Candidates table + wrapped non-goals paragraph false-positive; inline no_positive_claim non-vacuity self-proof; non-overlapping with phase5/9/10.6 guards) + phase10_exit_trace_completeness (SC1-SC8 + 4 workstream goals + 11 non-goals reconstructed from opi-spec.md/+zh; 8-entry (criterion,'met') trace loop). C.1a: docs/snapshots/phase4/opi-impl-state.json appended to task_owned_paths (spec-edit resync). phase4 snapshot -> e7e8eade (CRLF-normalized); live ledger -> 138c8438 (raw)."
+      },
+      "blocker": null,
+      "session_notes": [
+        "2026-06-26: started task 10.7 (auto-pick). Design via read-only discovery Workflow (4 Explore mappers + opus-intent synthesis, 311k tokens) + independent verification of load-bearing facts. DECISION: minimum-change docs+guards slice, NO production runtime change. Verified: SC anchors SC1/SC3/SC4/SC6/SC7 + Future Ecosystem Candidates + 11 non-goals (negated, do-not-claim/不声明) already present in opi-spec.md -> only real gaps are (1) stale Phase 10 status 'planned' (L1387/ZH L1227) and (2) SC5 SessionFacade/SessionRepo type names absent from spec doc (live in opi-agent/src/harness.rs:616,720). Deliverable: status refresh + dedicated Session facade boundaries subsection (EN+ZH) + 2 guard tests (phase10_forbidden_current_scope_claims_rejected mirroring phase9 with claim-phrase needles to avoid FEC-table false-positive; phase10_exit_trace_completeness reconstructing SC1-SC8 + 4 workstream goals + 11 non-goals). DEFERRED: matrix Phase 10 row status (cosmetic, no guard), CHANGELOG (not in task_owned_paths), phase6 snapshot resync (verified NO test consumes it - avoids silent unverified change; memory 'phase6 empty' is stale, will correct after). Dual hash resync: phase4 snapshot CRLF-normalized (mandatory, phase4_ledger pins it) + live ledger raw (Phase A gate). start_commit=4015ffe.",
+        "2026-06-26: task 10.7 PASSED @ d16c364. Minimum-change docs+guards slice (NO production runtime change). Design via read-only discovery Workflow (4 Explore mappers + opus-intent synthesis, 311k tokens) + independent verification. SC anchor audit: SC1/SC3/SC4/SC6/SC7 + Future Ecosystem Candidates + 11 non-goals (negated do-not-claim/不声明) already present in opi-spec.md -> only real gaps were (1) stale status 'planned' (L1387/ZH L1227) and (2) SC5 SessionFacade/SessionRepo type names absent from spec (live in opi-agent/src/harness.rs:616,720). Deliverable: status refresh + initial-seams paragraph (SC2 routing + SC7 regression anchors) + dedicated Session facade boundaries subsection (SC5 types, EN+ZH) + 2 guard tests. Test B phase10_forbidden_current_scope_claims_rejected mirrors phase9 with CLAIM-VERB needles (not bare names) to avoid the FEC-table + wrapped-non-goals-paragraph false-positive (no_positive_claim is per-line; negation keyword only on the paragraph's first line); inline no_positive_claim self-proof + doc-mutation-verified (inject 'supports subscription auth' -> FAIL, revert -> green). Test C phase10_exit_trace_completeness reconstructs SC1-SC8 + 4 workstream goals + 11 non-goals (ws_normalized collapses wrapped paragraph) + 8-entry (criterion,'met') trace loop (clippy const_is_empty fix: avoided .is_empty() on const-empty arrays). C.1a: docs/snapshots/phase4/opi-impl-state.json appended to task_owned_paths. Dual hash resync: phase4 snapshot -> e7e8eade (CRLF-normalized), live ledger -> 138c8438 (raw). DEFERRED (minimum-change): matrix Phase 10 row status (no guard checks matrix; ownership already described L126-128), CHANGELOG (not in task_owned_paths), phase6 snapshot (verified NO test consumes it). D.2 evaluator PASS (all claims CONFIRMED, 3 non-blocking nits: matrix status stale, ws_normalized reliance [safe], SC4 anchor looseness). All cross-cutting gates green. No push. Phase 10 now 7/7 passing -> Phase F.1 phase-exit evaluator should fire next invocation."
+      ]
+    }
+  ],
+  "phase_exit": {
+    "1": {
+      "completed_at": "2026-05-22T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 18 Phase 1 tasks passing. 213 tests green. Audit fixes committed (a66465a): SSE malformed event surfacing, CRLF parsing, BashTool cross-platform, interactive TUI wiring, auth error variant, config base_url/precedence, responsive cancellation. All cross-cutting gates pass: fmt, clippy, doc, smoke.",
+      "snapshot_path": "docs/snapshots/phase1/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "1.0",
+          "title": "introduce Phase 1 dependencies",
+          "status": "passing",
+          "verified_at_commit": "4d9c643671122b34cd39053e4cd8a667314a02a9"
+        },
+        {
+          "id": "1.1",
+          "title": "message and stream types",
+          "status": "passing",
+          "verified_at_commit": "1ae20e1d024df4a1a8d3d3ae1012f33e70420937"
+        },
+        {
+          "id": "1.2",
+          "title": "replace placeholder provider trait",
+          "status": "passing",
+          "verified_at_commit": "0f7d2bd2809036b86ef6d79dfa5c2d364f230817"
+        },
+        {
+          "id": "1.3",
+          "title": "Anthropic SSE provider",
+          "status": "passing",
+          "verified_at_commit": "98e4c01c67d2535dfa30ee92c6ae90a13add97d9"
+        },
+        {
+          "id": "1.4",
+          "title": "provider registry",
+          "status": "passing",
+          "verified_at_commit": "ce62740c1b2907a8d8443dc1bb2f3b16eccddfb3"
+        },
+        {
+          "id": "1.5",
+          "title": "tool trait and schema validation",
+          "status": "passing",
+          "verified_at_commit": "0aa38e71ec3465111f9d659172c450a649a4d12f"
+        },
+        {
+          "id": "1.6",
+          "title": "agent_loop",
+          "status": "passing",
+          "verified_at_commit": "8db09ba18c19ce718f10e22ea75c70ef043de87b"
+        },
+        {
+          "id": "1.7",
+          "title": "Agent wrapper",
+          "status": "passing",
+          "verified_at_commit": "e5ff0ece2c30d7b42517d0de2513fcebcb2b7980"
+        },
+        {
+          "id": "1.8",
+          "title": "hooks and queues",
+          "status": "passing",
+          "verified_at_commit": "b0bedb06218f0d24ea7468fb10803d0c80175947"
+        },
+        {
+          "id": "1.9",
+          "title": "read, write, edit, bash",
+          "status": "passing",
+          "verified_at_commit": "dd236473b67263d0ceb5042e56e32bc18fadc000"
+        },
+        {
+          "id": "1.10",
+          "title": "glob, grep",
+          "status": "passing",
+          "verified_at_commit": "ce0e38478a5ce447e99b4b3077a627ef8995719c"
+        },
+        {
+          "id": "1.11",
+          "title": "system prompt construction",
+          "status": "passing",
+          "verified_at_commit": "0f8a3327ac2ff78e90542e918f5c3c5edbf7b2b2"
+        },
+        {
+          "id": "1.12",
+          "title": "TUI shell",
+          "status": "passing",
+          "verified_at_commit": "f5280529fc5aa963fac51251a89d92a1c345dc0b"
+        },
+        {
+          "id": "1.13",
+          "title": "markdown/code rendering",
+          "status": "passing",
+          "verified_at_commit": "8de104fdd3283587f991d3985b1b14df5b87e22a"
+        },
+        {
+          "id": "1.14",
+          "title": "interactive CLI wiring",
+          "status": "passing",
+          "verified_at_commit": "f42321aa045fd2bcc3416d5a0aa5743e7d57830f"
+        },
+        {
+          "id": "1.15",
+          "title": "non-interactive mode",
+          "status": "passing",
+          "verified_at_commit": "2c9da2ffb33c5656f5f762663b10197942a7c204"
+        },
+        {
+          "id": "1.16",
+          "title": "TOML config loading",
+          "status": "passing",
+          "verified_at_commit": "51f8c46033d776591b261dab05397bcbac37c309"
+        },
+        {
+          "id": "1.17",
+          "title": "integration harness",
+          "status": "passing",
+          "verified_at_commit": "c4d2a3c49fa5ff8df056685e1687f69537309f9d"
+        }
+      ],
+      "audit_notes": [
+        "Audit note (2026-05-22): tasks 1.14, 1.15, 1.16 have evaluator_required=true in ledger but Opi-Evaluator: not-required in commit footers. Root cause: evaluator gate was run but determined these tasks did not require independent evaluation beyond mechanical gates (cli-runtime tier auto-flag is conservative). Commits are not amended; footer is authoritative for audit. Ledger evidence.opi_evaluator now mirrors the actual footer value."
+      ]
+    },
+    "2": {
+      "completed_at": "2026-05-23T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 16 Phase 2 tasks passing. 537 tests green. All cross-cutting gates pass: fmt, clippy, doc.",
+      "snapshot_path": "docs/snapshots/phase2/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "2.1",
+          "title": "OpenAI-compatible chat provider",
+          "status": "passing",
+          "verified_at_commit": "3ace5b8ba9b054b2c26af450d1877d35841e1c02"
+        },
+        {
+          "id": "2.2",
+          "title": "OpenRouter provider profile",
+          "status": "passing",
+          "verified_at_commit": "e39b3b840f5187128a8a5d09d7dc627f9aaa41b7"
+        },
+        {
+          "id": "2.3",
+          "title": "OpenAI Responses provider",
+          "status": "passing",
+          "verified_at_commit": "2fa6c3a3558e0ebcd6b3128917349fcd7298e2e9"
+        },
+        {
+          "id": "2.4",
+          "title": "Google Gemini provider",
+          "status": "passing",
+          "verified_at_commit": "35cd3a43a17d445432c7e64bacb8fe7bd3cb1809"
+        },
+        {
+          "id": "2.5",
+          "title": "Mistral provider",
+          "status": "passing",
+          "verified_at_commit": "51c9201d5f9633653ac09f158b1ba48dd6398465"
+        },
+        {
+          "id": "2.6",
+          "title": "session v1 JSONL storage",
+          "status": "passing",
+          "verified_at_commit": "045b587420c9a3686c4166963368ccdea9724f35"
+        },
+        {
+          "id": "2.7",
+          "title": "session list/resume/delete",
+          "status": "passing",
+          "verified_at_commit": "1e1022329b8a227bdd05efb6cbfc8d9b049b93f4"
+        },
+        {
+          "id": "2.8",
+          "title": "compaction",
+          "status": "passing",
+          "verified_at_commit": "e76eb39541e83bd4a4566e436966685ad3fbcdb1"
+        },
+        {
+          "id": "2.9",
+          "title": "thinking/reasoning support",
+          "status": "passing",
+          "verified_at_commit": "70910e2e80781fc60c85929f0e905010fa0bd093"
+        },
+        {
+          "id": "2.10",
+          "title": "usage and cost tracking",
+          "status": "passing",
+          "verified_at_commit": "279ba3fa97f9d6da990efe3a88824fc9321c1863"
+        },
+        {
+          "id": "2.11",
+          "title": "diff view",
+          "status": "passing",
+          "verified_at_commit": "99408db2e6bb5cd554a9f49ed84f65303beea0a6"
+        },
+        {
+          "id": "2.12",
+          "title": "themes",
+          "status": "passing",
+          "verified_at_commit": "ab5747f9d8b4ae5d70b01080715bc47202ca780a"
+        },
+        {
+          "id": "2.13",
+          "title": "keybindings",
+          "status": "passing",
+          "verified_at_commit": "eab52b490515dfbad495b8c3f505a02cd76fffe6"
+        },
+        {
+          "id": "2.14",
+          "title": "--json NDJSON mode",
+          "status": "passing",
+          "verified_at_commit": "166c1ede64965dfad03df098fe1080c54db11770"
+        },
+        {
+          "id": "2.15",
+          "title": "retry/backoff/rate limits",
+          "status": "passing",
+          "verified_at_commit": "6510b92f22397653c1848face82d9f1563b9b907"
+        },
+        {
+          "id": "2.16",
+          "title": "session contract tests",
+          "status": "passing",
+          "verified_at_commit": "43a64dcfba38d05996d51c078da0e7c31a19fec7"
+        }
+      ],
+      "audit_notes": []
+    },
+    "3": {
+      "completed_at": "2026-05-27T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 13 Phase 3 tasks passing. All cross-cutting gates pass: fmt, clippy, doc. Enterprise providers (Bedrock, Azure, Vertex) reviewed by code-reviewer with bugs fixed before commit.",
+      "snapshot_path": "docs/snapshots/phase3/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "3.1",
+          "title": "AWS Bedrock provider",
+          "status": "passing",
+          "verified_at_commit": "99b263d"
+        },
+        {
+          "id": "3.2",
+          "title": "Azure OpenAI provider",
+          "status": "passing",
+          "verified_at_commit": "5d43811"
+        },
+        {
+          "id": "3.3",
+          "title": "Google Vertex provider",
+          "status": "passing",
+          "verified_at_commit": "e079e33"
+        },
+        {
+          "id": "3.4",
+          "title": "image input",
+          "status": "passing",
+          "verified_at_commit": "bba5bbb"
+        },
+        {
+          "id": "3.5",
+          "title": "image tool results",
+          "status": "passing",
+          "verified_at_commit": "bcff45f6c1316160303f971ad29bfc2ca8919308"
+        },
+        {
+          "id": "3.6",
+          "title": "terminal image rendering",
+          "status": "passing",
+          "verified_at_commit": "44a8091"
+        },
+        {
+          "id": "3.7",
+          "title": "AGENTS.md / CLAUDE.md context loading",
+          "status": "passing",
+          "verified_at_commit": "823bd2b"
+        },
+        {
+          "id": "3.8",
+          "title": "pi-style tool selection and safety hooks",
+          "status": "passing",
+          "verified_at_commit": "f2a8a37"
+        },
+        {
+          "id": "3.9",
+          "title": "find / ls built-in tool parity",
+          "status": "passing",
+          "verified_at_commit": "5996fd7"
+        },
+        {
+          "id": "3.10",
+          "title": "shell completions",
+          "status": "passing",
+          "verified_at_commit": "d6442d6"
+        },
+        {
+          "id": "3.11",
+          "title": "fuzzy model/session picker",
+          "status": "passing",
+          "verified_at_commit": "82b10d6"
+        },
+        {
+          "id": "3.12",
+          "title": "proxy support",
+          "status": "passing",
+          "verified_at_commit": "444db3d"
+        },
+        {
+          "id": "3.13",
+          "title": "connection pooling tuning",
+          "status": "passing",
+          "verified_at_commit": "b6d1dc9"
+        }
+      ],
+      "audit_notes": [
+        "Phase 3 hardening (2026-05-28): Cross-audit verification of Codex/GPT-5.5/GLM-5.1 findings.",
+        "Fixed: Bedrock retry-after parsing, Azure endpoint validation, Bedrock URL image rejection, ls truncation count, compaction image placeholders, global context files, proxy wiring.",
+        "Added: --list-models CLI flag (table + NDJSON), --image non-interactive runtime, prompt_with_content agent method.",
+        "Deferred to Phase 4: Picker TUI integration, interactive --image with TUI preview.",
+        "Documented scope limitations: Bedrock full ambient credential chain (IMDS/SSO/credential_process), Vertex service-account/ADC."
+      ]
+    },
+    "4": {
+      "completed_at": "2026-06-05T16:30:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 19 Phase 4 tasks passing. 53 web-ui tests + 9 RPC integration tests + existing test suites all green. Cross-cutting gates pass: fmt, clippy, doc, smoke.",
+      "snapshot_path": "docs/snapshots/phase4/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "4.1",
+          "title": "RPC JSONL mode",
+          "status": "passing",
+          "verified_at_commit": "b64397b"
+        },
+        {
+          "id": "4.2",
+          "title": "SDK embedding surface",
+          "status": "passing",
+          "verified_at_commit": "0dc0dd7"
+        },
+        {
+          "id": "4.3",
+          "title": "settle opi-agent::Transport",
+          "status": "passing",
+          "verified_at_commit": "691ee33"
+        },
+        {
+          "id": "4.4",
+          "title": "extension trait, lifecycle hooks, custom tools, custom commands, custom messages, and extension state",
+          "status": "passing",
+          "verified_at_commit": "9caed40"
+        },
+        {
+          "id": "4.5",
+          "title": "extension/resource loading strategy",
+          "status": "passing",
+          "verified_at_commit": "8977118"
+        },
+        {
+          "id": "4.6",
+          "title": "custom provider/model registration",
+          "status": "passing",
+          "verified_at_commit": "196b6cf"
+        },
+        {
+          "id": "4.7.1",
+          "title": "skills with progressive discovery",
+          "status": "passing",
+          "verified_at_commit": "d93b3ef"
+        },
+        {
+          "id": "4.7.2",
+          "title": "prompt fragments/templates with progressive discovery",
+          "status": "passing",
+          "verified_at_commit": "f625b5f"
+        },
+        {
+          "id": "4.7.3",
+          "title": "themes with progressive discovery",
+          "status": "passing",
+          "verified_at_commit": "286d4a8"
+        },
+        {
+          "id": "4.7.4",
+          "title": "packages with progressive resource composition",
+          "status": "passing",
+          "verified_at_commit": "ce83b35"
+        },
+        {
+          "id": "4.8.1",
+          "title": "permission gate extension/package example",
+          "status": "passing",
+          "verified_at_commit": "5cfc356"
+        },
+        {
+          "id": "4.8.2",
+          "title": "protected paths extension/package example",
+          "status": "passing",
+          "verified_at_commit": "02e0bea"
+        },
+        {
+          "id": "4.8.3",
+          "title": "sub-agent extension/package example",
+          "status": "passing",
+          "verified_at_commit": "be79c3b"
+        },
+        {
+          "id": "4.8.4",
+          "title": "plan mode extension/package example",
+          "status": "passing",
+          "verified_at_commit": "9bcf12302af164d34646083987ec3b0b7f6814e4"
+        },
+        {
+          "id": "4.8.5",
+          "title": "todo extension/package example",
+          "status": "passing",
+          "verified_at_commit": "575823e"
+        },
+        {
+          "id": "4.8.6",
+          "title": "MCP adapter extension/package example",
+          "status": "passing",
+          "verified_at_commit": "8c3ec06"
+        },
+        {
+          "id": "4.9",
+          "title": "session branching UI",
+          "status": "passing",
+          "verified_at_commit": "df3ddec"
+        },
+        {
+          "id": "4.10",
+          "title": "streaming proxy",
+          "status": "passing",
+          "verified_at_commit": "82d9392"
+        },
+        {
+          "id": "4.11",
+          "title": "web UI implementation that consumes RPC/SDK events",
+          "status": "passing",
+          "verified_at_commit": "a3103f3"
+        }
+      ],
+      "audit_notes": []
+    },
+    "5": {
+      "completed_at": "2026-06-09T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 9 Phase 5 tasks passing. 1770 workspace tests. 15 documentation guard tests enforce truthful Phase 5 MVP descriptions. Package CLI (add/remove/list/doctor), manifest V2 with adapter declarations, process-JSONL adapter hosting via opi-extension-jsonl-v1, adapter-to-runtime bridging, and runnable example adapter packages all verified. Cross-cutting gates pass: fmt, clippy, doc, smoke.",
+      "snapshot_path": "docs/snapshots/phase5/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "5.1",
+          "title": "Package store and source model",
+          "status": "passing",
+          "verified_at_commit": "e3d1b80"
+        },
+        {
+          "id": "5.2",
+          "title": "Package CLI MVP",
+          "status": "passing",
+          "verified_at_commit": "0094371"
+        },
+        {
+          "id": "5.3",
+          "title": "Manifest V2 compatibility",
+          "status": "passing",
+          "verified_at_commit": "6be0c59"
+        },
+        {
+          "id": "5.4",
+          "title": "Adapter protocol types",
+          "status": "passing",
+          "verified_at_commit": "a67c1b6"
+        },
+        {
+          "id": "5.5",
+          "title": "Adapter process host",
+          "status": "passing",
+          "verified_at_commit": "175d308"
+        },
+        {
+          "id": "5.6",
+          "title": "Adapter runtime bridge",
+          "status": "passing",
+          "verified_at_commit": "b462c5b"
+        },
+        {
+          "id": "5.7",
+          "title": "Harness and startup integration",
+          "status": "passing",
+          "verified_at_commit": "3379d87"
+        },
+        {
+          "id": "5.8",
+          "title": "Runnable example adapter packages",
+          "status": "passing",
+          "verified_at_commit": "3fb47a6cf9cf7ebb7bad46053384539958795ef4"
+        },
+        {
+          "id": "5.9",
+          "title": "Documentation, alignment, and guards",
+          "status": "passing",
+          "verified_at_commit": "260b982"
+        }
+      ]
+    },
+    "6": {
+      "completed_at": "2026-06-16T16:32:06Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 6 Phase 6 tasks passing. Independent phase-exit evaluator (did not read the ledger) traced the design's 10 Success Criteria to code/tests: all met. (1) docs identify workspace as 0.5.1 with historical rows preserved; (2) EN/ZH docs synchronized; (3) Phase 6 baseline audit reconciles Phase 5 findings; (4) package startup success + degraded-path tests; (5) adapter protocol lifecycle/failure/cancellation/state/shutdown tests; (6) session/RPC extension-state persistence + startup-diagnostics tests; (7) documentation guards prevent overclaiming; (8) Future Ecosystem backlog exists and is non-committal; (9) no npm/marketplace/OAuth-parity/pi-web-ui-parity/permission-enforcement/TS-extension-compat/new-shared-types-crate added (all 13 non-goals confirmed-absent); (10) final gates pass (fmt, clippy -D warnings, doc -D warnings, test --workspace --all-targets 0 failures, smoke). Cross-cutting gates: fmt, clippy, doc, smoke all green.",
+      "snapshot_path": "docs/snapshots/phase6/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "6.1",
+          "title": "Documentation truth and version synchronization",
+          "status": "passing",
+          "verified_at_commit": "693c2e7fe5d0469cf76861c2712addde31a7693b"
+        },
+        {
+          "id": "6.2",
+          "title": "Phase 6 baseline audit and future ecosystem backlog",
+          "status": "passing",
+          "verified_at_commit": "1d386c51bf6084652b4f268725225bfd8d8a3dbe"
+        },
+        {
+          "id": "6.3",
+          "title": "Adapter protocol contract hardening",
+          "status": "passing",
+          "verified_at_commit": "571f89ece07f1ac66933f125edc52650c1c13132"
+        },
+        {
+          "id": "6.4",
+          "title": "Package runtime path and degraded diagnostics hardening",
+          "status": "passing",
+          "verified_at_commit": "8bb0a0a4ef4ee65e67f8786734769850fbc325e5"
+        },
+        {
+          "id": "6.5",
+          "title": "Session and RPC adapter boundary hardening",
+          "status": "passing",
+          "verified_at_commit": "e5118fd2fed0e1e0868dcd7567b248cb7c382167"
+        },
+        {
+          "id": "6.6",
+          "title": "Alignment guards and final Phase 6 gates",
+          "status": "passing",
+          "verified_at_commit": "d78c28fc1a627c658437ff299d675191005919dc"
+        }
+      ],
+      "audit_notes": []
+    },
+    "7": {
+      "completed_at": "2026-06-19T07:35:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 6 Phase 7 tasks passing (7.1 @ 4812c94, 7.2 @ d10ba5d, 7.3 @ fcbcd4c, 7.4 @ e272881, 7.5 @ b32c289, 7.6 @ 42969ad). Independent phase-exit evaluator (did not read the ledger) traced the design's 8 Success Criteria + 9 Non-Goals from docs/superpowers/specs/2026-06-15-phase7-reliability-observability-design.md to code/tests: all met, zero not-met, zero deferred-by-updated-design. SC1 judged satisfied by the additive structured-boundaries scoping (7.5 aggregate rollups kept as 0.x wire per spec 'JSON and RPC Exposure'). Cross-cutting gates: fmt clean, clippy -D warnings clean, doc -D warnings clean, full workspace test 0 failures (134 binaries), smoke 64 passed. Residuals (non-blocking, future phases): (1) SC5 harness startup surfaces adapter degradation as metadata strings, not typed Diagnostic+observe(); (2) aggregate rollups remain pre-0.x wire shapes pending Phase 8 stabilization; (3) schema versions stay unstable-0.x (TRACE_SCHEMA_VERSION=1, SDK_SCHEMA_VERSION=2) pending Phase 8 runtime-contract stabilization.",
+      "snapshot_path": "docs/snapshots/phase7/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "7.1",
+          "title": "Shared diagnostic model and redaction core",
+          "status": "passing",
+          "verified_at_commit": "4812c94dc2c3b69072520dee543141e5505c53fc"
+        },
+        {
+          "id": "7.2",
+          "title": "Provider/runtime diagnostic classification",
+          "status": "passing",
+          "verified_at_commit": "d10ba5d232edc8610f5657e02b15b831ea4d0c5b"
+        },
+        {
+          "id": "7.3",
+          "title": "Local trace envelope and trace sink",
+          "status": "passing",
+          "verified_at_commit": "fcbcd4cea8148d9ce0f037ca1cf98d5a7f917362"
+        },
+        {
+          "id": "7.4",
+          "title": "Top-level opi doctor command",
+          "status": "passing",
+          "verified_at_commit": "e2728814ba6248e806ccda8353eab94f747c7e0f"
+        },
+        {
+          "id": "7.5",
+          "title": "JSON/RPC diagnostics and trace exposure",
+          "status": "passing",
+          "verified_at_commit": "b32c289b2d1851ecdff11030d5c9e25418aaad1d"
+        },
+        {
+          "id": "7.6",
+          "title": "Documentation, redaction guards, and final Phase 7 gates",
+          "status": "passing",
+          "verified_at_commit": "42969ad877b3368b3d7f751c9c818c9a2d222788"
+        }
+      ]
+    },
+    "8": {
+      "completed_at": "2026-06-23T00:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 7 Phase 8 tasks passing (8.1 @ 8816d32, 8.2 @ 07ffca5, 8.3 @ 169b7ce, 8.4 @ 93cab3f, 8.5 @ b0a6a8c, 8.6 @ dfcba73, 8.7 @ 1f270b8). Independent phase-exit evaluator (did not read the ledger) traced the design's Goals (6), Non-Goals (8), and all 8 Success Criteria plus the Error Handling taxonomy, Testing Strategy, and Phase 9 Handoff note to code/tests/docs: 25/25 criteria met, 0 deferred, 0 not-met. Runtime event order, hook semantics, tool scheduling/termination, cancellation, SDK/RPC command-state, diagnostics/trace wire, and the public API surface classification (supported 0.x / unstable internal / candidate removal) are documented and contract-tested. No stable 1.0 API, TypeScript extension API, package ecosystem expansion, new adapter kind, web UI, provider OAuth, in-core workflow runtime, MCP runtime, shared opi-types crate, or whole-loop rewrite was added. Cross-cutting gates: fmt, clippy -D warnings, doc -D warnings, test --workspace --all-targets (2005 passed, 0 failed), smoke all green.",
+      "snapshot_path": "docs/snapshots/phase8\\opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "8.1",
+          "title": "Runtime event order and queue-polling contract",
+          "status": "passing",
+          "verified_at_commit": "8816d32b34240ea1c9706c0515e50feaaca0f64f"
+        },
+        {
+          "id": "8.2",
+          "title": "Hook order and failure semantics contract",
+          "status": "passing",
+          "verified_at_commit": "07ffca5528c15e98e0949b43a0347bbd6ebf17f6"
+        },
+        {
+          "id": "8.3",
+          "title": "Tool scheduling and termination contract",
+          "status": "passing",
+          "verified_at_commit": "169b7cee96872ed35deb21df0eee41722f268004"
+        },
+        {
+          "id": "8.4",
+          "title": "Cancellation and finalized-state contract",
+          "status": "passing",
+          "verified_at_commit": "93cab3f87307910d4f17b95160654270446d05b8"
+        },
+        {
+          "id": "8.5",
+          "title": "SDK and RPC command-state contract",
+          "status": "passing",
+          "verified_at_commit": "b0a6a8c1449ec51d913d3945a8b57b9e16397e91"
+        },
+        {
+          "id": "8.6",
+          "title": "Runtime diagnostics and trace wire stabilization",
+          "status": "passing",
+          "verified_at_commit": "dfcba73f3e0c1a55200c645092ade361cfd933fe"
+        },
+        {
+          "id": "8.7",
+          "title": "API surface classification, docs, non-goal guards, and final Phase 8 gates",
+          "status": "passing",
+          "verified_at_commit": "1f270b8e3ace885bf38a1135d5e2b5e8789d552f"
+        }
+      ],
+      "audit_notes": [
+        "Task 8.7 (final Phase 8 task): the independent D.2 evaluator initially returned PASS-WITH-CONCERNS with 3 confirmed medium guard-quality blockers in the new runtime_contract_docs.rs (tier not bound to surface; lib.rs cross-check bare-substring collision with AgentError/ToolDef; broad Chinese negation tokens 婵犵數濮烽弫鎼佸磻濞戞瑥绶為柛銉墮缁€鍫熺節闂堟稒锛旈柤?濠电姷鏁搁崑鐐哄垂閸洖绠伴柛婵勫劤閻捇鏌ｉ姀銏╃劸闂佽￥鍊曢埞鎴︽偐閸欏鎮欑紓浣插亾?濠电姷鏁搁崑鐐哄垂閸洖绠伴柛婵勫劤閻捇鎮楅棃娑欏暈妞ゎ偅娲熼弻宥夊传閸曨剙娅ｇ紓浣插亾?co-occurrence leaks). All 3 were fixed before commit (per-line surface->tier binding map; exact `pub use` re-export line pins; removed the broad tokens and rephrased ZH docs to narrow 濠电姷鏁搁崑鐐哄垂閸洖绠伴柛婵勫劤閻捇鎮楅棃娑欏暈妞?濠电姷鏁搁崑鐐哄垂閸洖绠伴柛婵勫劤閻捇鏌熺紒銏犳灍闁哄拋鍓熼弻鐔兼偋閸喓鍑￠梺?濠电姷鏁搁崑鐐哄垂閸洖绠伴柛婵勫劤閻挾鈧娲栧ú锕傦綖?tokens with the substring-co-occurrence limitation documented) and independently re-verified RESOLVED via mutation testing.",
+        "Residual (non-blocking, documented): the no_positive_claim substring helper shares a per-line co-occurrence limitation with the Phase 6/7 guards (a deceptive line placing a negation word next to a positive claim can leak). Fully closing it requires structural clause parsing across all three phase guards and is out of Phase 8 scope; the Phase 8 helper was kept at the narrow Phase 7 baseline with the limitation documented in its doc-comment."
+      ]
+    },
+    "9": {
+      "completed_at": "2026-06-25T06:05:28Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "Independent phase-exit evaluator (did not read the ledger) rebuilt SC1-9 and the 11 non-goals from docs/superpowers/specs/2026-06-24-phase9-pi-0-80-2-baseline-realignment-design.md and traced each to current docs/tests: 9/9 met, 0 deferred, 0 not-met. All 11 non-goals confirmed not implemented. git diff 6c43ba6..HEAD shows only the docs-guard test file changed across the whole phase (no src/manifest/scripts/opi-types). 6 new Phase 9 guard tests pass (mutation-verified non-vacuous); Phase 5-8 regression guards intact. Verdict ARCHIVE-READY.",
+      "snapshot_path": "docs/snapshots/phase9/opi-impl-state.json",
+      "criteria_trace": [
+        {
+          "source": "docs/superpowers/specs/2026-06-24-phase9-pi-0-80-2-baseline-realignment-design.md#Phase 9 Success Criteria 1",
+          "criterion": "docs/pi-alignment-matrix.md includes architecture analysis, evidence anchors, and the three-layer alignment dashboard.",
+          "status": "met",
+          "evidence": "docs/pi-alignment-matrix.md Document Control L15-24, Pi Architecture L53-119 (4 packages), Evidence Index L140-159 (.repo/pi-0.80.2 anchors), Alignment Dashboard L171-177 (core/product/ecosystem); guard phase9_alignment_matrix_evidence_baseline passes"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 2",
+          "criterion": "docs/opi-spec*.md and docs/pi-alignment-matrix*.md no longer describe .repo/pi-0.75.3 as the current studied upstream baseline.",
+          "status": "met",
+          "evidence": "grep of 4 normative docs: every pi-0.75.3 occurrence is historical (matrix.md:124,144; matrix.zh.md:61,81); Document Control rows name .repo/pi-0.80.2; guard phase9_current_baseline_is_pi_0_80_2 passes"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 3",
+          "criterion": "English and Chinese normative docs are synchronized.",
+          "status": "met",
+          "evidence": "guard phase9_localized_docs_stay_in_sync verifies EN/ZH pairs (Phase 9 headings, dashboard layers, opi-agent Partial, upstream path, npm/gallery + web/share non-goal framing)"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 4",
+          "criterion": "Phase 9-14 roadmap is documented consistently.",
+          "status": "met",
+          "evidence": "guard phase9_roadmap_numbering_consistent verifies 6 EN+6 ZH spec headings + matrix rows |9|-|14| in both languages; 5 phase10-14 design docs present under docs/superpowers/specs/"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 5",
+          "criterion": "opi-agent package alignment reflects the generic harness gap honestly.",
+          "status": "met",
+          "evidence": "docs/pi-alignment-matrix.md:184 marks opi-agent Partial until the generic AgentHarness gap closes"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 6",
+          "criterion": "Models/Auth and AgentHarness are named as Phase 10 deepening targets.",
+          "status": "met",
+          "evidence": "matrix.md:250 Phase 10 row + spec.md:1392-1393 Phase 10 workstream table name Models/Auth (opi-ai) and generic AgentHarness (opi-agent); ZH counterparts verified"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 7",
+          "criterion": "Future ecosystem candidates are documented with entry conditions.",
+          "status": "met",
+          "evidence": "guard phase9_future_ecosystem_candidates_have_entry_conditions verifies spec Future Ecosystem Candidates section + Entry condition column + 7 candidates + non-committal framing"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 8",
+          "criterion": "Documentation guards reject overclaims for OAuth parity, custom UI parity, npm/gallery, image generation, web/share, and pi session compatibility.",
+          "status": "met",
+          "evidence": "guard phase9_forbidden_current_scope_claims_rejected (parity/compat needles) + existing Phase 5/6 guards (npm, marketplace, update/enable/disable, TS extension API, pi session v3); cargo test phase9 -> 6 passed 0 failed"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 9",
+          "criterion": "No runtime behavior changes occur.",
+          "status": "met",
+          "evidence": "git diff --name-only 6c43ba6..HEAD = only crates/opi-coding-agent/tests/productized_packages_docs.rs (test file, allowed); no crates/*/src, no Cargo.toml/Cargo.lock, no scripts/; crates/opi-types absent"
+        }
+      ],
+      "task_summary": [
+        {
+          "id": "9.1",
+          "title": "Alignment matrix pi 0.80.2 evidence baseline",
+          "status": "passing",
+          "verified_at_commit": "0285972b90ea47d287b8b658481c729f171059de"
+        },
+        {
+          "id": "9.2",
+          "title": "Normative spec baseline and roadmap synchronization",
+          "status": "passing",
+          "verified_at_commit": "26904f229ba3d4d18c0139a6e7cc1b89dc51469d"
+        },
+        {
+          "id": "9.3",
+          "title": "Phase 10-14 supplemental design recast",
+          "status": "passing",
+          "verified_at_commit": "3578b9966c6bb5ec323d3775a6c46b1567914a60"
+        },
+        {
+          "id": "9.4",
+          "title": "Documentation guards and final Phase 9 gates",
+          "status": "passing",
+          "verified_at_commit": "bec6ad7d048e1e8b72f76d5a9bc92a7baba17885"
+        }
+      ]
+    }
+  }
+}
