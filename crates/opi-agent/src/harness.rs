@@ -40,7 +40,7 @@
 //! 10.5), which owns the "branch summaries as context messages, metadata, or
 //! both" decision recorded in Workstream 10.3.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use opi_ai::message::Message;
 use opi_ai::provider::ThinkingConfig;
@@ -49,7 +49,8 @@ use crate::agent::{Agent, AgentControl};
 use crate::loop_types::AgentLoopConfig;
 use crate::message::AgentMessage;
 use crate::session::{
-    CompactionEntry, ExtensionStateEntry, MessageEntry, SessionEntry, SessionHeader, SessionWriter,
+    CompactionEntry, CrashRecovery, ExtensionStateEntry, MessageEntry, SessionEntry, SessionHeader,
+    SessionReader, SessionWriter,
 };
 use crate::session_event::CompactionResult;
 
@@ -594,5 +595,279 @@ impl AgentHarness {
         });
         self.last_entry_id = Some(id);
         entry
+    }
+}
+
+// ============================================================================
+// Session repo + facade (Workstream 10.3, task 10.5)
+// ============================================================================
+
+/// Generic durable session repo: the storage/repo trait boundary above a v1
+/// JSONL session file.
+///
+/// This is the generic session-storage abstraction the coding-agent product
+/// composes over. It owns durable [`append`](SessionRepo::append),
+/// [`load`](SessionRepo::load), and entry-count semantics. `list`/`fork` and
+/// directory policy are intentionally NOT part of this trait: they are
+/// coding-agent product policy (CLI flags, the `OPI_SESSIONS_DIR` path,
+/// `--list-sessions`/`--resume`/`--fork`/`--delete-session`) or Phase 13
+/// session-tree work. A library caller (or contract test) substitutes a
+/// recording or failing repo.
+pub trait SessionRepo {
+    /// Durable-append a session entry.
+    fn append(&mut self, entry: &SessionEntry) -> std::io::Result<()>;
+    /// Read the header, all deserializable entries, and crash-recovery
+    /// metadata. Unknown future entry types are reported via the
+    /// [`CrashRecovery`] rather than fatal (Decision D1).
+    fn load(&self) -> std::io::Result<(SessionHeader, Vec<SessionEntry>, CrashRecovery)>;
+    /// Number of durable entries written so far.
+    fn message_count(&self) -> std::io::Result<usize>;
+}
+
+/// JSONL-backed [`SessionRepo`] over a v1 session file.
+pub struct JsonlSessionRepo {
+    path: PathBuf,
+    writer: SessionWriter,
+    count: usize,
+}
+
+impl JsonlSessionRepo {
+    /// Create a new session file with the given header.
+    pub fn create(path: &Path, header: SessionHeader) -> std::io::Result<Self> {
+        let writer = SessionWriter::create(path, header)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            writer,
+            count: 0,
+        })
+    }
+
+    /// Open an existing session file for appending. Counts the deserializable
+    /// entries already present so [`message_count`](SessionRepo::message_count)
+    /// is accurate on resume.
+    pub fn open(path: &Path) -> std::io::Result<Self> {
+        let count = SessionReader::read_all(path).map(|(_header, entries)| entries.len())?;
+        let writer = SessionWriter::open(path)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            writer,
+            count,
+        })
+    }
+
+    /// Path of the backing session file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl SessionRepo for JsonlSessionRepo {
+    fn append(&mut self, entry: &SessionEntry) -> std::io::Result<()> {
+        self.writer.append(entry)?;
+        self.count += 1;
+        Ok(())
+    }
+
+    fn load(&self) -> std::io::Result<(SessionHeader, Vec<SessionEntry>, CrashRecovery)> {
+        SessionReader::read_with_recovery(&self.path)
+    }
+
+    fn message_count(&self) -> std::io::Result<usize> {
+        Ok(self.count)
+    }
+}
+
+/// Agent-free ordered read/write session facade: the harness session-facade
+/// boundary above a [`SessionRepo`].
+///
+/// `SessionFacade` owns the ordered pending-write queue reused from the
+/// generic harness seam ([`PendingWriteQueue`]) and exposes append/load
+/// semantics over a [`SessionRepo`] backend. It is the `Agent`-free subset of
+/// the session contract: a library caller that needs ordered durable session
+/// writes and active-branch reads without driving an [`Agent`] loop composes
+/// this directly. [`AgentHarness`] keeps the phase-guarded turn lifecycle (it
+/// wraps an `Agent` by value); `SessionFacade` is the stable session seam
+/// Phase 13 extends with richer entry types and context reconstruction.
+///
+/// # Phase 10 decisions (Workstream 10.3)
+///
+/// These four deferred decisions are resolved here and left documented for
+/// Phase 13:
+///
+/// - **D1 (additive-v1):** the v1 JSONL accepts additive `SessionEntry`
+///   variants. `SessionEntry` is `#[non_exhaustive]` and [`SessionReader`]
+///   reports (does not fatal on) lines whose `type` tag it does not recognize,
+///   so a v1 file written by a newer opi remains readable. Phase 13 may
+///   introduce `version = 2`; v1 files stay readable and resumable without a
+///   migration command (spec S9.3). No new entry variants are added in
+///   Phase 10 -- the seam is the non-exhaustive enum plus the forward-compatible
+///   reader.
+/// - **D2 (branch summaries):** a durable branch-summary representation is
+///   metadata, not an injected provider-context message. Its representation
+///   and any context injection are Phase 13 (spec S9.3 lists `branch_summary`
+///   as a Phase 13 v2 target); [`AgentHarness::begin_branch_summary`] keeps
+///   the lifecycle guard introduced in task 10.3.
+/// - **D3 (extension custom messages):** the durable seam persists extension
+///   state (including extension-provided messages); whether and how such
+///   messages enter provider context is governed by the existing
+///   `include_in_llm_context` flag on extension messages and is deferred to
+///   Phase 13 context reconstruction. Phase 10 adds no provider-context
+///   injection.
+/// - **D4 (unfinished-operation recovery):** recovery marks an interrupted
+///   operation and returns to idle; it never replays an in-flight provider
+///   stream and never retries unsafe tools (e.g. `bash`/`write`) on resume.
+///   Provider streams are not resumable. Richer recovery is Phase 13.
+pub struct SessionFacade {
+    repo: Box<dyn SessionRepo>,
+    queue: PendingWriteQueue,
+    last_entry_id: Option<String>,
+    id_counter: u64,
+    savepoint_seq: u64,
+    last_save_point: Option<SavePoint>,
+}
+
+impl SessionFacade {
+    /// Create a new facade over the given repo backend.
+    pub fn new(repo: Box<dyn SessionRepo>) -> Self {
+        Self {
+            repo,
+            queue: PendingWriteQueue::new(),
+            last_entry_id: None,
+            id_counter: 0,
+            savepoint_seq: 0,
+            last_save_point: None,
+        }
+    }
+
+    /// Enqueue an agent-emitted message write. Returns the assigned
+    /// pending-write order. Always flushes before any extension-state write
+    /// enqueued in the same batch.
+    pub fn enqueue_message(&mut self, message: Message) -> HarnessResult<u64> {
+        let id = self.next_id();
+        let parent_id = self.last_entry_id.take();
+        let timestamp = self.next_timestamp();
+        let entry = SessionEntry::Message(MessageEntry {
+            id: id.clone(),
+            parent_id,
+            timestamp,
+            message,
+        });
+        self.last_entry_id = Some(id);
+        Ok(self.queue.enqueue(entry, PendingWriteKind::AgentMessage))
+    }
+
+    /// Enqueue a pending extension/session-state write. Returns the assigned
+    /// pending-write order. Always flushes after any agent-emitted message
+    /// enqueued in the same batch.
+    pub fn enqueue_extension_state(&mut self, state: serde_json::Value) -> HarnessResult<u64> {
+        let id = self.next_id();
+        let parent_id = self.last_entry_id.take();
+        let timestamp = self.next_timestamp();
+        let entry = SessionEntry::ExtensionState(ExtensionStateEntry {
+            id: id.clone(),
+            parent_id,
+            timestamp,
+            state,
+        });
+        self.last_entry_id = Some(id);
+        Ok(self.queue.enqueue(entry, PendingWriteKind::ExtensionState))
+    }
+
+    /// Flush the pending-write queue at a save point. Agent-emitted messages
+    /// are appended before extension-state writes. Returns the settlement
+    /// save point.
+    pub fn flush(&mut self) -> HarnessResult<SavePoint> {
+        let pending_before = self.queue.len();
+        self.flush_internal()?;
+        let pending_after = self.queue.len();
+        Ok(self.record_save_point(pending_before, pending_after))
+    }
+
+    /// Abort: best-effort flush ALL accepted pending writes. Never silently
+    /// discards an accepted write. On a flush failure, returns
+    /// [`HarnessError::AbortLeftPending`] with the number of unflushed writes;
+    /// the writes remain queued.
+    pub fn abort(&mut self) -> HarnessResult<()> {
+        let outcome = self.flush_internal();
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(_) => Err(HarnessError::AbortLeftPending(self.queue.len())),
+        }
+    }
+
+    /// Read the header, all deserializable entries, and crash-recovery
+    /// metadata from the backing repo.
+    pub fn load(&self) -> std::io::Result<(SessionHeader, Vec<SessionEntry>, CrashRecovery)> {
+        self.repo.load()
+    }
+
+    /// Reconstruct the active branch tip from durable entries. Deterministic:
+    /// the last `Leaf` entry's `entry_id` when it resolves to a known entry,
+    /// otherwise the trunk tip.
+    pub fn active_tip(&self) -> std::io::Result<Option<String>> {
+        let (_header, entries, _recovery) = self.repo.load()?;
+        Ok(crate::session_branch::SessionTree::from_entries(&entries)
+            .active_tip()
+            .map(str::to_owned))
+    }
+
+    /// Accepted pending writes not yet flushed.
+    pub fn pending_count(&self) -> usize {
+        self.queue.len()
+    }
+
+    /// Durable entry count reported by the backing repo.
+    pub fn message_count(&self) -> std::io::Result<usize> {
+        self.repo.message_count()
+    }
+
+    /// Most recent save point, if any.
+    pub fn last_save_point(&self) -> Option<SavePoint> {
+        self.last_save_point
+    }
+
+    // -- Internal helpers ---------------------------------------------------
+
+    /// Drain the queue in order and append each entry. On a write failure, the
+    /// unflushed tail is re-queued (order preserved) and the error is
+    /// returned; the queue is never silently emptied across a failure.
+    fn flush_internal(&mut self) -> Result<(), std::io::Error> {
+        let mut ordered = self.queue.drain_ordered();
+        let mut idx = 0;
+        while idx < ordered.len() {
+            if let Err(e) = self.repo.append(&ordered[idx].entry) {
+                let tail: Vec<_> = ordered.drain(idx..).collect();
+                self.queue.reinsert(tail);
+                return Err(e);
+            }
+            idx += 1;
+        }
+        Ok(())
+    }
+
+    fn record_save_point(&mut self, pending_before: usize, pending_after: usize) -> SavePoint {
+        self.savepoint_seq += 1;
+        let sp = SavePoint {
+            seq: self.savepoint_seq,
+            // The facade has no phase machine (that lives in `AgentHarness`);
+            // every facade save point is recorded at idle.
+            at_phase: Phase::Idle,
+            pending_before,
+            pending_after,
+        };
+        self.last_save_point = Some(sp);
+        sp
+    }
+
+    fn next_id(&mut self) -> String {
+        self.id_counter += 1;
+        format!("entry-{}", self.id_counter)
+    }
+
+    fn next_timestamp(&self) -> String {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis().to_string())
+            .unwrap_or_else(|_| "0".to_string())
     }
 }
