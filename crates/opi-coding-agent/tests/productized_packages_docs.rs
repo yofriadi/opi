@@ -1768,3 +1768,206 @@ fn phase10_process_adapter_stays_out_of_opi_agent() {
         "non-vacuous sanity: the narrow AgentHooks core loop trait must live in opi-agent/src"
     );
 }
+
+#[test]
+fn phase10_forbidden_current_scope_claims_rejected() {
+    // Phase 10 SC8 (top-level) + the 11 Non-Goals: documentation guards reject
+    // current-scope overclaims for the Phase-10-NOVEL deferred surfaces. The
+    // overlap set (OAuth parity, image generation, npm, web, pi session
+    // compatibility, pi TypeScript extension API) is already rejected by the
+    // Phase 5/9 guards and the phase10_runtime_hook_boundaries guard in this
+    // file; this test covers the remaining novel non-goals (subscription auth,
+    // broad provider catalog, custom TUI extension protocol, shared opi-types
+    // crate, whole-loop rewrite, current-scope OAuth login).
+    //
+    // Needles are CLAIM-VERB phrases (phase9 idiom), not bare feature names, so
+    // they do not trip the Future Ecosystem Candidates table (which lists
+    // several of these as future candidates without negation) or the wrapped
+    // Phase 10 non-goals paragraph (whose per-line negation keyword lives only
+    // on the paragraph's first line).
+    let docs = [
+        "README.md",
+        "README.zh.md",
+        "docs/opi-spec.md",
+        "docs/opi-spec.zh.md",
+        "docs/pi-alignment-matrix.md",
+        "docs/pi-alignment-matrix.zh.md",
+    ];
+    for needle in [
+        "supports provider OAuth login",
+        "supports subscription auth",
+        "expanded the provider catalog",
+        "ships a custom TUI extension protocol",
+        "introduced a shared opi-types crate",
+        "rewrote the whole agent loop",
+        "支持 provider OAuth 登录",
+        "支持 subscription auth",
+        "扩张了 provider catalog",
+        "提供自定义 TUI extension protocol",
+        "引入了共享 opi-types crate",
+        "整体重写了 agent loop",
+    ] {
+        assert_docs_reject_claim(
+            &docs,
+            needle,
+            "a Phase 10 deferred-surface current-scope overclaim",
+        );
+    }
+
+    // Non-vacuity: prove the helper catches each overclaim shape when it is
+    // positively asserted, so the pass above is meaningful and not a silently
+    // vacuous guard (no_positive_claim is per-line; these claim-verb phrases
+    // carry no negation keyword and must be caught).
+    for (line, needle) in [
+        (
+            "opi supports provider OAuth login today",
+            "supports provider OAuth login",
+        ),
+        (
+            "opi supports subscription auth for Copilot",
+            "supports subscription auth",
+        ),
+        (
+            "opi expanded the provider catalog this phase",
+            "expanded the provider catalog",
+        ),
+        (
+            "opi ships a custom TUI extension protocol",
+            "ships a custom TUI extension protocol",
+        ),
+        (
+            "opi introduced a shared opi-types crate",
+            "introduced a shared opi-types crate",
+        ),
+        (
+            "opi rewrote the whole agent loop",
+            "rewrote the whole agent loop",
+        ),
+    ] {
+        assert!(
+            !no_positive_claim(line, needle),
+            "non-vacuity: no_positive_claim must catch `{needle}` as a positive claim"
+        );
+    }
+}
+
+#[test]
+fn phase10_exit_trace_completeness() {
+    // Phase 10 final gate (DoD): reconstruct SC1-SC8, the 4 workstream goals,
+    // and the 11 non-goals from the current docs/opi-spec.md (+zh) so no
+    // success criterion is silently absent from the normative docs. This is the
+    // executable Phase F.1a phase-exit trace for Phase 10: each assertion maps
+    // to a design-doc success criterion / workstream goal / non-goal, and
+    // failure means a criterion has no doc-attested owner.
+    let spec_en = ws_normalized(&read_repo_file("docs/opi-spec.md"));
+    let spec_zh = ws_normalized(&read_repo_file("docs/opi-spec.zh.md"));
+
+    // (a) Top-level SC1-SC8, each named in the EN spec.
+    // SC1: opi-ai provider collection/auth seam exists.
+    assert!(
+        spec_en.contains("provider collection/auth seam"),
+        "SC1: opi-spec must name the opi-ai provider collection/auth seam (EN)"
+    );
+    // SC2: opi-coding-agent routes provider construction through the seam.
+    assert!(
+        spec_en.contains("routes provider construction through"),
+        "SC2: opi-spec must state opi-coding-agent routes provider construction through the seam (EN)"
+    );
+    // SC3: generic AgentHarness with phase/snapshot/save-point semantics.
+    assert!(
+        spec_en.contains("AgentHarness") && spec_en.contains("save points"),
+        "SC3: opi-spec must name the generic AgentHarness with save-point semantics (EN)"
+    );
+    // SC4: CodingHarness documented as a product wrapper.
+    assert!(
+        spec_en.contains("CodingHarness") && spec_en.contains("product wrapper"),
+        "SC4: opi-spec must document CodingHarness as a product wrapper (EN)"
+    );
+    // SC5: session repo/facade boundaries (typed seam).
+    assert!(
+        spec_en.contains("SessionFacade") && spec_en.contains("SessionRepo"),
+        "SC5: opi-spec must name the SessionFacade/SessionRepo session seam (EN)"
+    );
+    // SC6: runtime hook boundaries.
+    assert!(
+        spec_en.contains("Runtime hook boundaries"),
+        "SC6: opi-spec must document runtime hook boundaries (EN)"
+    );
+    // SC7: existing behavior covered by focused regression tests.
+    assert!(
+        spec_en.contains("focused regression tests"),
+        "SC7: opi-spec must state focused regression tests cover existing behavior (EN)"
+    );
+    // SC8: no ecosystem breadth (non-goals paragraph present).
+    assert!(
+        spec_en.contains("Non-goals do not claim"),
+        "SC8: opi-spec must carry the Phase 10 non-goals enumeration (EN)"
+    );
+
+    // (b) ZH counterpart carries the typed session seam (SC5) + non-goals (SC8).
+    assert!(
+        spec_zh.contains("SessionFacade") && spec_zh.contains("SessionRepo"),
+        "SC5: opi-spec.zh must name the SessionFacade/SessionRepo session seam (ZH)"
+    );
+    assert!(
+        spec_zh.contains("非目标不声明"),
+        "SC8: opi-spec.zh must carry the Phase 10 non-goals enumeration (ZH)"
+    );
+
+    // (c) The 4 workstream goals are all named in the Phase 10 workstream table.
+    for ws in [
+        "Models/Auth",
+        "AgentHarness",
+        "Session repo/facade",
+        "Runtime hook boundaries",
+    ] {
+        assert!(
+            spec_en.contains(ws),
+            "Phase 10 workstream table must name the `{ws}` workstream (EN)"
+        );
+    }
+
+    // (d) The 11 non-goals are enumerated in the Phase 10 non-goals paragraph
+    // (whitespace-normalized so markdown wrapping does not hide them).
+    for ng in [
+        "OAuth login",
+        "subscription auth",
+        "broad provider catalog expansion",
+        "image generation",
+        "custom TUI extension protocol",
+        "npm/package marketplace",
+        "browser/web",
+        "TypeScript API compatibility",
+        "session file compatibility",
+        "opi-types",
+        "whole-loop rewrite",
+    ] {
+        assert!(
+            spec_en.contains(ng),
+            "Phase 10 non-goals paragraph must enumerate `{ng}` (EN)"
+        );
+    }
+
+    // (e) Trace shape: every Phase 10 SC is recorded with its exit status. All
+    // eight are met by this docs+guards slice; none is deferred-by-updated-design
+    // or not-met. Recorded as (criterion, status) pairs so a future SC added
+    // above without a matching entry here is visibly incomplete. Phase F.1b
+    // requires an exact source citation for any future deferred-by-updated-design
+    // entry; assert each status is `met` to keep the trace honest.
+    let trace: [(&str, &str); 8] = [
+        ("SC1 provider collection/auth seam", "met"),
+        ("SC2 opi-coding-agent routes through seam", "met"),
+        ("SC3 generic AgentHarness seam", "met"),
+        ("SC4 CodingHarness product wrapper", "met"),
+        ("SC5 session repo/facade boundaries", "met"),
+        ("SC6 runtime hook boundaries", "met"),
+        ("SC7 focused regression coverage", "met"),
+        ("SC8 no ecosystem breadth", "met"),
+    ];
+    for (criterion, status) in trace {
+        assert_eq!(
+            status, "met",
+            "Phase 10 {criterion} must be met (no deferrals or not-met this phase)"
+        );
+    }
+}

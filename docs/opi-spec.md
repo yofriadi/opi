@@ -1384,7 +1384,7 @@ ecosystem candidates have entry conditions.
 
 ### Phase 10 - Core Architecture Deepening
 
-Status: planned architecture phase.
+Status: in progress; initial seams landed.
 
 Phase 10 deepens existing capabilities before breadth:
 
@@ -1394,6 +1394,25 @@ Phase 10 deepens existing capabilities before breadth:
 | Generic `AgentHarness` | `opi-agent` | phase guards, turn snapshots, save points, ordered pending writes, runtime config mutation semantics |
 | Session repo/facade | `opi-agent` | stable durable append/load/list/fork traits and ordered read/write facade for Phase 13 |
 | Runtime hook boundaries | `opi-agent` / `opi-coding-agent` | keep current hooks narrow while preserving future provider/UI/session lifecycle paths |
+
+Initial seams have landed across the four workstreams: `opi-ai` exposes the
+provider collection/auth seam and `opi-coding-agent` routes provider
+construction through it; `opi-agent` exposes the generic `AgentHarness` and
+session facade seams; focused regression tests cover existing behavior; and the
+runtime hook boundary model is documented below.
+
+#### Session facade boundaries
+
+Phase 10 adds a stable `SessionFacade` / `SessionRepo` seam in `opi-agent` so
+Phase 13 session-native context entries are not added through ad hoc CLI-only
+paths. `SessionRepo` owns durable append/load and entry-count semantics over a
+v1 session file (v1 sessions remain readable); `SessionFacade` owns ordered
+read/write over the repo, with agent-emitted messages persisting before pending
+extension/session writes at save points. CLI-driven session construction
+(resume/fork/delete, branch selection) stays in `opi-coding-agent`; only the
+durable storage seam lives in `opi-agent`. The additive entry set
+(model/thinking changes, labels, branch summaries, custom entries) is deferred
+to Phase 13.
 
 #### Runtime hook boundaries
 
