@@ -68,6 +68,10 @@ Default keybindings:
 code blocks, diffs, and tool status. `resolve_theme(name)` recognizes `default`
 and `monokai`; unknown names resolve to `default`.
 
+For custom themes, `parse_color`, `THEME_TOKENS`, `is_valid_token`, and
+`Theme::from_color_map` form the theme-discovery API. These types are an
+**unstable 0.x extension API** and may break between minor versions.
+
 ## Integration Pattern
 
 The `opi` binary uses this crate from `crates/opi-coding-agent/src/interactive.rs`:

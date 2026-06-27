@@ -19,11 +19,13 @@ version; check [CHANGELOG.md](CHANGELOG.md) for the current delta.
 does not read pi config by default, and uses its own TOML config and JSONL
 session format.
 
-The current tree also includes unreleased Phase 8 runtime-stabilization work:
-`opi-agent` documents and guard-tests runtime event order, hook/tool/cancellation
-semantics, SDK/RPC command-state behavior, and public API surface tiers. Treat
-wire protocols, extension/package surfaces, and trace payloads as unstable 0.x
-unless a crate README explicitly says otherwise.
+The current tree also carries unreleased changes on top of `0.6.1` (see
+[CHANGELOG.md](CHANGELOG.md)); this includes Phase 10 core-architecture-deepening
+work. `opi-agent` documents and guard-tests runtime event order,
+hook/tool/cancellation semantics, SDK/RPC command-state behavior, and public API
+surface tiers; that runtime stabilization shipped in `0.5.4` and remains the
+normative contract. Treat wire protocols, extension/package surfaces, and trace
+payloads as unstable 0.x unless a crate README explicitly says otherwise.
 
 ## Install
 

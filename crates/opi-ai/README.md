@@ -18,6 +18,12 @@ provider-side error taxonomy consumed by `opi-agent` diagnostics. It does not
 implement an agent loop, sessions, package loading, or built-in coding tools;
 those live in `opi-agent` and `opi-coding-agent`.
 
+`opi-ai` also exposes an unstable-0.x models/auth seam (Phase 10): the
+`provider_collection` module (`ProviderCollection`) wraps `ProviderRegistry`
+with a provider-side auth contract (`AuthDescriptor` / `AuthStatus`),
+OpenAI-compatible compatibility metadata, and stream/complete dispatch. OAuth
+and subscription auth are explicit non-goals.
+
 ## Providers
 
 | Module | Provider id | Backend |
@@ -48,6 +54,8 @@ added through registry overrides or configured OpenAI-compatible profiles.
 | `ModelInfo` | Model metadata: context window, output limit, image, streaming, and thinking support. |
 | `ProviderError` / `ProviderErrorCategory` | Provider failure taxonomy: auth, rate limit, timeout, request, and stream errors. |
 | `ProviderRegistry` | Resolves `provider:model`, registers custom providers, and layers model overrides. |
+| `ProviderCollection` / `AuthDescriptor` / `AuthStatus` | Unstable-0.x models/auth seam above `ProviderRegistry`: provider+model lookup, redacted auth resolution, OpenAI-compatible compat metadata, and stream/complete dispatch. No OAuth/subscription auth. |
+| `ApiKind` | Crate-root enum tagging the backend family (`Anthropic`, `OpenAi`, `Google`, `Mistral`) carried on assistant messages. |
 | `HttpClient` | Shared `reqwest` client with pooling and explicit/env proxy support. |
 | `retry` | Retry config, exponential backoff, and `Retry-After` parsing. |
 | `Usage` / `CumulativeUsage` | Token accumulation and cost helpers. |
@@ -103,9 +111,10 @@ while let Some(event) = stream.next().await {
 
 ## Modules
 
-`provider`, `message`, `stream`, `registry`, `http`, `retry`, `model`,
-`anthropic`, `openai_chat`, `openai_responses`, `openrouter`, `mistral`,
-`gemini`, `bedrock`, `azure_openai`, `vertex`, `config`, and `test_support`.
+`provider`, `message`, `stream`, `registry`, `provider_collection`, `http`,
+`retry`, `model`, `anthropic`, `openai_chat`, `openai_responses`, `openrouter`,
+`mistral`, `gemini`, `bedrock`, `azure_openai`, `vertex`, `config`, and
+`test_support`.
 
 ## License
 

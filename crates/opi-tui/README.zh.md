@@ -63,6 +63,10 @@
 `Theme` 为角色、状态栏、编辑器、Markdown、代码块、diff 和工具状态提供语义颜色。
 `resolve_theme(name)` 识别 `default` 和 `monokai`；未知名称解析为 `default`。
 
+自定义主题可通过 `parse_color`、`THEME_TOKENS`、`is_valid_token` 和
+`Theme::from_color_map` 组成的主题发现 API 加载。这些类型属于**不稳定的 0.x 扩展
+API**，可能在次版本间发生破坏性变更。
+
 ## 集成模式
 
 `opi` 二进制在 `crates/opi-coding-agent/src/interactive.rs` 中使用本 crate：

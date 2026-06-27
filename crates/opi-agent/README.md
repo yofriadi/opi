@@ -187,7 +187,9 @@ tool result.
 Session storage is append-only JSONL:
 
 - First line: `SessionHeader`.
-- Entries: `MessageEntry`, `CompactionEntry`, and `LeafEntry`.
+- Entries: `MessageEntry`, `CompactionEntry`, `LeafEntry`, and
+  `ExtensionStateEntry` (the `SessionEntry` enum is `#[non_exhaustive]`;
+  additive variants may arrive across 0.x).
 - Reader recovery skips corrupt entries and truncated trailing lines.
 - `session_branch::SessionTree` reconstructs active branches from `parent_id`
   links and the latest `LeafEntry`.
@@ -290,6 +292,7 @@ versions and pin exact crate versions when needed.
 | `Diagnostic`, `DiagnosticPayload`, `RedactionMode`, `Severity`, `redact`, `redact_text`, `DiagnosticSink`, `NullSink`, `RecordingSink` | unstable internal | Diagnostic payload and sink plumbing used by runtime surfaces; current contract is redaction/schema-version behavior, not a stable API shape. |
 | `FileTraceSink`, `RecordingTraceSink`, `TRACE_SCHEMA_VERSION`, `TraceCollector`, `TraceError`, `TraceKind`, `TraceRecord`, `TraceSink` | unstable internal | Local trace envelope plumbing; the `trace` module marks it unstable 0.x and carries `TRACE_SCHEMA_VERSION = 1`. |
 | `AgentState` | unstable internal | Runtime state holder exposed for crate layout and harness integration; not a supported embedder contract. |
+| `AgentHarness`, `Phase`, `HarnessError`, `HarnessResult`, `HarnessSnapshot`, `HarnessSession`, `HarnessRuntimeConfig`, `HarnessRuntimeConfigBuilder`, `SavePoint`, `PendingWriteQueue`, `PendingWrite`, `PendingWriteKind`, `SessionRepo`, `SessionFacade`, `JsonlHarnessSession`, `JsonlSessionRepo` | unstable internal | Generic agent-harness/session-facade orchestration seam above `Agent` (Phase 10, Workstream 10.2/10.3); contract-tested but does not drive the loop itself yet. The `harness` module marks it unstable 0.x. |
 
 This review found no candidate-removal crate-root re-exports. Every crate-root
 `pub use` in `src/lib.rs` is named in the table above. Public modules may expose
@@ -305,8 +308,9 @@ crate versions. The local trace envelope carries `TRACE_SCHEMA_VERSION = 1`.
 
 ## Non-Goals
 
-Phase 8 stabilizes the runtime; it does not expand product scope. The following
-are explicitly out of scope and not claimed:
+The runtime stabilized as of `0.5.4`; the crate stays 0.x and the Phase 10
+`harness` seam is internal-only. The following remain explicitly out of scope
+and are not claimed:
 
 - No stable 1.0 public API promise (surfaces stay 0.x).
 - No TypeScript extension API compatibility.
@@ -323,7 +327,7 @@ are explicitly out of scope and not claimed:
 ## Public Modules
 
 `agent`, `compaction`, `diagnostic`, `diagnostic_sink`, `event`, `extension`,
-`hooks`, `loop_types`, `message`, `sdk`, `session`, `session_branch`,
+`harness`, `hooks`, `loop_types`, `message`, `sdk`, `session`, `session_branch`,
 `session_event`, `state`, `streaming_proxy`, `tool`, `trace`, and `validation`.
 
 The crate root re-exports the most common runtime types, including `Agent`,

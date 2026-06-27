@@ -16,6 +16,11 @@
 `opi-agent` 诊断层使用的 Provider 侧错误分类。它不实现 Agent 主循环、会话、
 package 加载或内置编程工具；这些能力分别位于 `opi-agent` 和 `opi-coding-agent`。
 
+`opi-ai` 还暴露一个 unstable-0.x 的模型/鉴权 seam（Phase 10）：`provider_collection`
+模块（`ProviderCollection`）在 `ProviderRegistry` 之上叠加了 Provider 侧鉴权契约
+（`AuthDescriptor` / `AuthStatus`）、OpenAI-compatible 兼容性元数据，以及
+stream/complete 派发。OAuth 与订阅鉴权是明确的非目标。
+
 ## Provider
 
 | 模块 | Provider id | 后端 |
@@ -46,6 +51,8 @@ OpenAI-compatible profile 加入。
 | `ModelInfo` | 模型元数据：上下文窗口、输出上限、图片、流式和 thinking 支持。 |
 | `ProviderError` / `ProviderErrorCategory` | Provider 失败分类：鉴权、限流、超时、请求和流式错误。 |
 | `ProviderRegistry` | 解析 `provider:model`、注册自定义 Provider、叠加模型覆盖。 |
+| `ProviderCollection` / `AuthDescriptor` / `AuthStatus` | unstable-0.x 模型/鉴权 seam，位于 `ProviderRegistry` 之上：Provider+模型查找、脱敏鉴权解析、OpenAI-compatible 兼容性元数据，以及 stream/complete 派发。不含 OAuth/订阅鉴权。 |
+| `ApiKind` | crate 根枚举，标注 assistant 消息携带的后端家族（`Anthropic`、`OpenAi`、`Google`、`Mistral`）。 |
 | `HttpClient` | 共享 `reqwest` client，支持连接池和显式/环境变量代理。 |
 | `retry` | 重试配置、指数退避和 `Retry-After` 解析。 |
 | `Usage` / `CumulativeUsage` | token 累计和费用辅助。 |
@@ -100,9 +107,10 @@ while let Some(event) = stream.next().await {
 
 ## 模块
 
-`provider`、`message`、`stream`、`registry`、`http`、`retry`、`model`、
-`anthropic`、`openai_chat`、`openai_responses`、`openrouter`、`mistral`、
-`gemini`、`bedrock`、`azure_openai`、`vertex`、`config` 和 `test_support`。
+`provider`、`message`、`stream`、`registry`、`provider_collection`、`http`、
+`retry`、`model`、`anthropic`、`openai_chat`、`openai_responses`、`openrouter`、
+`mistral`、`gemini`、`bedrock`、`azure_openai`、`vertex`、`config` 和
+`test_support`。
 
 ## 许可证
 
