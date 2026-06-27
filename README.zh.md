@@ -10,14 +10,14 @@
 
 ## 当前状态
 
-`Cargo.toml` 中的 workspace 包版本是 `0.6.1`。`opi` 既可以作为终端编程
+`Cargo.toml` 中的 workspace 包版本是 `0.6.2`。`opi` 既可以作为终端编程
 Agent 使用，也可以作为一组 Rust crate 嵌入到其他 Agent 运行时中。仓库中
 可能包含基于该版本的未发布变更；当前差异见 [CHANGELOG.md](CHANGELOG.md)。
 
 `opi` 用 Rust 重新实现 pi 的部分思路。它不与 pi API 兼容，默认不读取 pi
 配置，并使用自己的 TOML 配置和 JSONL 会话格式。
 
-当前工作树还包含基于 `0.6.1` 的未发布变更（见 [CHANGELOG.md](CHANGELOG.md)）；其
+当前工作树还包含基于 `0.6.2` 的未发布变更（见 [CHANGELOG.md](CHANGELOG.md)）；其
 中包括 Phase 10 核心架构深化工作。`opi-agent` 已文档化并用守卫测试覆盖运行时事件
 顺序、hook/工具/取消语义、SDK/RPC 命令状态行为及公共 API 表面分层；该运行时稳定
 化工作已在 `0.5.4` 发布，并仍为规范性契约。除非 crate README 另有明确说明，wire

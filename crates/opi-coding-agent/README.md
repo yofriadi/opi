@@ -9,7 +9,7 @@
 
 ## Status
 
-Current crate version: `0.6.1`, inherited from the workspace package version.
+Current crate version: `0.6.2`, inherited from the workspace package version.
 
 This crate connects `opi-ai`, `opi-agent`, and `opi-tui` into a terminal coding
 agent. It provides:
