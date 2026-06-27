@@ -363,6 +363,11 @@ fn build_gemini(config: &OpiConfig) -> Result<opi_ai::gemini::GeminiProvider, Li
     ))
 }
 
+/// Build a Bedrock provider for `--list-models`. The credential-resolution
+/// shape here (env + config + profile/files, fed to `resolve_credentials`)
+/// is mirrored by the Bedrock arm of `build_runtime_provider`; extracting a
+/// shared resolver is intentionally deferred (Phase 10 audit, opus-F-33) to
+/// keep the factory extraction behavior-neutral.
 fn build_bedrock(config: &OpiConfig) -> Result<opi_ai::bedrock::BedrockProvider, ListModelsError> {
     let bedrock_config = &config.providers.bedrock;
     let (akid, sak, token, env_region) = resolve_bedrock_env_credentials();

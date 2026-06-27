@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `opi-coding-agent`: when a configured HTTP proxy fails to build, provider construction and `--list-models` now surface `failed to build HTTP client with proxy config: <cause>` instead of the bare cause string, so the failure source is identifiable. Message-wording change only, introduced by the centralized provider-factory extraction.
+
 ## [0.6.1] - 2026-06-25
 
 ### Added

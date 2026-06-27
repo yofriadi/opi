@@ -444,8 +444,10 @@ impl AgentHarness {
     }
 
     /// Begin an agent turn: [`Phase::Idle`] -> [`Phase::Turn`]. Freezes a
-    /// runtime-config snapshot for the turn. (State-machine guard only in
-    /// Phase 10.3; the loop itself is wired in task 10.4.)
+    /// runtime-config snapshot for the turn. In Phase 10 this is a
+    /// state-machine guard plus snapshot discipline only; the product turn
+    /// loop is not routed through `AgentHarness` here (see the module-level
+    /// doc on the by-value adoption wall and deferred product-loop wiring).
     pub fn begin_turn(&mut self) -> HarnessResult<()> {
         self.require_idle()?;
         self.turn_snapshot = Some(self.config_builder.snapshot());
