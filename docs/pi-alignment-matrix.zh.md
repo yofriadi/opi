@@ -118,7 +118,7 @@
 | pi 包 | opi crate | 等级 | 已实现 | 缺口 / 调整 |
 |---|---|---|---|---|
 | `@earendil-works/pi-ai` | `opi-ai` | 部分 | Provider trait、provider adapters、provider registry、model metadata、image input、usage/cost、retry/backoff、proxy config、OpenAI-compatible profiles，以及 custom provider/model registration。 | 第 10 阶段增加 Rust 原生 provider collection/auth 缝合点。OAuth、图像生成和广泛 catalog 作为未来候选。 |
-| `@earendil-works/pi-agent-core` | `opi-agent` | 部分 | Agent loop、有状态 `Agent`、hooks、tool batching、queues、sessions、compaction、SDK types、extension trait、diagnostics、streaming proxy primitives 和 runtime contract tests。 | 尚无 generic `AgentHarness`/session facade 等价物；在第 10/13 阶段关闭缺口前，包级对齐从完整下调为部分。 |
+| `@earendil-works/pi-agent-core` | `opi-agent` | 部分 | Agent loop、有状态 `Agent`、hooks、tool batching、queues、sessions、compaction、SDK types、extension trait、diagnostics、streaming proxy primitives 和 runtime contract tests。 | Generic `AgentHarness`/session facade 缝合点已存在，但产品 turn/session 采用仍是部分完成。 |
 | `@earendil-works/pi-tui` | `opi-tui` | 部分 | Rust 原生 `ratatui`/`crossterm` widgets、transcript rendering、markdown/code、diff、pickers、branch/session picker snapshots、themes、keybindings、terminal images 和 CJK display-width 覆盖。 | Renderer API 兼容是有意偏离。自定义 extension UI/message renderers 仍是未来生态工作；第 14 阶段应打磨内置产品 UI。 |
 | `@earendil-works/pi-coding-agent` | `opi-coding-agent` | 部分 | CLI modes、built-in tools、config、sessions、context files、images、JSON/RPC、resources、packages、skills、prompt fragments、themes、custom provider registration、extension commands、branch/tree/fork/clone flows、package CLI、process-jsonl adapter hosting、diagnostics 和 doctor checks。 | `pi` 在 custom extension UI、provider hooks/login、npm/gallery lifecycle、export/share 和 update surfaces 上仍更宽；这些保持为未来生态设计。 |
 
@@ -145,7 +145,7 @@
 | 有状态 `Agent` wrapper | 完整 | Prompt/continue/abort/subscribe 和 queue behavior 已存在。 | 除非后续稳定化，否则保持 0.x API。 |
 | 通用 `AgentHarness` | 部分 | `CodingHarness` 目前拥有大量可比的编排行为。 | 第 10 阶段在 `opi-agent` 定义 generic harness phases、snapshots、save points、busy guards 和 runtime mutation semantics。 |
 | Session storage | 部分 | Append-only JSONL、resume/list/delete/fork、branch `parent_id`、`leaf`、compaction 和 extension state 已存在。 | 第 10 阶段定义 session facade；第 13 阶段增加更丰富的 context entries。 |
-| Pending session write ordering | 缺失 | 当前行为尚未暴露为 generic harness contract。 | 第 10 阶段在第 13 阶段增加更多 writes 前文档化并测试 ordering。 |
+| Pending session write ordering | 部分 | Generic harness/session facade 缝合点已暴露有序 pending-write 行为，但产品 session 采用仍是部分完成。 | 第 13 阶段应建立在该缝合点之上增加更丰富 entries，并保持 ordering contract tests。 |
 | Compaction | 完整 | Threshold/manual/overflow primitives 和 session events 已存在。 | 保持 branch-aware compaction tests。 |
 | Extension trait/hooks/state | 部分 | Rust in-process extension API 和 process adapter bridge 已存在。 | 保持狭窄；未来 provider/UI/session lifecycle hooks 需要单独设计。 |
 
@@ -184,7 +184,7 @@
 | 7 | Reliability and observability | `opi-agent`、`opi-coding-agent`、`opi-ai` | 部分 | Diagnostics、redaction、trace envelopes、doctor checks 均为本地且显式。 |
 | 8 | Runtime stabilization | `opi-agent`、`opi-coding-agent` | 部分 | Event order、hooks、tool scheduling、cancellation、SDK/RPC contracts 和 API surface classification 已测试。 |
 | 9 | pi 0.80.2 baseline realignment | docs | 计划中 | 文档/证据门；不改变 runtime。 |
-| 10 | Core architecture deepening | `opi-ai`、`opi-agent`、`opi-coding-agent` | 计划中 | `Models/Auth`、generic `AgentHarness`、session facade、runtime hook boundaries。 |
+| 10 | Core architecture deepening | `opi-ai`、`opi-agent`、`opi-coding-agent` | 部分 | `Models/Auth`、generic `AgentHarness`、session facade、runtime hook boundaries。 |
 | 11 | Tooling quality | `opi-coding-agent`、`opi-agent`、`opi-tui` | 计划中 | 由旧第 9 阶段重排；依赖第 10 阶段边界。 |
 | 12 | Provider correctness | `opi-ai`、`opi-coding-agent` | 计划中 | 由旧第 10 阶段重排；通过 provider collection/auth seam 测试。 |
 | 13 | Session tree and context reconstruction | `opi-agent`、`opi-coding-agent`、`opi-tui` | 计划中 | 由旧第 11 阶段重排；依赖 generic harness/session facade。 |

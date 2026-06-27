@@ -222,6 +222,50 @@ fn generic_harness_phase_snapshot_savepoint_contract() {
     );
 }
 
+#[test]
+fn agent_harness_extension_state_first_does_not_become_message_parent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("extension-first.jsonl");
+    let header = SessionHeader::new(
+        "extension-first".to_string(),
+        "0".to_string(),
+        dir.path().to_string_lossy().into_owned(),
+        None,
+    );
+    let session = JsonlHarnessSession::create(&path, header).expect("create session");
+    let mut harness = AgentHarness::new(
+        build_agent(),
+        Box::new(session),
+        HarnessRuntimeConfig::default(),
+    );
+
+    harness
+        .enqueue_extension_state(serde_json::json!({ "state": 1 }))
+        .expect("enqueue extension state");
+    harness
+        .enqueue_message(user_message("agent-text"))
+        .expect("enqueue message");
+    harness.flush().expect("flush");
+
+    let (_hdr, entries) = SessionReader::read_all(&path).expect("read back");
+    let extension = entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ExtensionState(state) => Some(state),
+            _ => None,
+        })
+        .expect("extension state");
+    let message = entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::Message(message) => Some(message),
+            _ => None,
+        })
+        .expect("message");
+    assert_ne!(message.parent_id.as_deref(), Some(extension.id.as_str()));
+    assert_eq!(message.parent_id, None);
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance scenario: phase10-harness-contracts
 // ---------------------------------------------------------------------------

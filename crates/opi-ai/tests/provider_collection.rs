@@ -15,6 +15,7 @@ use opi_ai::provider_collection::{
 };
 use opi_ai::registry::ProviderRegistry;
 use opi_ai::test_support::{MockProvider, text_response};
+use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,70 @@ fn text_mock_repeated(id: &str, text: &str, count: usize) -> Box<dyn Provider> {
 }
 
 const SECRET_VALUE: &str = "sk-super-secret-value-DO-NOT-LEAK";
+
+struct StreamProvider {
+    id: &'static str,
+    events:
+        Mutex<Option<Vec<Result<opi_ai::AssistantStreamEvent, opi_ai::provider::ProviderError>>>>,
+}
+
+impl StreamProvider {
+    fn new(
+        id: &'static str,
+        events: Vec<Result<opi_ai::AssistantStreamEvent, opi_ai::provider::ProviderError>>,
+    ) -> Self {
+        Self {
+            id,
+            events: Mutex::new(Some(events)),
+        }
+    }
+}
+
+impl Provider for StreamProvider {
+    fn id(&self) -> &str {
+        self.id
+    }
+
+    fn models(&self) -> &[opi_ai::provider::ModelInfo] {
+        static MODELS: std::sync::OnceLock<Vec<opi_ai::provider::ModelInfo>> =
+            std::sync::OnceLock::new();
+        MODELS.get_or_init(|| {
+            vec![opi_ai::provider::ModelInfo {
+                id: "mock-model".into(),
+                display_name: "Mock Model".into(),
+                context_window: 128_000,
+                max_output_tokens: 4096,
+                supports_images: false,
+                supports_streaming: true,
+                supports_thinking: false,
+            }]
+        })
+    }
+
+    fn stream(&self, _request: Request) -> opi_ai::provider::EventStream {
+        let events = self.events.lock().unwrap().take().unwrap_or_default();
+        Box::pin(futures_util::stream::iter(events))
+    }
+}
+
+static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn with_env_var<R>(name: &str, value: Option<&str>, f: impl FnOnce() -> R) -> R {
+    let _guard = ENV_TEST_LOCK.lock().unwrap();
+    let original = std::env::var_os(name);
+    match value {
+        Some(value) => unsafe { std::env::set_var(name, value) },
+        None => unsafe { std::env::remove_var(name) },
+    }
+
+    let result = f();
+
+    match original {
+        Some(value) => unsafe { std::env::set_var(name, value) },
+        None => unsafe { std::env::remove_var(name) },
+    }
+    result
+}
 
 // ---------------------------------------------------------------------------
 // SecretKey redaction
@@ -110,6 +175,14 @@ fn auth_descriptor_static_key_resolves_configured_and_missing() {
 }
 
 #[test]
+fn auth_descriptor_treats_whitespace_as_missing() {
+    let missing = AuthDescriptor::StaticApiKey {
+        value: SecretKey::new("   "),
+    };
+    assert!(matches!(missing.resolve(), AuthStatus::Missing { .. }));
+}
+
+#[test]
 fn auth_descriptor_env_key_missing_when_var_unset() {
     // Read-only: relies on the var being unset. Unique name avoids collisions.
     let descriptor = AuthDescriptor::EnvApiKey {
@@ -122,6 +195,44 @@ fn auth_descriptor_env_key_missing_when_var_unset() {
         }
         AuthStatus::Configured => panic!("expected Missing for unset env var"),
     }
+}
+
+#[test]
+fn auth_descriptor_env_key_treats_whitespace_as_missing() {
+    let env_var = "OPI_TEST_PROV_COLL_WHITESPACE_ONLY_0E7B3D";
+    let status = with_env_var(env_var, Some("   "), || {
+        AuthDescriptor::EnvApiKey {
+            env_var: env_var.into(),
+        }
+        .resolve()
+    });
+    match status {
+        AuthStatus::Missing { source } => {
+            assert!(source.contains(env_var));
+            assert!(source.contains("set but empty"));
+            assert!(!source.contains(SECRET_VALUE));
+        }
+        AuthStatus::Configured => panic!("expected Missing for whitespace-only env var"),
+    }
+}
+
+#[test]
+fn auth_descriptor_resolved_is_configured_without_secret_value() {
+    let descriptor = AuthDescriptor::Resolved {
+        source: "env OPI_TEST_RESOLVED_SOURCE".into(),
+    };
+    assert_eq!(descriptor.resolve(), AuthStatus::Configured);
+    let rendered = format!("{descriptor:?}");
+    assert!(rendered.contains("OPI_TEST_RESOLVED_SOURCE"));
+    assert!(!rendered.contains(SECRET_VALUE));
+}
+
+#[test]
+fn auth_descriptor_resolved_treats_empty_source_as_missing() {
+    let descriptor = AuthDescriptor::Resolved {
+        source: "   ".into(),
+    };
+    assert!(matches!(descriptor.resolve(), AuthStatus::Missing { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +332,95 @@ async fn provider_collection_dispatch_rejects_missing_auth_with_redacted_diagnos
         complete_err,
         CollectionError::AuthNotConfigured { .. }
     ));
+}
+
+#[tokio::test]
+async fn dispatch_complete_returns_terminal_error_event() {
+    let message = AssistantMessage {
+        content: vec![AssistantContent::Text {
+            text: "terminal failure".into(),
+        }],
+        api: opi_ai::ApiKind::OpenAi,
+        provider: "mock".into(),
+        model: "mock-model".into(),
+        response_model: None,
+        response_id: None,
+        usage: opi_ai::stream::Usage::default(),
+        stop_reason: opi_ai::stream::StopReason::Error,
+        error_message: Some("terminal failure".into()),
+        timestamp_ms: 0,
+    };
+    let mut collection = ProviderCollection::new();
+    collection
+        .register(
+            Box::new(StreamProvider::new(
+                "mock",
+                vec![Ok(opi_ai::AssistantStreamEvent::Error {
+                    reason: opi_ai::stream::StopReason::Error,
+                    message,
+                })],
+            )),
+            AuthDescriptor::StaticApiKey {
+                value: SecretKey::new("configured"),
+            },
+            CompatMetadata::default(),
+        )
+        .unwrap();
+
+    let completed = collection
+        .dispatch_complete("mock:mock-model", minimal_request("mock:mock-model"))
+        .await
+        .unwrap();
+    assert!(matches!(completed, CompletedRequest::Error { .. }));
+}
+
+#[tokio::test]
+async fn dispatch_complete_propagates_mid_stream_provider_error() {
+    let mut collection = ProviderCollection::new();
+    collection
+        .register(
+            Box::new(StreamProvider::new(
+                "mock",
+                vec![Err(opi_ai::provider::ProviderError::StreamError(
+                    "mid-stream failure".into(),
+                ))],
+            )),
+            AuthDescriptor::StaticApiKey {
+                value: SecretKey::new("configured"),
+            },
+            CompatMetadata::default(),
+        )
+        .unwrap();
+
+    let err = collection
+        .dispatch_complete("mock:mock-model", minimal_request("mock:mock-model"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CollectionError::Provider(_)));
+    assert!(err.to_string().contains("mid-stream failure"));
+}
+
+#[tokio::test]
+async fn dispatch_complete_rejects_empty_stream() {
+    let mut collection = ProviderCollection::new();
+    collection
+        .register(
+            Box::new(StreamProvider::new("mock", Vec::new())),
+            AuthDescriptor::StaticApiKey {
+                value: SecretKey::new("configured"),
+            },
+            CompatMetadata::default(),
+        )
+        .unwrap();
+
+    let err = collection
+        .dispatch_complete("mock:mock-model", minimal_request("mock:mock-model"))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("stream ended without a terminal event")
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -69,16 +69,166 @@ impl SessionRepo for FailingSessionRepo {
     }
 }
 
+struct FailOnAppend {
+    entries: Vec<SessionEntry>,
+    fail_on_call: usize,
+    calls: usize,
+}
+
+impl FailOnAppend {
+    fn new(fail_on_call: usize) -> Self {
+        Self {
+            entries: Vec::new(),
+            fail_on_call,
+            calls: 0,
+        }
+    }
+}
+
+impl SessionRepo for FailOnAppend {
+    fn append(&mut self, entry: &SessionEntry) -> std::io::Result<()> {
+        self.calls += 1;
+        if self.calls == self.fail_on_call {
+            return Err(std::io::Error::other("simulated partial failure"));
+        }
+        self.entries.push(entry.clone());
+        Ok(())
+    }
+
+    fn load(&self) -> std::io::Result<(SessionHeader, Vec<SessionEntry>, CrashRecovery)> {
+        Ok((
+            header("partial"),
+            self.entries.clone(),
+            CrashRecovery::Clean,
+        ))
+    }
+
+    fn message_count(&self) -> std::io::Result<usize> {
+        Ok(self.entries.len())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scenario 1: append + read in order, v1 readability, deterministic leaf,
 // product policy stays in opi-coding-agent.
 // ---------------------------------------------------------------------------
 
 #[test]
+fn session_facade_hydrates_tip_and_uses_unique_ids_after_open() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("resume-append.jsonl");
+    {
+        let repo = JsonlSessionRepo::create(&path, header("s1")).unwrap();
+        let mut facade = SessionFacade::new(Box::new(repo)).unwrap();
+        facade.enqueue_message(user_msg("first")).unwrap();
+        facade.flush().unwrap();
+    }
+
+    let repo = JsonlSessionRepo::open(&path).unwrap();
+    let mut facade = SessionFacade::new(Box::new(repo)).unwrap();
+    facade.enqueue_message(user_msg("second")).unwrap();
+    facade.flush().unwrap();
+
+    let (_header, entries, _recovery) = facade.load().unwrap();
+    let messages: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SessionEntry::Message(message) => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(messages.len(), 2);
+    assert_ne!(messages[0].id, messages[1].id);
+    assert_eq!(
+        messages[1].parent_id.as_deref(),
+        Some(messages[0].id.as_str())
+    );
+}
+
+#[test]
+fn extension_state_does_not_become_content_parent_when_enqueued_first() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("extension-first.jsonl");
+    let repo = JsonlSessionRepo::create(&path, header("s1")).unwrap();
+    let mut facade = SessionFacade::new(Box::new(repo)).unwrap();
+
+    facade.enqueue_extension_state(json!({"n": 1})).unwrap();
+    facade.enqueue_message(user_msg("agent-text")).unwrap();
+    facade.flush().unwrap();
+
+    let (_header, entries, _recovery) = facade.load().unwrap();
+    let message = entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::Message(message) => Some(message),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(message.parent_id, None);
+    assert_eq!(
+        facade.active_tip().unwrap().as_deref(),
+        Some(message.id.as_str())
+    );
+}
+
+#[test]
+fn extension_state_attaches_to_content_tip_without_advancing_it() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("extension-sidecar.jsonl");
+    let repo = JsonlSessionRepo::create(&path, header("s1")).unwrap();
+    let mut facade = SessionFacade::new(Box::new(repo)).unwrap();
+
+    facade.enqueue_message(user_msg("first")).unwrap();
+    facade.enqueue_extension_state(json!({"n": 1})).unwrap();
+    facade.enqueue_message(user_msg("second")).unwrap();
+    facade.flush().unwrap();
+
+    let (_header, entries, _recovery) = facade.load().unwrap();
+    let messages: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SessionEntry::Message(message) => Some(message),
+            _ => None,
+        })
+        .collect();
+    let state = entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ExtensionState(state) => Some(state),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(state.parent_id.as_deref(), Some(messages[0].id.as_str()));
+    assert_eq!(
+        messages[1].parent_id.as_deref(),
+        Some(messages[0].id.as_str())
+    );
+}
+
+#[test]
+fn partial_flush_never_persists_message_parented_to_extension_state() {
+    let mut facade = SessionFacade::new(Box::new(FailOnAppend::new(2))).unwrap();
+    facade.enqueue_extension_state(json!({"n": 1})).unwrap();
+    facade
+        .enqueue_message(user_msg("message survives first"))
+        .unwrap();
+
+    let err = facade.flush().unwrap_err();
+    assert!(matches!(err, HarnessError::Write(_)));
+
+    let (_header, entries, _recovery) = facade.load().unwrap();
+    assert_eq!(entries.len(), 1);
+    match &entries[0] {
+        SessionEntry::Message(message) => assert_eq!(message.parent_id, None),
+        other => panic!("expected the content message to be written first, got {other:?}"),
+    }
+}
+
+#[test]
 fn session_facade_supports_in_memory_repo_backend() {
     // The SessionRepo trait is usable without a JSONL file: an in-memory
     // backend receives ordered appends and reports them on load.
-    let mut facade = SessionFacade::new(Box::new(RecordingSessionRepo::default()));
+    let mut facade = SessionFacade::new(Box::new(RecordingSessionRepo::default())).unwrap();
     facade.enqueue_message(user_msg("in-mem")).unwrap();
     facade.enqueue_extension_state(json!({"k": 1})).unwrap();
 
@@ -97,7 +247,7 @@ fn session_facade_appends_and_reads_in_order() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("ordered.jsonl");
     let repo = JsonlSessionRepo::create(&path, header("s1")).unwrap();
-    let mut facade = SessionFacade::new(Box::new(repo));
+    let mut facade = SessionFacade::new(Box::new(repo)).unwrap();
 
     facade.enqueue_message(user_msg("hello")).unwrap();
     facade.enqueue_extension_state(json!({"k": "v"})).unwrap();
@@ -148,7 +298,7 @@ fn session_facade_preserves_v1_readability_with_unknown_future_entry() {
     }
 
     let repo = JsonlSessionRepo::open(&path).unwrap();
-    let facade = SessionFacade::new(Box::new(repo));
+    let facade = SessionFacade::new(Box::new(repo)).unwrap();
     let (h, entries, recovery) = facade.load().unwrap();
 
     // v1 stays readable; the known message survives.
@@ -192,7 +342,7 @@ fn session_facade_reconstructs_active_branch_leaf_deterministically() {
         }
     }
 
-    let facade = SessionFacade::new(Box::new(JsonlSessionRepo::open(&path).unwrap()));
+    let facade = SessionFacade::new(Box::new(JsonlSessionRepo::open(&path).unwrap())).unwrap();
     let tip = facade.active_tip().unwrap();
     assert_eq!(tip.as_deref(), Some("m2"));
     // Deterministic: a second read over the same repo yields the same tip.
@@ -210,7 +360,7 @@ fn pending_writes_flush_in_order_at_save_points() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("queue.jsonl");
     let repo = JsonlSessionRepo::create(&path, header("s1")).unwrap();
-    let mut facade = SessionFacade::new(Box::new(repo));
+    let mut facade = SessionFacade::new(Box::new(repo)).unwrap();
 
     // Enqueue extension state FIRST, then an agent message. Flush order must
     // still place the agent-emitted message before the extension-state write.
@@ -234,7 +384,7 @@ fn pending_writes_flush_in_order_at_save_points() {
 
 #[test]
 fn pending_writes_not_dropped_on_abort() {
-    let mut facade = SessionFacade::new(Box::new(FailingSessionRepo));
+    let mut facade = SessionFacade::new(Box::new(FailingSessionRepo)).unwrap();
 
     facade.enqueue_message(user_msg("a")).unwrap();
     facade.enqueue_extension_state(json!({"x": 1})).unwrap();

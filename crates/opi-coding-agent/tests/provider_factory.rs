@@ -4,10 +4,75 @@
 //! provider reports the correct ID. Config integration tests verify that
 //! TOML-deserialized provider configs resolve to the right env var names.
 
-use opi_ai::provider::Provider;
+use std::sync::Mutex;
+
+use opi_ai::provider::{Provider, Request, ThinkingConfig};
+use opi_ai::test_support::MockProvider;
 use opi_coding_agent::config::{
     GenericProviderConfig, OpenRouterProviderConfig, OpiConfig, load_config_file,
 };
+use tokio_util::sync::CancellationToken;
+
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+struct EnvVarGuard {
+    key: String,
+    original: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &str, value: &str) -> Self {
+        let guard = Self {
+            key: key.to_owned(),
+            original: std::env::var_os(key),
+        };
+        unsafe { std::env::set_var(key, value) };
+        guard
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(value) => unsafe { std::env::set_var(&self.key, value) },
+            None => unsafe { std::env::remove_var(&self.key) },
+        }
+    }
+}
+
+fn with_env_vars<F, R>(vars: &[(&str, &str)], f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let _lock = ENV_MUTEX.lock().unwrap();
+    let _guards: Vec<_> = vars
+        .iter()
+        .map(|(key, value)| EnvVarGuard::set(key, value))
+        .collect();
+    f()
+}
+
+fn with_env_var<F, R>(key: &str, value: &str, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    with_env_vars(&[(key, value)], f)
+}
+
+fn minimal_request(model: &str) -> Request {
+    Request {
+        model: model.into(),
+        system: None,
+        messages: vec![],
+        tools: vec![],
+        max_tokens: None,
+        temperature: None,
+        thinking: ThinkingConfig::default(),
+        stop_sequences: vec![],
+        metadata: None,
+        cancel: CancellationToken::new(),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Provider construction: correct id() per provider
@@ -340,39 +405,209 @@ supports_thinking = false
     }
     assert!(auth_descriptor_for(&config, "not-a-real-provider").is_none());
 
-    // Set the profile credential so listing can construct it, then build the
-    // collection. Edition 2024 requires `unsafe` for env mutation.
-    unsafe {
-        std::env::set_var(env_var, "test-key");
-    }
-    let collection = build_collection_for_listing(&config)
-        .expect("listing collection builds through the factory");
+    with_env_var(env_var, "test-key", || {
+        let collection = build_collection_for_listing(&config)
+            .expect("listing collection builds through the factory");
 
-    // The factory returns the ProviderCollection/auth-seam type and the profile
-    // model is resolvable through it.
-    let (_provider, model) = collection
-        .resolve("testprof:test-model")
-        .expect("profile model resolves through the collection");
-    assert_eq!(model.id, "test-model");
+        // The factory returns the ProviderCollection/auth-seam type and the profile
+        // model is resolvable through it.
+        let (_provider, model) = collection
+            .resolve("testprof:test-model")
+            .expect("profile model resolves through the collection");
+        assert_eq!(model.id, "test-model");
 
-    // Auth + compat metadata for the config-sourced profile live on the collection.
-    assert_eq!(
-        collection.auth_status("testprof"),
-        Some(AuthStatus::Configured)
+        // Auth + compat metadata for the config-sourced profile live on the collection.
+        assert_eq!(
+            collection.auth_status("testprof"),
+            Some(AuthStatus::Configured)
+        );
+        match collection.auth_descriptor("testprof") {
+            Some(AuthDescriptor::Resolved { source }) => {
+                assert_eq!(source, &format!("env {env_var}"))
+            }
+            other => panic!("expected profile Resolved auth, got {other:?}"),
+        }
+        let compat = collection
+            .compat("testprof")
+            .expect("profile compat metadata attached");
+        assert!(compat.openai_compatible);
+        assert_eq!(compat.profile.as_deref(), Some("testprof"));
+    });
+}
+
+#[test]
+fn listing_collection_skips_whitespace_only_credentials() {
+    use opi_coding_agent::config::load_config_file;
+    use opi_coding_agent::provider_factory::build_collection_for_listing;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let openai_env = "OPI_TEST_FACTORY_OPENAI_WS_ONLY_3E7B91";
+    let profile_env = "OPI_TEST_FACTORY_PROFILE_WS_ONLY_3E7B91";
+    std::fs::write(
+        &path,
+        format!(
+            r#"
+[providers.openai]
+api_key_env = "{openai_env}"
+
+[providers.openai_compatible.testprof]
+api_key_env = "{profile_env}"
+base_url = "https://testprof.example.com"
+
+[[providers.openai_compatible.testprof.models]]
+id = "test-model"
+display_name = "Test Model"
+context_window = 128000
+max_output_tokens = 4096
+supports_images = false
+supports_streaming = true
+supports_thinking = false
+"#
+        ),
+    )
+    .unwrap();
+    let config = load_config_file(&path).unwrap();
+
+    with_env_vars(&[(openai_env, "   "), (profile_env, "\t ")], || {
+        let collection =
+            build_collection_for_listing(&config).expect("whitespace credentials are skipped");
+        let provider_ids = collection.provider_ids();
+        assert!(!provider_ids.contains(&"openai"));
+        assert!(!provider_ids.contains(&"testprof"));
+    });
+}
+
+#[test]
+fn listing_collection_uses_resolved_auth_for_constructed_builtin() {
+    use opi_ai::{AuthDescriptor, AuthStatus};
+    use opi_coding_agent::config::load_config_file;
+    use opi_coding_agent::provider_factory::build_collection_for_listing;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let env_var = "OPI_TEST_FACTORY_OPENAI_RESOLVED_25E1AC";
+    std::fs::write(
+        &path,
+        format!(
+            r#"
+[providers.openai]
+api_key_env = "{env_var}"
+"#
+        ),
+    )
+    .unwrap();
+    let config = load_config_file(&path).unwrap();
+
+    with_env_var(env_var, "test-key", || {
+        let collection = build_collection_for_listing(&config).expect("listing collection builds");
+        assert_eq!(
+            collection.auth_status("openai"),
+            Some(AuthStatus::Configured)
+        );
+        match collection.auth_descriptor("openai") {
+            Some(AuthDescriptor::Resolved { source }) => {
+                assert_eq!(source, &format!("env {env_var}"))
+            }
+            other => panic!("expected builtin Resolved auth, got {other:?}"),
+        }
+    });
+}
+
+#[tokio::test]
+async fn metadata_only_provider_dispatch_returns_explicit_error() {
+    use opi_coding_agent::provider_factory::assemble_harness_collection;
+
+    let provider = MockProvider::new("metadata-provider", vec![]);
+    let (collection, diagnostics) = assemble_harness_collection(&provider, None);
+    assert!(diagnostics.is_empty());
+
+    let error = collection
+        .dispatch_complete(
+            "metadata-provider:mock-model",
+            minimal_request("metadata-provider:mock-model"),
+        )
+        .await
+        .expect_err("metadata provider should not dispatch");
+    let message = error.to_string();
+    assert!(
+        message.contains("metadata-only provider"),
+        "expected metadata-only dispatch error, got {message:?}"
     );
-    match collection.auth_descriptor("testprof") {
-        Some(AuthDescriptor::EnvApiKey { env_var: v }) => assert_eq!(v, env_var),
-        other => panic!("expected profile EnvApiKey, got {other:?}"),
-    }
-    let compat = collection
-        .compat("testprof")
-        .expect("profile compat metadata attached");
-    assert!(compat.openai_compatible);
-    assert_eq!(compat.profile.as_deref(), Some("testprof"));
+    assert!(
+        message.contains("'metadata-provider'"),
+        "expected active provider id in dispatch error, got {message:?}"
+    );
+}
 
-    unsafe {
-        std::env::remove_var(env_var);
+#[test]
+fn built_in_openai_compatible_metadata_is_set() {
+    use opi_coding_agent::provider_factory::compat_metadata_for;
+
+    for provider in ["openai", "openrouter", "mistral"] {
+        assert!(
+            compat_metadata_for(provider).openai_compatible,
+            "{provider} should advertise OpenAI-compatible chat metadata"
+        );
     }
+    assert!(!compat_metadata_for("anthropic").openai_compatible);
+}
+
+/// Strip Rust line and nested block comments while preserving string/char
+/// literal contents, so documentation comments do not trip source scans.
+fn strip_rust_comments(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'/' && i + 1 < bytes.len() {
+            if bytes[i + 1] == b'/' {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            } else if bytes[i + 1] == b'*' {
+                let mut depth = 1;
+                i += 2;
+                while i < bytes.len() && depth > 0 {
+                    if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                        depth += 1;
+                        i += 2;
+                    } else if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+        }
+        if c == b'"' || c == b'\'' {
+            let quote = c;
+            out.push(c as char);
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    out.push(bytes[i] as char);
+                    out.push(bytes[i + 1] as char);
+                    i += 2;
+                    continue;
+                }
+                out.push(bytes[i] as char);
+                if bytes[i] == quote {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        out.push(c as char);
+        i += 1;
+    }
+    out
 }
 
 /// Phase 10.2 centralization contract: every provider/model/auth
@@ -422,6 +657,8 @@ fn provider_policy_is_centralized() {
         "fn build_collection_for_listing",
         "fn assemble_harness_collection",
         "fn require_api_key",
+        "fn require_list_models_api_key",
+        "fn non_empty_env_var",
         "fn resolve_env_name",
         "fn resolve_bedrock_env_credentials",
         "fn aws_credentials_path",
@@ -429,6 +666,8 @@ fn provider_policy_is_centralized() {
         "fn aws_home_dir",
         "fn profile_api_key_env_default",
         "fn auth_descriptor_for",
+        "fn resolved_auth_descriptor_for",
+        "fn resolved_auth_descriptor_for_profile",
         "fn auth_descriptor_for_profile",
         "fn compat_metadata_for",
         "struct MetadataProvider",
@@ -445,7 +684,7 @@ fn provider_policy_is_centralized() {
             .unwrap_or(file)
             .to_string_lossy()
             .replace('\\', "/");
-        let text = fs::read_to_string(file).unwrap_or_default();
+        let text = strip_rust_comments(&fs::read_to_string(file).unwrap_or_default());
         for token in tokens {
             if text.contains(token) && rel != allow {
                 violations.push(format!("token `{token}` appears in `{rel}`"));
@@ -455,7 +694,9 @@ fn provider_policy_is_centralized() {
 
     // Vacuous-allowlist guard: provider_factory.rs must contain every token,
     // otherwise the centralization test would pass trivially.
-    let factory_text = fs::read_to_string(src_dir.join(allow)).expect("provider_factory.rs exists");
+    let factory_text = strip_rust_comments(
+        &fs::read_to_string(src_dir.join(allow)).expect("provider_factory.rs exists"),
+    );
     let missing: Vec<&str> = tokens
         .iter()
         .filter(|t| !factory_text.contains(*t))

@@ -48,9 +48,9 @@ use crate::stream::{AssistantStreamEvent, StopReason};
 
 /// An API key value that never reveals itself in debug/display output.
 ///
-/// The collection stores credentials so it can report auth status and feed
-/// diagnostics, but the value is always rendered as `<redacted>` when
-/// formatted. Callers that need the raw value use [`SecretKey::as_str`].
+/// When the collection stores a raw credential, the value is always rendered
+/// as `<redacted>` when formatted. Callers that need the raw value use
+/// [`SecretKey::as_str`].
 #[derive(Clone)]
 pub struct SecretKey(String);
 
@@ -67,7 +67,7 @@ impl SecretKey {
 
     /// Whether the key is non-empty.
     pub fn is_present(&self) -> bool {
-        !self.0.is_empty()
+        !self.0.trim().is_empty()
     }
 }
 
@@ -90,9 +90,10 @@ impl std::fmt::Display for SecretKey {
 /// Provider-owned auth contract.
 ///
 /// Describes how a provider's credential is sourced without leaking the secret
-/// itself. Two concrete variants cover the current built-in providers (static
-/// API keys and env-described API keys). OAuth is an explicit future extension
-/// point and is not implemented in Phase 10.
+/// itself. Current variants cover raw static API keys, env-described API keys,
+/// and already-resolved credentials whose non-secret source can be named.
+/// OAuth is an explicit future extension point and is not implemented in
+/// Phase 10.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum AuthDescriptor {
@@ -106,6 +107,14 @@ pub enum AuthDescriptor {
     EnvApiKey {
         /// Name of the environment variable (e.g. `ANTHROPIC_API_KEY`).
         env_var: String,
+    },
+    /// Credentials have already been resolved by provider-specific logic.
+    ///
+    /// `source` is a non-secret label such as `env OPENAI_API_KEY` or
+    /// `aws credential chain`; it is safe to show in diagnostics.
+    Resolved {
+        /// Non-secret credential source label.
+        source: String,
     },
 }
 
@@ -126,11 +135,26 @@ impl AuthDescriptor {
                 }
             }
             AuthDescriptor::EnvApiKey { env_var } => match std::env::var(env_var) {
-                Ok(value) if !value.is_empty() => AuthStatus::Configured,
-                _ => AuthStatus::Missing {
+                Ok(value) if !value.trim().is_empty() => AuthStatus::Configured,
+                Ok(_) => AuthStatus::Missing {
+                    source: format!("env var {env_var} is set but empty"),
+                },
+                Err(std::env::VarError::NotPresent) => AuthStatus::Missing {
                     source: format!("env var {env_var} is not set"),
                 },
+                Err(std::env::VarError::NotUnicode(_)) => AuthStatus::Missing {
+                    source: format!("env var {env_var} is not valid unicode"),
+                },
             },
+            AuthDescriptor::Resolved { source } => {
+                if source.trim().is_empty() {
+                    AuthStatus::Missing {
+                        source: "resolved auth source is empty".to_owned(),
+                    }
+                } else {
+                    AuthStatus::Configured
+                }
+            }
         }
     }
 }

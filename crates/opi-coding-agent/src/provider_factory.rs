@@ -41,7 +41,7 @@ use std::sync::Arc;
 use opi_agent::diagnostic::Diagnostic;
 use opi_agent::extension::ExtensionRegistry;
 use opi_ai::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
-use opi_ai::{AuthDescriptor, CompatMetadata, ProviderCollection, ProviderRegistry, SecretKey};
+use opi_ai::{AuthDescriptor, CompatMetadata, ProviderCollection, ProviderRegistry};
 
 use crate::config::{OpenAiCompatibleProviderConfig, OpiConfig, build_http_client};
 use crate::diagnostic_bridge::diagnostic_for_model_registry_error;
@@ -51,11 +51,14 @@ use crate::diagnostic_bridge::diagnostic_for_model_registry_error;
 // ---------------------------------------------------------------------------
 
 /// Error from runtime provider construction (the active provider for a run).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProviderBuildError {
+    #[error("{0}")]
     Auth(String),
+    #[error("{0}")]
     Config(String),
-    Provider(ProviderError),
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
 }
 
 /// Error from lightweight provider builders used by `--list-models`.
@@ -65,26 +68,12 @@ pub enum ProviderBuildError {
 ///
 /// `Config` — the config file contains a broken setting (e.g. invalid proxy
 /// URL); report the error and exit.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ListModelsError {
+    #[error("missing credentials")]
     MissingCredentials,
+    #[error("{0}")]
     Config(String),
-}
-
-impl From<ProviderError> for ProviderBuildError {
-    fn from(e: ProviderError) -> Self {
-        ProviderBuildError::Provider(e)
-    }
-}
-
-impl std::fmt::Display for ProviderBuildError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProviderBuildError::Auth(msg) => write!(f, "{msg}"),
-            ProviderBuildError::Config(msg) => write!(f, "{msg}"),
-            ProviderBuildError::Provider(e) => write!(f, "{e}"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +113,16 @@ fn require_api_key(env_name: &str) -> Result<String, ProviderBuildError> {
     Ok(key)
 }
 
+fn non_empty_env_var(env_name: &str) -> Option<String> {
+    std::env::var(env_name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn require_list_models_api_key(env_name: &str) -> Result<String, ListModelsError> {
+    non_empty_env_var(env_name).ok_or(ListModelsError::MissingCredentials)
+}
+
 /// Read AWS credentials from environment variables.
 fn resolve_bedrock_env_credentials() -> (
     Option<String>,
@@ -131,12 +130,11 @@ fn resolve_bedrock_env_credentials() -> (
     Option<String>,
     Option<String>,
 ) {
-    let akid = std::env::var("AWS_ACCESS_KEY_ID").ok();
-    let sak = std::env::var("AWS_SECRET_ACCESS_KEY").ok();
-    let token = std::env::var("AWS_SESSION_TOKEN").ok();
-    let region = std::env::var("AWS_REGION")
-        .ok()
-        .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok());
+    let akid = non_empty_env_var("AWS_ACCESS_KEY_ID");
+    let sak = non_empty_env_var("AWS_SECRET_ACCESS_KEY");
+    let token = non_empty_env_var("AWS_SESSION_TOKEN");
+    let region =
+        non_empty_env_var("AWS_REGION").or_else(|| non_empty_env_var("AWS_DEFAULT_REGION"));
     (akid, sak, token, region)
 }
 
@@ -221,7 +219,12 @@ impl Provider for MetadataProvider {
     }
 
     fn stream(&self, _request: Request) -> EventStream {
-        Box::pin(futures_util::stream::empty())
+        let id = self.id.clone();
+        Box::pin(futures_util::stream::once(async move {
+            Err(ProviderError::StreamError(format!(
+                "metadata-only provider '{id}' in the harness model registry cannot dispatch"
+            )))
+        }))
     }
 }
 
@@ -250,8 +253,7 @@ pub(crate) const BUILT_IN_PROVIDER_IDS: &[&str] = &[
 fn build_anthropic(
     config: &OpiConfig,
 ) -> Result<opi_ai::anthropic::AnthropicProvider, ListModelsError> {
-    let api_key = std::env::var(&config.providers.anthropic.api_key_env)
-        .map_err(|_| ListModelsError::MissingCredentials)?;
+    let api_key = require_list_models_api_key(&config.providers.anthropic.api_key_env)?;
     let client = build_proxied_client_for_listing(config.providers.anthropic.proxy.as_ref())?;
     Ok(opi_ai::anthropic::AnthropicProvider::with_client(
         api_key,
@@ -264,7 +266,7 @@ fn build_openai(
     config: &OpiConfig,
 ) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ListModelsError> {
     let env_name = resolve_env_name(&config.providers.openai.api_key_env, "OPENAI_API_KEY");
-    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let api_key = require_list_models_api_key(&env_name)?;
     let client = build_proxied_client_for_listing(config.providers.openai.proxy.as_ref())?;
     Ok(opi_ai::openai_chat::OpenAiChatProvider::with_client(
         api_key,
@@ -282,7 +284,7 @@ fn build_openrouter(
         &config.providers.openrouter.api_key_env,
         "OPENROUTER_API_KEY",
     );
-    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let api_key = require_list_models_api_key(&env_name)?;
     let client = build_proxied_client_for_listing(config.providers.openrouter.proxy.as_ref())?;
     if let Some(ref referer) = config.providers.openrouter.referer {
         let base_url = config
@@ -323,7 +325,7 @@ fn build_mistral(
     config: &OpiConfig,
 ) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ListModelsError> {
     let env_name = resolve_env_name(&config.providers.mistral.api_key_env, "MISTRAL_API_KEY");
-    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let api_key = require_list_models_api_key(&env_name)?;
     let client = build_proxied_client_for_listing(config.providers.mistral.proxy.as_ref())?;
     Ok(
         opi_ai::mistral::mistral_provider(api_key, config.providers.mistral.base_url.clone())
@@ -338,7 +340,7 @@ fn build_openai_responses(
         &config.providers.openai_responses.api_key_env,
         "OPENAI_API_KEY",
     );
-    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let api_key = require_list_models_api_key(&env_name)?;
     let client =
         build_proxied_client_for_listing(config.providers.openai_responses.proxy.as_ref())?;
     Ok(
@@ -352,7 +354,7 @@ fn build_openai_responses(
 
 fn build_gemini(config: &OpiConfig) -> Result<opi_ai::gemini::GeminiProvider, ListModelsError> {
     let env_name = resolve_env_name(&config.providers.gemini.api_key_env, "GEMINI_API_KEY");
-    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let api_key = require_list_models_api_key(&env_name)?;
     let client = build_proxied_client_for_listing(config.providers.gemini.proxy.as_ref())?;
     Ok(opi_ai::gemini::GeminiProvider::with_client(
         api_key,
@@ -371,11 +373,11 @@ fn build_bedrock(config: &OpiConfig) -> Result<opi_ai::bedrock::BedrockProvider,
     let secret_key = bedrock_config
         .secret_access_key_env
         .as_deref()
-        .and_then(|env_name| std::env::var(env_name).ok());
+        .and_then(non_empty_env_var);
     let session_token = bedrock_config
         .session_token_env
         .as_deref()
-        .and_then(|env_name| std::env::var(env_name).ok());
+        .and_then(non_empty_env_var);
     let input = opi_ai::bedrock::credentials::CredentialResolutionInput {
         config_access_key_id: bedrock_config.access_key_id.as_deref(),
         config_secret_access_key: secret_key.as_deref(),
@@ -404,7 +406,7 @@ fn build_azure(
 ) -> Result<opi_ai::azure_openai::AzureOpenAIProvider, ListModelsError> {
     let azure_config = &config.providers.azure;
     let env_name = resolve_env_name(&azure_config.api_key_env, "AZURE_OPENAI_API_KEY");
-    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let api_key = require_list_models_api_key(&env_name)?;
     if azure_config.deployments.is_empty() {
         return Err(ListModelsError::Config(
             "azure provider has no deployments configured".into(),
@@ -425,7 +427,7 @@ fn build_azure(
 fn build_vertex(config: &OpiConfig) -> Result<opi_ai::vertex::VertexProvider, ListModelsError> {
     let vertex_config = &config.providers.vertex;
     let env_name = resolve_env_name(&vertex_config.access_token_env, "VERTEX_ACCESS_TOKEN");
-    let access_token = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let access_token = require_list_models_api_key(&env_name)?;
     let project = vertex_config
         .project
         .as_deref()
@@ -505,7 +507,7 @@ fn build_list_models_openai_compatible_profile(
 ) -> Result<opi_ai::openai_chat::OpenAiChatProvider, ListModelsError> {
     let default_env = profile_api_key_env_default(&profile.id);
     let env_name = resolve_env_name(&profile.api_key_env, &default_env);
-    let api_key = std::env::var(&env_name).map_err(|_| ListModelsError::MissingCredentials)?;
+    let api_key = require_list_models_api_key(&env_name)?;
     let client = build_proxied_client_for_listing(profile.proxy.as_ref())?;
     build_openai_compatible_profile(profile, api_key, client).map_err(ListModelsError::Config)
 }
@@ -715,13 +717,13 @@ fn build_runtime_provider(
             let secret_key = bedrock_config
                 .secret_access_key_env
                 .as_deref()
-                .and_then(|env_name| std::env::var(env_name).ok());
+                .and_then(non_empty_env_var);
 
             // Read session token from configured env var
             let session_token = bedrock_config
                 .session_token_env
                 .as_deref()
-                .and_then(|env_name| std::env::var(env_name).ok());
+                .and_then(non_empty_env_var);
 
             let input = opi_ai::bedrock::credentials::CredentialResolutionInput {
                 config_access_key_id: bedrock_config.access_key_id.as_deref(),
@@ -859,6 +861,19 @@ pub fn auth_descriptor_for(config: &OpiConfig, provider_id: &str) -> Option<Auth
     Some(AuthDescriptor::EnvApiKey { env_var })
 }
 
+fn resolved_auth_descriptor_for(config: &OpiConfig, provider_id: &str) -> AuthDescriptor {
+    let source = if provider_id == "bedrock" {
+        "aws credential chain".to_string()
+    } else if let Some(AuthDescriptor::EnvApiKey { env_var }) =
+        auth_descriptor_for(config, provider_id)
+    {
+        format!("env {env_var}")
+    } else {
+        "configured".to_string()
+    };
+    AuthDescriptor::Resolved { source }
+}
+
 /// Derive the auth descriptor for a user-declared openai_compatible profile.
 pub fn auth_descriptor_for_profile(profile: &OpenAiCompatibleProviderConfig) -> AuthDescriptor {
     let default = profile_api_key_env_default(&profile.id);
@@ -866,10 +881,26 @@ pub fn auth_descriptor_for_profile(profile: &OpenAiCompatibleProviderConfig) -> 
     AuthDescriptor::EnvApiKey { env_var }
 }
 
+fn resolved_auth_descriptor_for_profile(
+    profile: &OpenAiCompatibleProviderConfig,
+) -> AuthDescriptor {
+    let default = profile_api_key_env_default(&profile.id);
+    let env_var = resolve_env_name(&profile.api_key_env, &default);
+    AuthDescriptor::Resolved {
+        source: format!("env {env_var}"),
+    }
+}
+
 /// Compat metadata for a built-in provider id. Built-ins do not carry
 /// user-declared openai_compatible profile flags at the collection level.
-pub fn compat_metadata_for(_provider_id: &str) -> CompatMetadata {
-    CompatMetadata::default()
+pub fn compat_metadata_for(provider_id: &str) -> CompatMetadata {
+    match provider_id {
+        "openai" | "openrouter" | "mistral" => CompatMetadata {
+            openai_compatible: true,
+            profile: Some(provider_id.to_owned()),
+        },
+        _ => CompatMetadata::default(),
+    }
 }
 
 /// Compat metadata for a user-declared openai_compatible profile.
@@ -898,11 +929,7 @@ pub fn build_collection_for_listing(
     for provider_id in BUILT_IN_PROVIDER_IDS {
         match build_list_models_provider(config, provider_id) {
             Ok(provider) => {
-                let auth = auth_descriptor_for(config, provider_id).unwrap_or_else(|| {
-                    AuthDescriptor::StaticApiKey {
-                        value: SecretKey::new("configured"),
-                    }
-                });
+                let auth = resolved_auth_descriptor_for(config, provider_id);
                 let compat = compat_metadata_for(provider_id);
                 if let Err(e) = collection.register(provider, auth, compat) {
                     return Err(ListModelsError::Config(format!(
@@ -917,7 +944,7 @@ pub fn build_collection_for_listing(
     for profile in config.providers.openai_compatible.values() {
         match build_list_models_openai_compatible_profile(profile) {
             Ok(provider) => {
-                let auth = auth_descriptor_for_profile(profile);
+                let auth = resolved_auth_descriptor_for_profile(profile);
                 let compat = compat_metadata_for_profile(profile);
                 if let Err(e) = collection.register(Box::new(provider), auth, compat) {
                     return Err(ListModelsError::Config(format!(

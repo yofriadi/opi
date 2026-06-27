@@ -42,10 +42,12 @@ use opi_agent::diagnostic::{
     SOURCE_CONFIG, SOURCE_PACKAGE, SOURCE_PROVIDER, SOURCE_RPC, SOURCE_SESSION, SOURCE_TUI,
 };
 use opi_agent::{Diagnostic, DiagnosticPayload, RedactionMode, Severity};
+use opi_ai::AuthDescriptor;
 
 use crate::config::{ConfigError, OpiConfig};
 use crate::diagnostic_bridge::{diagnostic_from_config, diagnostic_from_package};
 use crate::package_resolver::resolve_installed_packages;
+use crate::provider_factory;
 use crate::rpc::RPC_SCHEMA_VERSION;
 
 /// One of the six doctor scopes.
@@ -592,14 +594,6 @@ fn rpc_diagnostics() -> Vec<Diagnostic> {
 // Config helpers
 // ---------------------------------------------------------------------------
 
-fn env_or_default(configured: &str, default: &str) -> String {
-    if configured.trim().is_empty() {
-        default.to_string()
-    } else {
-        configured.to_string()
-    }
-}
-
 struct CredentialProbe {
     label: String,
     present: bool,
@@ -614,11 +608,24 @@ fn provider_credential_probe(
         return Some(bedrock_credential_probe(config, env_var));
     }
 
-    let env_name = provider_credential_env_name(config, provider)?;
-    Some(CredentialProbe {
-        present: env_value_present(env_var, &env_name),
-        label: format!("env {env_name}"),
-    })
+    let descriptor = provider_factory::auth_descriptor_for(config, provider).or_else(|| {
+        config
+            .providers
+            .openai_compatible
+            .get(provider)
+            .map(provider_factory::auth_descriptor_for_profile)
+    })?;
+    match descriptor {
+        AuthDescriptor::EnvApiKey { env_var: env_name } => Some(CredentialProbe {
+            present: env_value_present(env_var, &env_name),
+            label: format!("env {env_name}"),
+        }),
+        AuthDescriptor::StaticApiKey { value } => Some(CredentialProbe {
+            present: value.is_present(),
+            label: "static api key".to_string(),
+        }),
+        _ => None,
+    }
 }
 
 fn bedrock_credential_probe(
@@ -678,38 +685,6 @@ fn bedrock_credential_probe(
 
 fn env_value_present(env_var: &dyn Fn(&str) -> Option<String>, name: &str) -> bool {
     env_var(name).is_some_and(|value| !value.trim().is_empty())
-}
-
-/// Resolve the credential environment-variable name for a selected provider, if
-/// known. Returns `None` for an unknown provider that is not a configured
-/// openai-compatible profile.
-fn provider_credential_env_name(config: &OpiConfig, provider: &str) -> Option<String> {
-    let providers = &config.providers;
-    Some(match provider {
-        "anthropic" => env_or_default(&providers.anthropic.api_key_env, "ANTHROPIC_API_KEY"),
-        "openai" => env_or_default(&providers.openai.api_key_env, "OPENAI_API_KEY"),
-        "openrouter" => env_or_default(&providers.openrouter.api_key_env, "OPENROUTER_API_KEY"),
-        "mistral" => env_or_default(&providers.mistral.api_key_env, "MISTRAL_API_KEY"),
-        "openai-responses" => {
-            env_or_default(&providers.openai_responses.api_key_env, "OPENAI_API_KEY")
-        }
-        "gemini" => env_or_default(&providers.gemini.api_key_env, "GEMINI_API_KEY"),
-        "azure" => env_or_default(&providers.azure.api_key_env, "AZURE_OPENAI_API_KEY"),
-        "vertex" => env_or_default(&providers.vertex.access_token_env, "VERTEX_ACCESS_TOKEN"),
-        "bedrock" => {
-            // Bedrock credentials resolve from env, profile, or file; the env
-            // access key id is the primary signal, so probe that.
-            "AWS_ACCESS_KEY_ID".to_string()
-        }
-        other => {
-            let profile = providers.openai_compatible.get(other)?;
-            if profile.api_key_env.trim().is_empty() {
-                format!("{}_API_KEY", other.replace('-', "_").to_ascii_uppercase())
-            } else {
-                profile.api_key_env.clone()
-            }
-        }
-    })
 }
 
 /// The configured proxy URL for the selected provider, if any.

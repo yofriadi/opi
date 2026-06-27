@@ -181,7 +181,7 @@ with the older `.repo/pi-0.75.3` baseline.
 | pi package | opi crate | Level | Implemented | Gaps / adjustment |
 |---|---|---|---|---|
 | `@earendil-works/pi-ai` | `opi-ai` | Partial | Provider trait, provider adapters, provider registry, model metadata, image input, usage/cost, retry/backoff, proxy config, OpenAI-compatible profiles, and custom provider/model registration. | Add a Rust-native provider collection/auth seam in Phase 10. Keep OAuth, image generation, and broad catalog work as future candidates. |
-| `@earendil-works/pi-agent-core` | `opi-agent` | Partial | Agent loop, stateful `Agent`, hooks, tool batching, queues, sessions, compaction, SDK types, extension trait, diagnostics, streaming proxy primitives, and runtime contract tests. | No generic `AgentHarness`/session facade equivalent yet; package-level alignment drops from Full to Partial until Phase 10/13 close that gap. |
+| `@earendil-works/pi-agent-core` | `opi-agent` | Partial | Agent loop, stateful `Agent`, hooks, tool batching, queues, sessions, compaction, SDK types, extension trait, diagnostics, streaming proxy primitives, and runtime contract tests. | Generic `AgentHarness`/session facade seams exist, but product turn/session adoption is still partial. |
 | `@earendil-works/pi-tui` | `opi-tui` | Partial | Rust-native `ratatui`/`crossterm` widgets, transcript rendering, markdown/code, diff, pickers, branch/session picker snapshots, themes, keybindings, terminal images, and CJK display-width coverage. | Renderer API compatibility is an intentional divergence. Custom extension UI/message renderers remain future ecosystem work; Phase 14 should polish built-in product UI. |
 | `@earendil-works/pi-coding-agent` | `opi-coding-agent` | Partial | CLI modes, built-in tools, config, sessions, context files, images, JSON/RPC, resources, packages, skills, prompt fragments, themes, custom provider registration, extension commands, branch/tree/fork/clone flows, package CLI, process-jsonl adapter hosting, diagnostics, and doctor checks. | Pi remains broader in custom extension UI, provider hooks/login, npm/gallery lifecycle, export/share, and update surfaces. Keep these gated behind future ecosystem designs. |
 
@@ -208,7 +208,7 @@ with the older `.repo/pi-0.75.3` baseline.
 | Stateful `Agent` wrapper | Full | Prompt/continue/abort/subscribe and queue behavior exist. | Preserve API as 0.x unless later stabilized. |
 | Generic `AgentHarness` | Partial | `CodingHarness` owns much of the comparable orchestration. | Phase 10 should define generic harness phases, snapshots, save points, busy guards, and runtime mutation semantics in `opi-agent`. |
 | Session storage | Partial | Append-only JSONL, resume/list/delete/fork, branch `parent_id`, `leaf`, compaction, and extension state exist. | Phase 10 defines session facade; Phase 13 adds richer context entries. |
-| Pending session write ordering | Missing | Current behavior is not exposed as a generic harness contract. | Phase 10 should document and test ordering before Phase 13 adds more writes. |
+| Pending session write ordering | Partial | Generic harness/session facade seams expose ordered pending-write behavior, but product session adoption remains partial. | Phase 13 should build richer entries on the seam and keep ordering contract tests. |
 | Compaction | Full | Threshold/manual/overflow primitives and session events exist. | Keep branch-aware compaction tests. |
 | Extension trait/hooks/state | Partial | Rust in-process extension API and process adapter bridge exist. | Keep narrow; future provider/UI/session lifecycle hooks need separate designs. |
 
@@ -247,7 +247,7 @@ with the older `.repo/pi-0.75.3` baseline.
 | 7 | Reliability and observability | `opi-agent`, `opi-coding-agent`, `opi-ai` | Partial | Diagnostics, redaction, trace envelopes, doctor checks are local and explicit. |
 | 8 | Runtime stabilization | `opi-agent`, `opi-coding-agent` | Partial | Event order, hooks, tool scheduling, cancellation, SDK/RPC contracts, and API surface classification are tested. |
 | 9 | pi 0.80.2 baseline realignment | docs | Planned | Documentation/evidence gate; no runtime changes. |
-| 10 | Core architecture deepening | `opi-ai`, `opi-agent`, `opi-coding-agent` | Planned | `Models/Auth`, generic `AgentHarness`, session facade, runtime hook boundaries. |
+| 10 | Core architecture deepening | `opi-ai`, `opi-agent`, `opi-coding-agent` | Partial | `Models/Auth`, generic `AgentHarness`, session facade, runtime hook boundaries. |
 | 11 | Tooling quality | `opi-coding-agent`, `opi-agent`, `opi-tui` | Planned | Recast from old Phase 9; depends on Phase 10 boundaries. |
 | 12 | Provider correctness | `opi-ai`, `opi-coding-agent` | Planned | Recast from old Phase 10; tests through provider collection/auth seam. |
 | 13 | Session tree and context reconstruction | `opi-agent`, `opi-coding-agent`, `opi-tui` | Planned | Recast from old Phase 11; depends on generic harness/session facade. |

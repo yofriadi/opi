@@ -174,6 +174,12 @@ fn kind_rank(kind: PendingWriteKind) -> u8 {
     }
 }
 
+fn active_content_tip(entries: &[SessionEntry]) -> Option<String> {
+    crate::session_branch::SessionTree::from_entries(entries)
+        .active_tip()
+        .map(str::to_owned)
+}
+
 /// Frozen runtime configuration for a turn.
 ///
 /// This wraps [`AgentLoopConfig`] plus the active model and is the unit a turn
@@ -333,8 +339,7 @@ pub struct AgentHarness {
     turn_snapshot: Option<HarnessRuntimeConfig>,
     last_save_point: Option<SavePoint>,
     savepoint_seq: u64,
-    last_entry_id: Option<String>,
-    id_counter: u64,
+    content_tip_entry_id: Option<String>,
 }
 
 impl AgentHarness {
@@ -355,8 +360,7 @@ impl AgentHarness {
             turn_snapshot: None,
             last_save_point: None,
             savepoint_seq: 0,
-            last_entry_id: None,
-            id_counter: 0,
+            content_tip_entry_id: None,
         }
     }
 
@@ -396,7 +400,7 @@ impl AgentHarness {
     pub fn enqueue_message(&mut self, message: Message) -> HarnessResult<u64> {
         self.require_idle()?;
         let id = self.next_id();
-        let parent_id = self.last_entry_id.take();
+        let parent_id = self.content_tip_entry_id.clone();
         let timestamp = self.next_timestamp();
         let entry = SessionEntry::Message(MessageEntry {
             id: id.clone(),
@@ -404,7 +408,7 @@ impl AgentHarness {
             timestamp,
             message,
         });
-        self.last_entry_id = Some(id);
+        self.content_tip_entry_id = Some(id);
         Ok(self.queue.enqueue(entry, PendingWriteKind::AgentMessage))
     }
 
@@ -414,15 +418,14 @@ impl AgentHarness {
     pub fn enqueue_extension_state(&mut self, state: serde_json::Value) -> HarnessResult<u64> {
         self.require_idle()?;
         let id = self.next_id();
-        let parent_id = self.last_entry_id.take();
+        let parent_id = self.content_tip_entry_id.clone();
         let timestamp = self.next_timestamp();
         let entry = SessionEntry::ExtensionState(ExtensionStateEntry {
-            id: id.clone(),
+            id,
             parent_id,
             timestamp,
             state,
         });
-        self.last_entry_id = Some(id);
         Ok(self.queue.enqueue(entry, PendingWriteKind::ExtensionState))
     }
 
@@ -569,8 +572,7 @@ impl AgentHarness {
     }
 
     fn next_id(&mut self) -> String {
-        self.id_counter += 1;
-        format!("entry-{}", self.id_counter)
+        format!("entry-{}", uuid::Uuid::now_v7())
     }
 
     fn next_timestamp(&self) -> String {
@@ -582,7 +584,7 @@ impl AgentHarness {
 
     fn build_compaction_entry(&mut self, result: &CompactionResult) -> SessionEntry {
         let id = self.next_id();
-        let parent_id = self.last_entry_id.take();
+        let parent_id = self.content_tip_entry_id.clone();
         let timestamp = self.next_timestamp();
         let entry = SessionEntry::Compaction(CompactionEntry {
             id: id.clone(),
@@ -593,7 +595,7 @@ impl AgentHarness {
             tokens_before: result.tokens_before,
             tokens_after: result.tokens_after,
         });
-        self.last_entry_id = Some(id);
+        self.content_tip_entry_id = Some(id);
         entry
     }
 }
@@ -720,23 +722,22 @@ impl SessionRepo for JsonlSessionRepo {
 pub struct SessionFacade {
     repo: Box<dyn SessionRepo>,
     queue: PendingWriteQueue,
-    last_entry_id: Option<String>,
-    id_counter: u64,
+    content_tip_entry_id: Option<String>,
     savepoint_seq: u64,
     last_save_point: Option<SavePoint>,
 }
 
 impl SessionFacade {
     /// Create a new facade over the given repo backend.
-    pub fn new(repo: Box<dyn SessionRepo>) -> Self {
-        Self {
+    pub fn new(repo: Box<dyn SessionRepo>) -> std::io::Result<Self> {
+        let (_header, entries, _recovery) = repo.load()?;
+        Ok(Self {
             repo,
             queue: PendingWriteQueue::new(),
-            last_entry_id: None,
-            id_counter: 0,
+            content_tip_entry_id: active_content_tip(&entries),
             savepoint_seq: 0,
             last_save_point: None,
-        }
+        })
     }
 
     /// Enqueue an agent-emitted message write. Returns the assigned
@@ -744,7 +745,7 @@ impl SessionFacade {
     /// enqueued in the same batch.
     pub fn enqueue_message(&mut self, message: Message) -> HarnessResult<u64> {
         let id = self.next_id();
-        let parent_id = self.last_entry_id.take();
+        let parent_id = self.content_tip_entry_id.clone();
         let timestamp = self.next_timestamp();
         let entry = SessionEntry::Message(MessageEntry {
             id: id.clone(),
@@ -752,7 +753,7 @@ impl SessionFacade {
             timestamp,
             message,
         });
-        self.last_entry_id = Some(id);
+        self.content_tip_entry_id = Some(id);
         Ok(self.queue.enqueue(entry, PendingWriteKind::AgentMessage))
     }
 
@@ -761,15 +762,14 @@ impl SessionFacade {
     /// enqueued in the same batch.
     pub fn enqueue_extension_state(&mut self, state: serde_json::Value) -> HarnessResult<u64> {
         let id = self.next_id();
-        let parent_id = self.last_entry_id.take();
+        let parent_id = self.content_tip_entry_id.clone();
         let timestamp = self.next_timestamp();
         let entry = SessionEntry::ExtensionState(ExtensionStateEntry {
-            id: id.clone(),
+            id,
             parent_id,
             timestamp,
             state,
         });
-        self.last_entry_id = Some(id);
         Ok(self.queue.enqueue(entry, PendingWriteKind::ExtensionState))
     }
 
@@ -860,8 +860,7 @@ impl SessionFacade {
     }
 
     fn next_id(&mut self) -> String {
-        self.id_counter += 1;
-        format!("entry-{}", self.id_counter)
+        format!("entry-{}", uuid::Uuid::now_v7())
     }
 
     fn next_timestamp(&self) -> String {

@@ -1392,14 +1392,19 @@ Phase 10 deepens existing capabilities before breadth:
 |---|---|---|
 | `Models/Auth` seam | `opi-ai` | provider collection/model lookup, refresh if supported, provider-owned auth, compatibility metadata, stream/complete dispatch |
 | Generic `AgentHarness` | `opi-agent` | phase guards, turn snapshots, save points, ordered pending writes, runtime config mutation semantics |
-| Session repo/facade | `opi-agent` | stable durable append/load/list/fork traits and ordered read/write facade for Phase 13 |
+| Session repo/facade | `opi-agent` | stable durable append/load/entry-count traits and ordered read/write facade for Phase 13; list/fork stay product-owned in `opi-coding-agent` |
 | Runtime hook boundaries | `opi-agent` / `opi-coding-agent` | keep current hooks narrow while preserving future provider/UI/session lifecycle paths |
 
 Initial seams have landed across the four workstreams: `opi-ai` exposes the
-provider collection/auth seam and `opi-coding-agent` routes provider
-construction through it; `opi-agent` exposes the generic `AgentHarness` and
-session facade seams; focused regression tests cover existing behavior; and the
-runtime hook boundary model is documented below.
+published provider collection/auth seam. `opi-coding-agent` routes model
+listing and model-registry construction through that seam; active runtime
+provider dispatch still uses the existing `Box<dyn Provider>` path, and
+collection-level dispatch adoption is deferred until a reviewed product-loop
+migration. `opi-agent` exposes the published generic `AgentHarness` and session
+facade seams; product turn loop adoption is deferred to a reviewed product-loop
+migration, and list/fork stay product-owned in `opi-coding-agent`. The focused
+regression tests cover existing behavior, and the runtime hook boundary model
+is documented below.
 
 #### Session facade boundaries
 

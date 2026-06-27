@@ -139,6 +139,10 @@ fn no_positive_claim(haystack: &str, needle: &str) -> bool {
                 || line.contains("不声明")
                 || line.contains("不得")
                 || line.contains("未实现")
+                || line.contains("不支持")
+                || line.contains("不提供")
+                || line.contains("未引入")
+                || line.contains("推迟")
             {
                 continue;
             }
@@ -1780,11 +1784,6 @@ fn phase10_forbidden_current_scope_claims_rejected() {
     // broad provider catalog, custom TUI extension protocol, shared opi-types
     // crate, whole-loop rewrite, current-scope OAuth login).
     //
-    // Needles are CLAIM-VERB phrases (phase9 idiom), not bare feature names, so
-    // they do not trip the Future Ecosystem Candidates table (which lists
-    // several of these as future candidates without negation) or the wrapped
-    // Phase 10 non-goals paragraph (whose per-line negation keyword lives only
-    // on the paragraph's first line).
     let docs = [
         "README.md",
         "README.zh.md",
@@ -1793,25 +1792,130 @@ fn phase10_forbidden_current_scope_claims_rejected() {
         "docs/pi-alignment-matrix.md",
         "docs/pi-alignment-matrix.zh.md",
     ];
-    for needle in [
-        "supports provider OAuth login",
-        "supports subscription auth",
-        "expanded the provider catalog",
-        "ships a custom TUI extension protocol",
-        "introduced a shared opi-types crate",
-        "rewrote the whole agent loop",
-        "支持 provider OAuth 登录",
-        "支持 subscription auth",
-        "扩张了 provider catalog",
-        "提供自定义 TUI extension protocol",
-        "引入了共享 opi-types crate",
-        "整体重写了 agent loop",
-    ] {
-        assert_docs_reject_claim(
-            &docs,
-            needle,
-            "a Phase 10 deferred-surface current-scope overclaim",
-        );
+    let claims: [(&[&str], &[&str]); 6] = [
+        (
+            &["provider OAuth login", "provider OAuth 登录"],
+            &[
+                "supports",
+                "implements",
+                "provides",
+                "ships",
+                "支持",
+                "实现",
+                "提供",
+                "发布",
+            ],
+        ),
+        (
+            &["subscription auth"],
+            &[
+                "supports",
+                "implements",
+                "provides",
+                "ships",
+                "支持",
+                "实现",
+                "提供",
+                "发布",
+            ],
+        ),
+        (
+            &[
+                "broad provider catalog",
+                "provider catalog",
+                "provider catalog expansion",
+                "广泛 provider catalog",
+                "provider catalog 扩张",
+            ],
+            &[
+                "supports",
+                "implements",
+                "provides",
+                "ships",
+                "expands",
+                "adds",
+                "支持",
+                "实现",
+                "提供",
+                "发布",
+                "扩张",
+            ],
+        ),
+        (
+            &[
+                "custom TUI extension protocol",
+                "custom TUI protocol",
+                "自定义 TUI extension protocol",
+                "自定义 TUI 扩展协议",
+            ],
+            &[
+                "supports",
+                "implements",
+                "provides",
+                "ships",
+                "adds",
+                "支持",
+                "实现",
+                "提供",
+                "发布",
+                "新增",
+            ],
+        ),
+        (
+            &["shared opi-types crate", "共享 opi-types crate"],
+            &[
+                "introduced",
+                "adds",
+                "ships",
+                "provides",
+                "引入",
+                "新增",
+                "提供",
+                "发布",
+            ],
+        ),
+        (
+            &["whole agent loop", "agent loop"],
+            &[
+                "rewrote",
+                "replaces",
+                "migrates",
+                "routes entirely through",
+                "重写",
+                "替换",
+                "迁移",
+                "完全路由",
+            ],
+        ),
+    ];
+
+    let positive_claim_match = |line: &str| {
+        let line_lower = line.to_lowercase();
+        claims.iter().find_map(|(features, verbs)| {
+            features.iter().find_map(|feature| {
+                let feature_lower = feature.to_lowercase();
+                if !line_lower.contains(&feature_lower) {
+                    return None;
+                }
+                verbs.iter().find_map(|verb| {
+                    let verb_lower = verb.to_lowercase();
+                    if line_lower.contains(&verb_lower) && !no_positive_claim(line, feature) {
+                        Some((*feature, *verb))
+                    } else {
+                        None
+                    }
+                })
+            })
+        })
+    };
+
+    for doc in docs {
+        let content = read_repo_file(doc);
+        for line in content.lines() {
+            if let Some((feature, verb)) = positive_claim_match(line) {
+                panic!("{doc} must not positively claim `{verb}` + `{feature}`: {line}");
+            }
+        }
     }
 
     // Non-vacuity: prove the helper catches each overclaim shape when it is
@@ -1828,25 +1932,36 @@ fn phase10_forbidden_current_scope_claims_rejected() {
             "supports subscription auth",
         ),
         (
-            "opi expanded the provider catalog this phase",
-            "expanded the provider catalog",
+            "opi expands the broad provider catalog today",
+            "broad provider catalog",
         ),
         (
-            "opi ships a custom TUI extension protocol",
-            "ships a custom TUI extension protocol",
+            "opi supports custom TUI extension protocol today",
+            "custom TUI extension protocol",
         ),
         (
-            "opi introduced a shared opi-types crate",
-            "introduced a shared opi-types crate",
+            "opi provides a shared opi-types crate",
+            "shared opi-types crate",
         ),
         (
-            "opi rewrote the whole agent loop",
-            "rewrote the whole agent loop",
+            "opi routes entirely through the whole agent loop migration",
+            "whole agent loop",
         ),
     ] {
         assert!(
             !no_positive_claim(line, needle),
             "non-vacuity: no_positive_claim must catch `{needle}` as a positive claim"
+        );
+    }
+    for line in [
+        "opi \u{652f}\u{6301} subscription auth today",
+        "opi \u{6269}\u{5f20} provider catalog today",
+        "opi \u{652f}\u{6301} \u{81ea}\u{5b9a}\u{4e49} TUI \u{6269}\u{5c55}\u{534f}\u{8bae}",
+        "opi \u{5f15}\u{5165}\u{4e86}\u{5171}\u{4eab} opi-types crate",
+    ] {
+        assert!(
+            positive_claim_match(line).is_some(),
+            "non-vacuity: grouped Phase 10 guard must catch localized positive claim `{line}`"
         );
     }
 }
@@ -1868,10 +1983,11 @@ fn phase10_exit_trace_completeness() {
         spec_en.contains("provider collection/auth seam"),
         "SC1: opi-spec must name the opi-ai provider collection/auth seam (EN)"
     );
-    // SC2: opi-coding-agent routes provider construction through the seam.
+    // SC2: opi-coding-agent routes model listing/registry construction through
+    // the seam, while runtime provider dispatch remains on the existing path.
     assert!(
-        spec_en.contains("routes provider construction through"),
-        "SC2: opi-spec must state opi-coding-agent routes provider construction through the seam (EN)"
+        spec_en.contains("routes model listing and model-registry construction through"),
+        "SC2: opi-spec must state opi-coding-agent routes model listing/model-registry construction through the seam (EN)"
     );
     // SC3: generic AgentHarness with phase/snapshot/save-point semantics.
     assert!(
@@ -1913,6 +2029,12 @@ fn phase10_exit_trace_completeness() {
         spec_zh.contains("非目标不声明"),
         "SC8: opi-spec.zh must carry the Phase 10 non-goals enumeration (ZH)"
     );
+    for phrase in ["list/fork 仍由产品层拥有", "产品 turn loop 采用已推迟"] {
+        assert!(
+            spec_zh.contains(phrase),
+            "Phase 10 exit trace must honestly state `{phrase}` (ZH)"
+        );
+    }
 
     // (c) The 4 workstream goals are all named in the Phase 10 workstream table.
     for ws in [
@@ -1948,26 +2070,18 @@ fn phase10_exit_trace_completeness() {
         );
     }
 
-    // (e) Trace shape: every Phase 10 SC is recorded with its exit status. All
-    // eight are met by this docs+guards slice; none is deferred-by-updated-design
-    // or not-met. Recorded as (criterion, status) pairs so a future SC added
-    // above without a matching entry here is visibly incomplete. Phase F.1b
-    // requires an exact source citation for any future deferred-by-updated-design
-    // entry; assert each status is `met` to keep the trace honest.
-    let trace: [(&str, &str); 8] = [
-        ("SC1 provider collection/auth seam", "met"),
-        ("SC2 opi-coding-agent routes through seam", "met"),
-        ("SC3 generic AgentHarness seam", "met"),
-        ("SC4 CodingHarness product wrapper", "met"),
-        ("SC5 session repo/facade boundaries", "met"),
-        ("SC6 runtime hook boundaries", "met"),
-        ("SC7 focused regression coverage", "met"),
-        ("SC8 no ecosystem breadth", "met"),
-    ];
-    for (criterion, status) in trace {
-        assert_eq!(
-            status, "met",
-            "Phase 10 {criterion} must be met (no deferrals or not-met this phase)"
+    // (e) Honest exit-trace phrases distinguish published seams from product
+    // adoption that remains deferred.
+    for phrase in [
+        "published provider collection/auth seam",
+        "runtime provider dispatch still uses",
+        "published generic `AgentHarness`",
+        "product turn loop adoption is deferred",
+        "list/fork stay product-owned",
+    ] {
+        assert!(
+            spec_en.contains(phrase),
+            "Phase 10 exit trace must honestly state `{phrase}`"
         );
     }
 }
