@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
 
-use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
+use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -52,14 +52,9 @@ impl Tool for BashTool {
             Ok(a) => a,
             Err(e) => {
                 return Box::pin(async move {
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("invalid arguments: {e}"),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    })
+                    Ok(result::err(vec![OutputContent::Text {
+                        text: format!("invalid arguments: {e}"),
+                    }]))
                 });
             }
         };
@@ -68,30 +63,20 @@ impl Tool for BashTool {
         let cwd = self.workspace_root.clone();
         let workspace_root = self.workspace_root.clone();
         Box::pin(async move {
-            let (program, args) = if cfg!(windows) {
-                ("cmd".to_string(), vec!["/C", &command])
-            } else {
-                ("sh".to_string(), vec!["-c", &command])
-            };
-
-            let mut cmd = tokio::process::Command::new(&program);
-            cmd.args(&args).current_dir(&cwd);
-            let child = cmd
+            let shell = if cfg!(windows) { "cmd" } else { "sh" };
+            let flag = if cfg!(windows) { "/C" } else { "-c" };
+            let mut cmd = tokio::process::Command::new(shell);
+            cmd.arg(flag).arg(&command).current_dir(&cwd);
+            let mut child = match cmd
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
-                .spawn();
-
-            let mut child = match child {
+                .spawn()
+            {
                 Ok(c) => c,
                 Err(e) => {
-                    return Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("failed to spawn command: {e}"),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    });
+                    return Ok(result::err(vec![OutputContent::Text {
+                        text: format!("failed to spawn command: {e}"),
+                    }]));
                 }
             };
 
@@ -101,85 +86,115 @@ impl Tool for BashTool {
             tokio::pin!(timeout_future);
             tokio::pin!(cancel_future);
 
-            let result = tokio::select! {
-                status = child.wait() => {
-                    match status {
-                        Ok(s) => {
-                            let stdout = child.stdout.take();
-                            let stderr = child.stderr.take();
-                            let output_fut = async {
-                                let out = match stdout {
-                                    Some(mut s) => {
-                                        let mut buf = Vec::new();
-                                        use tokio::io::AsyncReadExt;
-                                        let _ = s.read_to_end(&mut buf).await;
-                                        String::from_utf8_lossy(&buf).into_owned()
-                                    }
-                                    None => String::new(),
-                                };
-                                let err = match stderr {
-                                    Some(mut s) => {
-                                        let mut buf = Vec::new();
-                                        use tokio::io::AsyncReadExt;
-                                        let _ = s.read_to_end(&mut buf).await;
-                                        String::from_utf8_lossy(&buf).into_owned()
-                                    }
-                                    None => String::new(),
-                                };
-                                (out, err)
+            // Each execution branch yields (content, details, is_error); the result is
+            // assembled once afterwards so success / nonzero / timeout / cancellation
+            // all share one stable operation-metadata key set. Timeout reports
+            // `timed_out=true, cancelled=false`; cancellation reports the inverse.
+            let (content, details, is_error): (Vec<OutputContent>, serde_json::Value, bool) = tokio::select! {
+                status = child.wait() => match status {
+                    Ok(s) => {
+                        let exit_code = s.code();
+                        let stdout = child.stdout.take();
+                        let stderr = child.stderr.take();
+                        let output_fut = async {
+                            let out = match stdout {
+                                Some(mut s) => {
+                                    let mut buf = Vec::new();
+                                    use tokio::io::AsyncReadExt;
+                                    let _ = s.read_to_end(&mut buf).await;
+                                    String::from_utf8_lossy(&buf).into_owned()
+                                }
+                                None => String::new(),
                             };
-                            let (stdout, stderr) = output_fut.await;
-                            Ok((stdout, stderr, s.code()))
+                            let err = match stderr {
+                                Some(mut s) => {
+                                    let mut buf = Vec::new();
+                                    use tokio::io::AsyncReadExt;
+                                    let _ = s.read_to_end(&mut buf).await;
+                                    String::from_utf8_lossy(&buf).into_owned()
+                                }
+                                None => String::new(),
+                            };
+                            (out, err)
+                        };
+                        let (stdout, stderr) = output_fut.await;
+                        let mut output = stdout;
+                        if !stderr.is_empty() {
+                            if !output.is_empty() {
+                                output.push('\n');
+                            }
+                            output.push_str(&stderr);
                         }
-                        Err(e) => Err(format!("failed to wait for process: {e}")),
+                        let details = result::bash_operation_metadata(
+                            &workspace_root,
+                            &command,
+                            &cwd,
+                            shell,
+                            exit_code,
+                            false,
+                            false,
+                            false,
+                            None,
+                        );
+                        (
+                            vec![OutputContent::Text { text: output }],
+                            details,
+                            exit_code != Some(0),
+                        )
                     }
-                }
+                    Err(e) => {
+                        return Ok(result::err(vec![OutputContent::Text {
+                            text: format!("failed to wait for process: {e}"),
+                        }]));
+                    }
+                },
                 _ = &mut timeout_future => {
                     let _ = child.kill().await;
-                    Err("command timed out".into())
+                    let details = result::bash_operation_metadata(
+                        &workspace_root,
+                        &command,
+                        &cwd,
+                        shell,
+                        None,
+                        true,
+                        false,
+                        false,
+                        None,
+                    );
+                    (
+                        vec![OutputContent::Text {
+                            text: "command timed out".to_string(),
+                        }],
+                        details,
+                        true,
+                    )
                 }
                 _ = &mut cancel_future => {
                     let _ = child.kill().await;
-                    Err("command cancelled".into())
+                    let details = result::bash_operation_metadata(
+                        &workspace_root,
+                        &command,
+                        &cwd,
+                        shell,
+                        None,
+                        false,
+                        true,
+                        false,
+                        None,
+                    );
+                    (
+                        vec![OutputContent::Text {
+                            text: "command cancelled".to_string(),
+                        }],
+                        details,
+                        true,
+                    )
                 }
             };
 
-            match result {
-                Ok((stdout, stderr, exit_code)) => {
-                    let mut output = stdout;
-                    if !stderr.is_empty() {
-                        if !output.is_empty() {
-                            output.push('\n');
-                        }
-                        output.push_str(&stderr);
-                    }
-
-                    let is_error = exit_code != Some(0);
-                    let details = serde_json::json!({
-                        "command": command,
-                        "cwd": cwd.to_string_lossy(),
-                        "exit_code": exit_code,
-                        "workspace_root": workspace_root.to_string_lossy(),
-                    });
-
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text { text: output }],
-                        details: Some(details),
-                        is_error,
-                        terminate: false,
-                    })
-                }
-                Err(msg) => Ok(ToolResult {
-                    content: vec![OutputContent::Text { text: msg }],
-                    details: Some(serde_json::json!({
-                        "command": command,
-                        "cwd": cwd.to_string_lossy(),
-                        "timed_out": true,
-                    })),
-                    is_error: true,
-                    terminate: false,
-                }),
-            }
+            let mut tool_result = result::ok(content, details);
+            tool_result.is_error = is_error;
+            Ok(tool_result)
         })
     }
 

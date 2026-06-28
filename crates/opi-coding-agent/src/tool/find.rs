@@ -2,7 +2,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
+use opi_agent::tool::result::WorkspaceRelation;
+use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -52,14 +53,9 @@ impl Tool for FindTool {
             Ok(a) => a,
             Err(e) => {
                 return Box::pin(async move {
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("invalid arguments: {e}"),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    })
+                    Ok(result::err(vec![OutputContent::Text {
+                        text: format!("invalid arguments: {e}"),
+                    }]))
                 });
             }
         };
@@ -71,45 +67,32 @@ impl Tool for FindTool {
             let glob_matcher = match globset::Glob::new(&pattern) {
                 Ok(g) => g.compile_matcher(),
                 Err(e) => {
-                    return Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("invalid glob pattern: {e}"),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    });
+                    return Ok(result::err(vec![OutputContent::Text {
+                        text: format!("invalid glob pattern: {e}"),
+                    }]));
                 }
             };
 
-            let search_root = if let Some(ref p) = scope_path {
-                // Validate the scope path is within workspace
-                match super::validate_workspace_path(&workspace_root, p) {
-                    Ok(canonical) => {
-                        // Must be a directory or the path prefix is valid
-                        if canonical.is_file() {
-                            return Ok(ToolResult {
-                                content: vec![OutputContent::Text {
-                                    text: format!("'{}' is not a directory", p),
-                                }],
-                                details: None,
-                                is_error: true,
-                                terminate: false,
-                            });
+            // Resolve the optional scope path through the shared resolver so the
+            // workspace relation is recovered uniformly; unscoped searches walk
+            // the workspace root (relation `inside`).
+            let (search_root, workspace_relation) = if let Some(ref p) = scope_path {
+                match super::resolve_tool_path(&workspace_root, p, super::PathPolicy::WorkspaceOnly)
+                {
+                    Ok(resolved) => {
+                        if resolved.path.is_file() {
+                            return Ok(result::err(vec![OutputContent::Text {
+                                text: format!("'{}' is not a directory", p),
+                            }]));
                         }
-                        canonical
+                        (resolved.path, resolved.workspace_relation)
                     }
                     Err(msg) => {
-                        return Ok(ToolResult {
-                            content: vec![OutputContent::Text { text: msg }],
-                            details: None,
-                            is_error: true,
-                            terminate: false,
-                        });
+                        return Ok(result::err(vec![OutputContent::Text { text: msg }]));
                     }
                 }
             } else {
-                workspace_root.clone()
+                (workspace_root.clone(), WorkspaceRelation::Inside)
             };
 
             let mut matched_paths = Vec::new();
@@ -137,14 +120,10 @@ impl Tool for FindTool {
                 "workspace_root": workspace_root.to_string_lossy(),
                 "pattern": pattern,
                 "match_count": matched_paths.len(),
+                "workspace_relation": workspace_relation,
             });
 
-            Ok(ToolResult {
-                content: vec![OutputContent::Text { text }],
-                details: Some(details),
-                is_error: false,
-                terminate: false,
-            })
+            Ok(result::ok(vec![OutputContent::Text { text }], details))
         })
     }
 

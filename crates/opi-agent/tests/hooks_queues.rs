@@ -94,6 +94,8 @@ impl Tool for EchoTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -231,6 +233,8 @@ impl AgentHooks for ReplacingHooks {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -655,6 +659,8 @@ impl Tool for CountingTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }

@@ -207,6 +207,7 @@ fn tool_result_message_with_image_content_serde() {
         ],
         details: None,
         is_error: false,
+        truncated: false,
         timestamp_ms: 1000,
     });
     let json = serde_json::to_string(&msg).unwrap();

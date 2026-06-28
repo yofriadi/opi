@@ -23,6 +23,7 @@ fn image_tool_result_msg() -> Message {
         ],
         details: None,
         is_error: false,
+        truncated: false,
         timestamp_ms: 1000,
     })
 }
@@ -39,6 +40,7 @@ fn image_bytes_tool_result_msg() -> Message {
         }],
         details: None,
         is_error: false,
+        truncated: false,
         timestamp_ms: 2000,
     })
 }
@@ -140,6 +142,7 @@ fn tool_result_with_image_url_source() {
         }],
         details: None,
         is_error: false,
+        truncated: false,
         timestamp_ms: 3000,
     });
     let json = serde_json::to_string(&msg).unwrap();
@@ -167,6 +170,7 @@ fn tool_result_image_stable_json_shape() {
         }],
         details: Some(serde_json::json!({"format": "jpeg"})),
         is_error: false,
+        truncated: false,
         timestamp_ms: 4000,
     });
     let val: serde_json::Value = serde_json::to_value(&msg).unwrap();

@@ -497,6 +497,7 @@ fn tool_result_image_placeholder_preserves_media_type() {
         }],
         details: None,
         is_error: false,
+        truncated: false,
         timestamp_ms: 0,
     })];
 

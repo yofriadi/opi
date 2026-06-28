@@ -140,9 +140,16 @@ async fn read_tool_reports_workspace_boundary() {
     let details = result.details.expect("should have details");
     assert_eq!(
         details
-            .get("inside_workspace")
-            .and_then(|value| value.as_bool()),
-        Some(true)
+            .get("workspace_relation")
+            .and_then(|value| value.as_str()),
+        Some("inside")
+    );
+    assert!(
+        !details
+            .as_object()
+            .map(|o| o.contains_key("inside_workspace"))
+            .unwrap_or(false),
+        "inside_workspace key must be superseded by workspace_relation"
     );
     assert!(details_string(&details, "resolved_path").ends_with("inside.txt"));
 }
@@ -177,9 +184,9 @@ async fn read_tool_allow_outside_policy_reads_absolute_outside_path() {
     let details = result.details.expect("should have details");
     assert_eq!(
         details
-            .get("inside_workspace")
-            .and_then(|value| value.as_bool()),
-        Some(false)
+            .get("workspace_relation")
+            .and_then(|value| value.as_str()),
+        Some("outside")
     );
     assert_eq!(
         details_string(&details, "resolved_path"),
@@ -267,9 +274,16 @@ async fn write_tool_safety_context_in_details() {
     assert!(details.get("path").is_some(), "details should include path");
     assert_eq!(
         details
-            .get("inside_workspace")
-            .and_then(|value| value.as_bool()),
-        Some(true)
+            .get("workspace_relation")
+            .and_then(|value| value.as_str()),
+        Some("inside")
+    );
+    assert!(
+        !details
+            .as_object()
+            .map(|o| o.contains_key("inside_workspace"))
+            .unwrap_or(false),
+        "inside_workspace key must be superseded by workspace_relation"
     );
     assert!(details_string(&details, "resolved_path").ends_with("safe.txt"));
 }
@@ -364,13 +378,112 @@ async fn edit_tool_safety_context_in_details() {
     assert!(details.get("path").is_some());
     assert_eq!(
         details
-            .get("inside_workspace")
-            .and_then(|value| value.as_bool()),
-        Some(true)
+            .get("workspace_relation")
+            .and_then(|value| value.as_str()),
+        Some("inside")
+    );
+    assert!(
+        !details
+            .as_object()
+            .map(|o| o.contains_key("inside_workspace"))
+            .unwrap_or(false),
+        "inside_workspace key must be superseded by workspace_relation"
     );
     assert!(details_string(&details, "resolved_path").ends_with("safe_edit.txt"));
     assert!(details.get("before").is_some());
     assert!(details.get("after").is_some());
+}
+
+// ---------------------------------------------------------------------------
+// Uniform tool-result contract (Phase 11.1)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn uniform_tool_result_details_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "hello world").unwrap();
+
+    // read success: base contract + uniform path metadata
+    let read = ReadTool::new(dir.path().to_path_buf())
+        .execute(
+            "u1",
+            json!({ "path": "f.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!read.is_error, "read: {}", tool_result_text(&read));
+    assert!(!read.truncated);
+    assert!(read.diagnostics.is_empty());
+    let rd = read.details.expect("read details");
+    for key in [
+        "workspace_root",
+        "path",
+        "resolved_path",
+        "workspace_relation",
+    ] {
+        assert!(rd.get(key).is_some(), "read details missing {key}");
+    }
+    assert_eq!(
+        rd.get("workspace_relation").and_then(|v| v.as_str()),
+        Some("inside")
+    );
+
+    // write success: base contract + uniform path metadata
+    let write = WriteTool::new(dir.path().to_path_buf())
+        .execute(
+            "u2",
+            json!({ "path": "out.txt", "content": "x" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!write.is_error, "write: {}", tool_result_text(&write));
+    assert!(!write.truncated);
+    assert_eq!(
+        write
+            .details
+            .as_ref()
+            .and_then(|d| d.get("workspace_relation"))
+            .and_then(|v| v.as_str()),
+        Some("inside")
+    );
+
+    // edit success: base contract + uniform path metadata + before/after
+    let edit = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "u3",
+            json!({ "path": "f.txt", "old_string": "hello", "new_string": "HI" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!edit.is_error, "edit: {}", tool_result_text(&edit));
+    let ed = edit.details.expect("edit details");
+    assert_eq!(
+        ed.get("workspace_relation").and_then(|v| v.as_str()),
+        Some("inside")
+    );
+    assert!(ed.get("before").is_some());
+    assert!(ed.get("after").is_some());
+
+    // representative failure: base contract, no path metadata, not truncated
+    let missing = ReadTool::new(dir.path().to_path_buf())
+        .execute(
+            "u4",
+            json!({ "path": "nope.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(missing.is_error);
+    assert!(!missing.truncated);
+    assert!(missing.diagnostics.is_empty());
+    assert!(missing.details.is_none(), "failure details must stay None");
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +811,94 @@ async fn bash_tool_cancellation() {
 }
 
 #[tokio::test]
+async fn bash_cancel_timeout_details_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let long_cmd = if cfg!(windows) {
+        "ping -n 30 127.0.0.1 >nul"
+    } else {
+        "sleep 30"
+    };
+
+    // Timeout branch: timed_out=true, cancelled=false, exit_code=null, shell present.
+    let timed = BashTool::new(dir.path().to_path_buf())
+        .execute(
+            "b-timeout",
+            json!({ "command": long_cmd, "timeout_secs": 1 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(timed.is_error);
+    let td = timed.details.expect("timeout details");
+    assert_eq!(
+        td.get("timed_out").and_then(|v| v.as_bool()),
+        Some(true),
+        "timeout: timed_out must be true"
+    );
+    assert_eq!(
+        td.get("cancelled").and_then(|v| v.as_bool()),
+        Some(false),
+        "timeout: cancelled must be false"
+    );
+    assert_eq!(
+        td.get("exit_code"),
+        Some(&serde_json::Value::Null),
+        "timeout: exit_code must be null"
+    );
+    assert!(td.get("shell").is_some(), "timeout: shell must be present");
+    for key in [
+        "workspace_root",
+        "command",
+        "cwd",
+        "shell",
+        "exit_code",
+        "timed_out",
+        "cancelled",
+        "truncated",
+    ] {
+        assert!(
+            td.get(key).is_some(),
+            "timeout details missing stable key: {key}"
+        );
+    }
+
+    // Cancellation branch: cancelled=true, timed_out=false, exit_code=null.
+    let cancel_tool = BashTool::new(dir.path().to_path_buf());
+    let token = CancellationToken::new();
+    let handle = {
+        let token = token.clone();
+        tokio::spawn(async move {
+            cancel_tool
+                .execute(
+                    "b-cancel",
+                    json!({ "command": long_cmd, "timeout_secs": 60 }),
+                    token,
+                    None,
+                )
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    token.cancel();
+    let cancelled = handle.await.unwrap().unwrap();
+    assert!(cancelled.is_error);
+    let cd = cancelled.details.expect("cancel details");
+    assert_eq!(
+        cd.get("cancelled").and_then(|v| v.as_bool()),
+        Some(true),
+        "cancel: cancelled must be true"
+    );
+    assert_eq!(
+        cd.get("timed_out").and_then(|v| v.as_bool()),
+        Some(false),
+        "cancel: timed_out must be false"
+    );
+    assert_eq!(cd.get("exit_code"), Some(&serde_json::Value::Null));
+    assert!(cd.get("shell").is_some(), "cancel: shell must be present");
+}
+
+#[tokio::test]
 async fn bash_tool_cwd_reporting() {
     let dir = tempfile::tempdir().unwrap();
     let tool = BashTool::new(dir.path().to_path_buf());
@@ -912,6 +1113,106 @@ async fn edit_tool_rejects_symlink_escape_via_new_subpath() {
         text.contains("outside the workspace"),
         "error should mention workspace boundary, got: {text}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11.1 source-structure guard
+// ---------------------------------------------------------------------------
+
+fn phase11_workspace_root() -> std::path::PathBuf {
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+/// Strip `//` line comments and `/* */` block comments (char-based, UTF-8 safe).
+fn phase11_strip_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '/' {
+            match chars.peek() {
+                Some('/') => {
+                    for cc in chars.by_ref() {
+                        if cc == '\n' {
+                            out.push('\n');
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                Some('*') => {
+                    chars.next();
+                    while let Some(cc) = chars.next() {
+                        if cc == '*' && chars.peek() == Some(&'/') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Built-in tools must not hand-write `details: Some(..)`; every ToolResult is
+/// built through `opi_agent::tool::result`. Scans the coding-agent tool sources
+/// plus `opi_agent::tool` (the validation-error constructor), excluding
+/// `result.rs` itself (the builder). Includes a vacuous-allowlist so the guard
+/// cannot pass against an empty builder module.
+#[test]
+fn tool_result_details_use_shared_builders_guard() {
+    let root = phase11_workspace_root();
+    let mut scanned: Vec<std::path::PathBuf> = Vec::new();
+    let tool_dir = root.join("crates/opi-coding-agent/src/tool");
+    for entry in std::fs::read_dir(&tool_dir).expect("tool dir") {
+        let p = entry.unwrap().path();
+        if p.extension().is_some_and(|e| e == "rs") {
+            scanned.push(p);
+        }
+    }
+    scanned.push(root.join("crates/opi-agent/src/tool.rs"));
+
+    let mut offenders: Vec<String> = Vec::new();
+    for path in &scanned {
+        let src = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let stripped = phase11_strip_comments(&src);
+        if stripped.contains("details: Some(") || stripped.contains("details:Some(") {
+            offenders.push(path.display().to_string());
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these tool sources hand-write `details: Some(..)` instead of routing through          opi_agent::tool::result builders: {offenders:?}"
+    );
+
+    // Vacuous-allowlist: the builder module must actually define the stable keys.
+    let builder = std::fs::read_to_string(root.join("crates/opi-agent/src/tool/result.rs"))
+        .expect("result.rs");
+    for key in [
+        "workspace_root",
+        "resolved_path",
+        "workspace_relation",
+        "command",
+        "shell",
+        "exit_code",
+        "timed_out",
+        "cancelled",
+        "truncated",
+    ] {
+        assert!(
+            builder.contains(key),
+            "result.rs builder missing expected details key: {key}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

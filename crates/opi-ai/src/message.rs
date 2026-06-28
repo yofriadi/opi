@@ -41,6 +41,8 @@ pub struct ToolResultMessage {
     pub content: Vec<OutputContent>,
     pub details: Option<serde_json::Value>,
     pub is_error: bool,
+    #[serde(default)]
+    pub truncated: bool,
     pub timestamp_ms: i64,
 }
 

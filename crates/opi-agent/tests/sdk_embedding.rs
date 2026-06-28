@@ -47,6 +47,8 @@ impl Tool for NoopTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }

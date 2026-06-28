@@ -62,6 +62,8 @@ impl Tool for EchoExtensionTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -245,6 +247,8 @@ async fn extension_hooks_observe_builtin_tool_calls() {
                     details: None,
                     is_error: false,
                     terminate: false,
+                    truncated: false,
+                    diagnostics: vec![],
                 })
             })
         }
@@ -330,6 +334,8 @@ async fn extension_can_block_tool_in_agent_loop() {
                     details: None,
                     is_error: false,
                     terminate: false,
+                    truncated: false,
+                    diagnostics: vec![],
                 })
             })
         }
@@ -479,6 +485,8 @@ async fn harness_builder_wraps_extension_registry_hooks_and_tools() {
                     details: None,
                     is_error: false,
                     terminate: false,
+                    truncated: false,
+                    diagnostics: vec![],
                 })
             })
         }

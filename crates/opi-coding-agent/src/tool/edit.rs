@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
+use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -53,14 +53,9 @@ impl Tool for EditTool {
             Ok(a) => a,
             Err(e) => {
                 return Box::pin(async move {
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("invalid arguments: {e}"),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    })
+                    Ok(result::err(vec![OutputContent::Text {
+                        text: format!("invalid arguments: {e}"),
+                    }]))
                 });
             }
         };
@@ -72,43 +67,28 @@ impl Tool for EditTool {
             Ok(p) => p,
             Err(msg) => {
                 return Box::pin(async move {
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text { text: msg }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    })
+                    Ok(result::err(vec![OutputContent::Text { text: msg }]))
                 });
             }
         };
+        let workspace_relation = resolved_path.workspace_relation;
         let file_path = resolved_path.path;
-        let inside_workspace = resolved_path.inside_workspace;
         let workspace_root = self.workspace_root.clone();
         let path_for_display = args.path.clone();
         Box::pin(async move {
             let content = match tokio::fs::read_to_string(&file_path).await {
                 Ok(c) => c,
                 Err(e) => {
-                    return Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("failed to read {}: {e}", file_path.display()),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    });
+                    return Ok(result::err(vec![OutputContent::Text {
+                        text: format!("failed to read {}: {e}", file_path.display()),
+                    }]));
                 }
             };
 
             if !content.contains(&args.old_string) {
-                return Ok(ToolResult {
-                    content: vec![OutputContent::Text {
-                        text: format!("old_string not found in {}", file_path.display()),
-                    }],
-                    details: None,
-                    is_error: true,
-                    terminate: false,
-                });
+                return Ok(result::err(vec![OutputContent::Text {
+                    text: format!("old_string not found in {}", file_path.display()),
+                }]));
             }
 
             // Capture before state for diff rendering.
@@ -118,33 +98,27 @@ impl Tool for EditTool {
             let new_content = content.replacen(&args.old_string, &args.new_string, 1);
 
             if let Err(e) = tokio::fs::write(&file_path, &new_content).await {
-                return Ok(ToolResult {
-                    content: vec![OutputContent::Text {
-                        text: format!("failed to write {}: {e}", file_path.display()),
-                    }],
-                    details: None,
-                    is_error: true,
-                    terminate: false,
-                });
+                return Ok(result::err(vec![OutputContent::Text {
+                    text: format!("failed to write {}: {e}", file_path.display()),
+                }]));
             }
 
-            let details = serde_json::json!({
-                "workspace_root": workspace_root.to_string_lossy(),
-                "path": path_for_display,
-                "resolved_path": file_path.to_string_lossy(),
-                "inside_workspace": inside_workspace,
-                "before": before,
-                "after": new_content,
-            });
+            // Path-metadata block plus the before/after preview edit carries as a superset.
+            let mut details = result::path_metadata(
+                &workspace_root,
+                &path_for_display,
+                &file_path,
+                workspace_relation,
+            );
+            details["before"] = serde_json::json!(before);
+            details["after"] = serde_json::json!(new_content);
 
-            Ok(ToolResult {
-                content: vec![OutputContent::Text {
+            Ok(result::ok(
+                vec![OutputContent::Text {
                     text: format!("edited {}", path_for_display),
                 }],
-                details: Some(details),
-                is_error: false,
-                terminate: false,
-            })
+                details,
+            ))
         })
     }
 

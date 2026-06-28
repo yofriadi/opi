@@ -388,6 +388,8 @@ impl Tool for DummyTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -426,6 +428,8 @@ impl Tool for BlockingTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }

@@ -1027,6 +1027,8 @@ async fn multi_assistant_turn_accumulates_all_assistant_usages() {
                     details: None,
                     is_error: false,
                     terminate: false,
+                    truncated: false,
+                    diagnostics: vec![],
                 })
             })
         }

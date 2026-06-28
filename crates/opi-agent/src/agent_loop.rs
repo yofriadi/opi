@@ -212,12 +212,14 @@ pub async fn agent_loop(
 
                                         let is_error = result.is_error;
                                         let details = result.details.clone();
+                                        let truncated = result.truncated;
                                         terminate_flags.push(result.terminate);
                                         events(AgentEvent::ToolExecutionEnd {
                                             tool_call_id: parsed.tool_call.id.clone(),
                                             tool_name: parsed.tool_call.name.clone(),
                                             result: serde_json::json!(&result.content),
                                             details,
+                                            truncated,
                                             is_error,
                                         });
 
@@ -227,6 +229,7 @@ pub async fn agent_loop(
                                             content: result.content,
                                             details: result.details,
                                             is_error,
+                                            truncated,
                                             timestamp_ms: 0,
                                         };
                                         tool_results.push(trm.clone());
@@ -289,12 +292,14 @@ pub async fn agent_loop(
                                     for (parsed, result) in parsed_calls.iter().zip(results) {
                                         let is_error = result.is_error;
                                         let details = result.details.clone();
+                                        let truncated = result.truncated;
                                         terminate_flags.push(result.terminate);
                                         events(AgentEvent::ToolExecutionEnd {
                                             tool_call_id: parsed.tool_call.id.clone(),
                                             tool_name: parsed.tool_call.name.clone(),
                                             result: serde_json::json!(&result.content),
                                             details,
+                                            truncated,
                                             is_error,
                                         });
                                         let trm = ToolResultMessage {
@@ -303,6 +308,7 @@ pub async fn agent_loop(
                                             content: result.content,
                                             details: result.details,
                                             is_error,
+                                            truncated,
                                             timestamp_ms: 0,
                                         };
                                         tool_results.push(trm.clone());
@@ -614,6 +620,8 @@ fn malformed_tool_arguments_result(
         details: None,
         is_error: true,
         terminate: false,
+        truncated: false,
+        diagnostics: vec![],
     }
 }
 
@@ -650,6 +658,8 @@ async fn execute_tool(
                 details: None,
                 is_error: true,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             };
         }
     };
@@ -693,6 +703,8 @@ async fn execute_tool(
                 details: None,
                 is_error: true,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             };
         }
     }
@@ -753,6 +765,8 @@ async fn execute_tool(
                 details: None,
                 is_error: true,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             }
         }
     }

@@ -178,6 +178,8 @@ impl Tool for ProcessAdapterTool {
                             details: None,
                             is_error,
                             terminate: false,
+                            truncated: false,
+                            diagnostics: vec![],
                         })
                     }
                     crate::adapter_protocol::AdapterProcessMessage::Error { message, .. } => {

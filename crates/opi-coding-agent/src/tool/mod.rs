@@ -18,6 +18,8 @@ pub use write::WriteTool;
 
 use std::path::{Path, PathBuf};
 
+use opi_agent::tool::result::WorkspaceRelation;
+
 /// Path boundary policy for file tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathPolicy {
@@ -29,7 +31,7 @@ pub enum PathPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedToolPath {
     pub path: PathBuf,
-    pub inside_workspace: bool,
+    pub workspace_relation: WorkspaceRelation,
 }
 
 /// Resolve a user-supplied file path for tool execution.
@@ -62,7 +64,11 @@ pub fn resolve_tool_path(
 
     Ok(ResolvedToolPath {
         path: canonical,
-        inside_workspace,
+        workspace_relation: if inside_workspace {
+            WorkspaceRelation::Inside
+        } else {
+            WorkspaceRelation::Outside
+        },
     })
 }
 

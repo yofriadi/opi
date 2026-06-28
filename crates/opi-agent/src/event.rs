@@ -57,6 +57,8 @@ pub enum AgentEvent {
         result: serde_json::Value,
         details: Option<serde_json::Value>,
         is_error: bool,
+        #[serde(default)]
+        truncated: bool,
     },
     /// Queue messages were delivered to the conversation.
     QueueUpdate {

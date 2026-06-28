@@ -133,6 +133,8 @@ impl Tool for OrderTool {
                 details: None,
                 is_error: false,
                 terminate,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -175,6 +177,8 @@ impl Tool for EchoTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }

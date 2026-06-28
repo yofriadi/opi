@@ -435,6 +435,7 @@ fn tool_result_with_image(id: &str, text: &str) -> Entry {
             ],
             details: None,
             is_error: false,
+            truncated: false,
             timestamp_ms: 0,
         })),
     }

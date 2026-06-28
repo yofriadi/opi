@@ -339,6 +339,8 @@ async fn adapter_skips_hook_not_in_capabilities() {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             },
         )
         .await;
@@ -704,6 +706,8 @@ async fn phase8_skipped_adapter_hooks_trace() {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             },
         )
         .await;

@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
+use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -49,14 +49,9 @@ impl Tool for GlobTool {
             Ok(a) => a,
             Err(e) => {
                 return Box::pin(async move {
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("invalid arguments: {e}"),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    })
+                    Ok(result::err(vec![OutputContent::Text {
+                        text: format!("invalid arguments: {e}"),
+                    }]))
                 });
             }
         };
@@ -66,14 +61,9 @@ impl Tool for GlobTool {
             let glob_matcher = match globset::Glob::new(&pattern) {
                 Ok(g) => g.compile_matcher(),
                 Err(e) => {
-                    return Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("invalid glob pattern: {e}"),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    });
+                    return Ok(result::err(vec![OutputContent::Text {
+                        text: format!("invalid glob pattern: {e}"),
+                    }]));
                 }
             };
 
@@ -98,18 +88,15 @@ impl Tool for GlobTool {
             }
 
             let text = matched_paths.join("\n");
+            // glob walks the workspace root directly, so the relation is always `inside`.
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
                 "pattern": pattern,
                 "match_count": matched_paths.len(),
+                "workspace_relation": result::WorkspaceRelation::Inside,
             });
 
-            Ok(ToolResult {
-                content: vec![OutputContent::Text { text }],
-                details: Some(details),
-                is_error: false,
-                terminate: false,
-            })
+            Ok(result::ok(vec![OutputContent::Text { text }], details))
         })
     }
 

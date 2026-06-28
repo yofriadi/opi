@@ -79,6 +79,8 @@ impl Tool for RecordTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }

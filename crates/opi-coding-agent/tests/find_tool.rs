@@ -288,4 +288,9 @@ async fn find_tool_includes_details_metadata() {
         details.get("match_count").is_some(),
         "details should include match_count"
     );
+    assert_eq!(
+        details.get("workspace_relation").and_then(|v| v.as_str()),
+        Some("inside"),
+        "find details should include workspace_relation"
+    );
 }

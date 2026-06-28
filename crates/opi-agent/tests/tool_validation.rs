@@ -66,6 +66,8 @@ impl Tool for GreetTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -98,6 +100,8 @@ impl Tool for EchoTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -335,6 +339,8 @@ impl Tool for ProbeTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -371,6 +377,8 @@ impl Tool for PermissiveProbeTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -411,6 +419,8 @@ impl Tool for ParallelPermissiveProbeTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }

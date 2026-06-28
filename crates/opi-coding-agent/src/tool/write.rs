@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
+use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -51,14 +51,9 @@ impl Tool for WriteTool {
             Ok(a) => a,
             Err(e) => {
                 return Box::pin(async move {
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("invalid arguments: {e}"),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    })
+                    Ok(result::err(vec![OutputContent::Text {
+                        text: format!("invalid arguments: {e}"),
+                    }]))
                 });
             }
         };
@@ -70,17 +65,12 @@ impl Tool for WriteTool {
             Ok(p) => p,
             Err(msg) => {
                 return Box::pin(async move {
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text { text: msg }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    })
+                    Ok(result::err(vec![OutputContent::Text { text: msg }]))
                 });
             }
         };
+        let workspace_relation = resolved_path.workspace_relation;
         let file_path = resolved_path.path;
-        let inside_workspace = resolved_path.inside_workspace;
         let workspace_root = self.workspace_root.clone();
         let path_for_display = args.path.clone();
         Box::pin(async move {
@@ -88,42 +78,30 @@ impl Tool for WriteTool {
             if let Some(parent) = file_path.parent()
                 && let Err(e) = tokio::fs::create_dir_all(parent).await
             {
-                return Ok(ToolResult {
-                    content: vec![OutputContent::Text {
-                        text: format!("failed to create directories: {e}"),
-                    }],
-                    details: None,
-                    is_error: true,
-                    terminate: false,
-                });
+                return Ok(result::err(vec![OutputContent::Text {
+                    text: format!("failed to create directories: {e}"),
+                }]));
             }
 
             if let Err(e) = tokio::fs::write(&file_path, &args.content).await {
-                return Ok(ToolResult {
-                    content: vec![OutputContent::Text {
-                        text: format!("failed to write {}: {e}", file_path.display()),
-                    }],
-                    details: None,
-                    is_error: true,
-                    terminate: false,
-                });
+                return Ok(result::err(vec![OutputContent::Text {
+                    text: format!("failed to write {}: {e}", file_path.display()),
+                }]));
             }
 
-            let details = serde_json::json!({
-                "workspace_root": workspace_root.to_string_lossy(),
-                "path": path_for_display,
-                "resolved_path": file_path.to_string_lossy(),
-                "inside_workspace": inside_workspace,
-            });
+            let details = result::path_metadata(
+                &workspace_root,
+                &path_for_display,
+                &file_path,
+                workspace_relation,
+            );
 
-            Ok(ToolResult {
-                content: vec![OutputContent::Text {
+            Ok(result::ok(
+                vec![OutputContent::Text {
                     text: format!("wrote {}", path_for_display),
                 }],
-                details: Some(details),
-                is_error: false,
-                terminate: false,
-            })
+                details,
+            ))
         })
     }
 

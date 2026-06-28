@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult};
+use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -58,14 +58,9 @@ impl Tool for LsTool {
             Ok(a) => a,
             Err(e) => {
                 return Box::pin(async move {
-                    Ok(ToolResult {
-                        content: vec![OutputContent::Text {
-                            text: format!("invalid arguments: {e}"),
-                        }],
-                        details: None,
-                        is_error: true,
-                        terminate: false,
-                    })
+                    Ok(result::err(vec![OutputContent::Text {
+                        text: format!("invalid arguments: {e}"),
+                    }]))
                 });
             }
         };
@@ -75,43 +70,31 @@ impl Tool for LsTool {
         let path_arg = args.path;
 
         Box::pin(async move {
-            // Resolve target directory within workspace
-            let target = if path_arg == "." {
-                workspace_root.clone()
-            } else {
-                match super::validate_workspace_path(&workspace_root, &path_arg) {
-                    Ok(p) => p,
-                    Err(msg) => {
-                        return Ok(ToolResult {
-                            content: vec![OutputContent::Text { text: msg }],
-                            details: None,
-                            is_error: true,
-                            terminate: false,
-                        });
-                    }
+            // Resolve the target directory through the shared resolver so the
+            // workspace relation is recovered uniformly ("." resolves to root).
+            let resolved = match super::resolve_tool_path(
+                &workspace_root,
+                &path_arg,
+                super::PathPolicy::WorkspaceOnly,
+            ) {
+                Ok(r) => r,
+                Err(msg) => {
+                    return Ok(result::err(vec![OutputContent::Text { text: msg }]));
                 }
             };
+            let target = resolved.path;
+            let workspace_relation = resolved.workspace_relation;
 
             if !target.exists() {
-                return Ok(ToolResult {
-                    content: vec![OutputContent::Text {
-                        text: format!("path '{}' does not exist", path_arg),
-                    }],
-                    details: None,
-                    is_error: true,
-                    terminate: false,
-                });
+                return Ok(result::err(vec![OutputContent::Text {
+                    text: format!("path '{}' does not exist", path_arg),
+                }]));
             }
 
             if !target.is_dir() {
-                return Ok(ToolResult {
-                    content: vec![OutputContent::Text {
-                        text: format!("'{}' is not a directory", path_arg),
-                    }],
-                    details: None,
-                    is_error: true,
-                    terminate: false,
-                });
+                return Ok(result::err(vec![OutputContent::Text {
+                    text: format!("'{}' is not a directory", path_arg),
+                }]));
             }
 
             // Read and sort directory entries
@@ -149,14 +132,12 @@ impl Tool for LsTool {
                 "entry_count": entries.len(),
                 "total_entries": total_entries,
                 "truncated": truncated,
+                "workspace_relation": workspace_relation,
             });
 
-            Ok(ToolResult {
-                content: vec![OutputContent::Text { text }],
-                details: Some(details),
-                is_error: false,
-                terminate: false,
-            })
+            let mut tool_result = result::ok(vec![OutputContent::Text { text }], details);
+            tool_result.truncated = truncated;
+            Ok(tool_result)
         })
     }
 

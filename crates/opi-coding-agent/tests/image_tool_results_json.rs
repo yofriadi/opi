@@ -32,6 +32,7 @@ fn tool_execution_end_serializes_image_content() {
         result: serde_json::json!(&content),
         details: None,
         is_error: false,
+        truncated: false,
     };
     let json = serde_json::to_string(&event).unwrap();
     let val: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -60,6 +61,7 @@ fn tool_execution_end_image_bytes_not_coerced() {
         result: serde_json::json!(&content),
         details: None,
         is_error: false,
+        truncated: false,
     };
     let val: serde_json::Value = serde_json::to_value(&event).unwrap();
 
@@ -82,6 +84,7 @@ fn tool_execution_end_image_url_in_result() {
         result: serde_json::json!(&content),
         details: Some(serde_json::json!({"source": "url"})),
         is_error: false,
+        truncated: false,
     };
     let val: serde_json::Value = serde_json::to_value(&event).unwrap();
 
@@ -104,6 +107,7 @@ fn session_event_wraps_tool_execution_end_with_image() {
         result: serde_json::json!(&content),
         details: None,
         is_error: false,
+        truncated: false,
     };
     let session_event = AgentSessionEvent::Agent { event };
     let json = serde_json::to_string(&session_event).unwrap();
@@ -132,6 +136,7 @@ fn session_event_image_roundtrip_preserves_metadata() {
         result: serde_json::json!(&content),
         details: None,
         is_error: false,
+        truncated: false,
     };
     let session_event = AgentSessionEvent::Agent { event };
     let json = serde_json::to_string(&session_event).unwrap();

@@ -306,6 +306,11 @@ async fn ls_tool_includes_details_metadata() {
         details.get("entry_count").is_some(),
         "details should include entry_count"
     );
+    assert_eq!(
+        details.get("workspace_relation").and_then(|v| v.as_str()),
+        Some("inside"),
+        "ls details should include workspace_relation"
+    );
 }
 
 // --- Gitignored entries ---

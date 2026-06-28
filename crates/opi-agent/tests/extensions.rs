@@ -180,6 +180,8 @@ impl Tool for SimpleTool {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             })
         })
     }
@@ -613,6 +615,8 @@ async fn composite_hooks_after_tool_observes_result() {
         details: None,
         is_error: false,
         terminate: false,
+        truncated: false,
+        diagnostics: vec![],
     };
 
     let ctx = AfterToolCallContext {
@@ -1282,6 +1286,8 @@ async fn phase8_hook_composition_base_then_extensions_in_order() {
                 details: None,
                 is_error: false,
                 terminate: false,
+                truncated: false,
+                diagnostics: vec![],
             },
         })
         .await;

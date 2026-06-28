@@ -101,6 +101,7 @@ fn tool_result_message_round_trips_through_json() {
         }],
         details: None,
         is_error: false,
+        truncated: false,
         timestamp_ms: 99,
     });
     let json = serde_json::to_string(&msg).expect("serialize");
@@ -118,6 +119,7 @@ fn tool_result_error_message_round_trips() {
         }],
         details: Some(serde_json::json!({"exit_code": 1})),
         is_error: true,
+        truncated: false,
         timestamp_ms: 100,
     });
     let json = serde_json::to_string(&msg).expect("serialize");

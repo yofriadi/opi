@@ -265,6 +265,73 @@ async fn grep_tool_is_parallel() {
 }
 
 // ---------------------------------------------------------------------------
+// Uniform tool-result contract (Phase 11.1)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn uniform_tool_result_details_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("a.rs"),
+        "fn a() {}
+",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("b.txt"), "x").unwrap();
+
+    // grep success: base contract + workspace_relation parity (walks root -> inside)
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "u1",
+            json!({ "pattern": "fn" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!grep.is_error, "grep: {}", tool_result_text(&grep));
+    assert!(!grep.truncated);
+    assert!(grep.diagnostics.is_empty());
+    let gd = grep.details.expect("grep details");
+    assert_eq!(
+        gd.get("workspace_relation").and_then(|v| v.as_str()),
+        Some("inside")
+    );
+
+    // glob success: base contract + workspace_relation parity
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "u2",
+            json!({ "pattern": "*.rs" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!glob.is_error, "glob: {}", tool_result_text(&glob));
+    assert!(!glob.truncated);
+    let gld = glob.details.expect("glob details");
+    assert_eq!(
+        gld.get("workspace_relation").and_then(|v| v.as_str()),
+        Some("inside")
+    );
+
+    // representative failure: invalid regex carries base contract, no details
+    let bad = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "u3",
+            json!({ "pattern": "[invalid" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(bad.is_error);
+    assert!(!bad.truncated);
+    assert!(bad.details.is_none(), "grep failure details must stay None");
+}
+
+// ---------------------------------------------------------------------------
 // Tool definition tests
 // ---------------------------------------------------------------------------
 

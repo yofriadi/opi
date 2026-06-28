@@ -857,6 +857,8 @@ mod wiring {
                     details: None,
                     is_error: false,
                     terminate: false,
+                    truncated: false,
+                    diagnostics: vec![],
                 })
             })
         }
@@ -895,6 +897,8 @@ mod wiring {
                     details: None,
                     is_error: true,
                     terminate: false,
+                    truncated: false,
+                    diagnostics: vec![],
                 })
             })
         }
@@ -1516,6 +1520,8 @@ mod phase8_runtime_contract_failures {
                     details: None,
                     is_error: false,
                     terminate: false,
+                    truncated: false,
+                    diagnostics: vec![],
                 })
             })
         }
@@ -1550,6 +1556,8 @@ mod phase8_runtime_contract_failures {
                     details: None,
                     is_error: false,
                     terminate: false,
+                    truncated: false,
+                    diagnostics: vec![],
                 })
             })
         }
@@ -1585,6 +1593,8 @@ mod phase8_runtime_contract_failures {
                     details: None,
                     is_error: false,
                     terminate: false,
+                    truncated: false,
+                    diagnostics: vec![],
                 })
             })
         }
@@ -1886,6 +1896,8 @@ mod phase8_runtime_contract_failures {
                         details: None,
                         is_error: false,
                         terminate: false,
+                        truncated: false,
+                        diagnostics: vec![],
                     })
                 })
             }
