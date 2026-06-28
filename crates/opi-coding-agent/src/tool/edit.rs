@@ -67,7 +67,9 @@ impl Tool for EditTool {
             Ok(p) => p,
             Err(msg) => {
                 return Box::pin(async move {
-                    Ok(result::err(vec![OutputContent::Text { text: msg }]))
+                    Ok(result::err(vec![OutputContent::Text {
+                        text: msg.to_string(),
+                    }]))
                 });
             }
         };

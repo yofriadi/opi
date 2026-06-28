@@ -294,3 +294,134 @@ async fn find_tool_includes_details_metadata() {
         "find details should include workspace_relation"
     );
 }
+
+// --- Non-UTF-8 entry names (Phase 11.2, Unix-only) ---
+
+#[cfg(unix)]
+#[tokio::test]
+async fn find_tool_reports_unsupported_encoding_for_non_utf8_names() {
+    use opi_agent::diagnostic::code;
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let bad = std::ffi::OsStr::from_bytes(b"bad\xff.rs");
+    fs::write(dir.path().join(bad), "x").unwrap();
+    fs::write(dir.path().join("good.rs"), "y").unwrap();
+
+    let find = FindTool::new(dir.path().to_path_buf());
+    let result = find
+        .execute(
+            "f-uni-bad-1",
+            json!({ "pattern": "*.rs" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_UNSUPPORTED_ENCODING),
+        "non-UTF-8 name should yield unsupported_encoding diagnostic: {:?}",
+        result.diagnostics
+    );
+    let text = tool_result_text(&result);
+    assert!(text.contains("good.rs"));
+    assert!(
+        !text.contains('\u{FFFD}'),
+        "no lossy U+FFFD in output: {text}"
+    );
+}
+
+// --- Filesystem error taxonomy: path validation (Phase 11.2) ---
+
+#[tokio::test]
+async fn find_tool_scope_path_not_found_is_error() {
+    use opi_agent::diagnostic::code;
+    let dir = tempfile::tempdir().unwrap();
+    let find = FindTool::new(dir.path().to_path_buf());
+    let result = find
+        .execute(
+            "f-nf-1",
+            json!({ "pattern": "*.rs", "path": "missing_dir" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_PATH_NOT_FOUND),
+        "missing scope path should carry tool_path_not_found: {:?}",
+        result.diagnostics
+    );
+}
+
+#[tokio::test]
+async fn find_tool_file_scope_is_not_a_directory() {
+    use opi_agent::diagnostic::code;
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("file.txt"), "x").unwrap();
+    let find = FindTool::new(dir.path().to_path_buf());
+    let result = find
+        .execute(
+            "f-nd-1",
+            json!({ "pattern": "*.rs", "path": "file.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_NOT_A_DIRECTORY),
+        "file scope should carry tool_not_a_directory: {:?}",
+        result.diagnostics
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn find_tool_permission_denied_scope_is_classified() {
+    extern "C" {
+        fn getuid() -> u32;
+    }
+    if unsafe { getuid() } == 0 {
+        eprintln!("skipping permission test under root");
+        return;
+    }
+    use opi_agent::diagnostic::code;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("f.rs"), "x").unwrap();
+    fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let find = FindTool::new(dir.path().to_path_buf());
+    let result = find
+        .execute(
+            "f-pd-1",
+            json!({ "pattern": "*.rs", "path": "locked" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let _ = fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+    assert!(result.is_error);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_PERMISSION_DENIED),
+        "unreadable scope should carry tool_permission_denied: {:?}",
+        result.diagnostics
+    );
+}

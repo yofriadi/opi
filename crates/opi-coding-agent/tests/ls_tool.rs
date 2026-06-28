@@ -5,6 +5,7 @@
 
 use std::fs;
 
+use opi_agent::diagnostic::code;
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
 use opi_coding_agent::tool::LsTool;
 use serde_json::json;
@@ -406,4 +407,162 @@ async fn ls_tool_truncation_shows_correct_omitted_count() {
     assert_eq!(details["entry_count"], 5);
     assert_eq!(details["total_entries"], 20);
     assert_eq!(details["truncated"], true);
+}
+
+// --- Filesystem error taxonomy (Phase 11.2) ---
+
+#[tokio::test]
+async fn filesystem_error_taxonomy_directory_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("file.txt"), "x").unwrap();
+    let ls = LsTool::new(dir.path().to_path_buf());
+
+    // NotFound: missing directory carries tool_path_not_found.
+    let missing = ls
+        .execute(
+            "dtax-1",
+            json!({ "path": "nope" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(missing.is_error);
+    assert!(
+        missing
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_PATH_NOT_FOUND),
+        "missing directory should carry tool_path_not_found: {:?}",
+        missing.diagnostics
+    );
+
+    // NotADirectory: listing a file carries tool_not_a_directory.
+    let file_ls = ls
+        .execute(
+            "dtax-2",
+            json!({ "path": "file.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(file_ls.is_error);
+    assert!(
+        file_ls
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_NOT_A_DIRECTORY),
+        "listing a file should carry tool_not_a_directory: {:?}",
+        file_ls.diagnostics
+    );
+    assert!(tool_result_text(&file_ls).contains("not a directory"));
+}
+
+#[tokio::test]
+async fn unicode_directory_metadata_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("日本語")).unwrap();
+    fs::write(dir.path().join("日本語").join("f.txt"), "x").unwrap();
+    let ls = LsTool::new(dir.path().to_path_buf());
+    let result = ls
+        .execute(
+            "uni-d-1",
+            json!({ "path": "日本語" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    let details = result.details.as_ref().expect("ls details");
+    assert_eq!(
+        details.get("path").and_then(|v| v.as_str()),
+        Some("日本語"),
+        "unicode directory name must round-trip in details.path"
+    );
+    assert!(tool_result_text(&result).contains("f.txt"));
+    assert!(
+        !tool_result_text(&result).contains('\u{FFFD}'),
+        "no lossy U+FFFD in output: {}",
+        tool_result_text(&result)
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ls_tool_permission_denied_target_is_classified() {
+    extern "C" {
+        fn getuid() -> u32;
+    }
+    if unsafe { getuid() } == 0 {
+        eprintln!("skipping permission test under root");
+        return;
+    }
+    use opi_agent::diagnostic::code;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("f.txt"), "x").unwrap();
+    fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let ls = LsTool::new(dir.path().to_path_buf());
+    let result = ls
+        .execute(
+            "pd-ls-1",
+            json!({ "path": "locked" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let _ = fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+    assert!(result.is_error);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_PERMISSION_DENIED),
+        "unreadable target should carry tool_permission_denied: {:?}",
+        result.diagnostics
+    );
+}
+
+// --- Non-UTF-8 entry names (Phase 11.2, Unix-only) ---
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ls_tool_reports_unsupported_encoding_for_non_utf8_names() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    // 0xFF is invalid UTF-8.
+    let bad = std::ffi::OsStr::from_bytes(b"bad\xff.txt");
+    fs::write(dir.path().join(bad), "x").unwrap();
+    fs::write(dir.path().join("good.txt"), "y").unwrap();
+
+    let ls = LsTool::new(dir.path().to_path_buf());
+    let result = ls
+        .execute(
+            "uni-bad-1",
+            json!({ "path": "." }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_UNSUPPORTED_ENCODING),
+        "non-UTF-8 name should yield unsupported_encoding diagnostic: {:?}",
+        result.diagnostics
+    );
+    let text = tool_result_text(&result);
+    assert!(text.contains("good.txt"));
+    assert!(
+        !text.contains('\u{FFFD}'),
+        "no lossy U+FFFD in output: {text}"
+    );
 }

@@ -18,7 +18,10 @@ pub use write::WriteTool;
 
 use std::path::{Path, PathBuf};
 
+use opi_agent::diagnostic::FsToolError;
 use opi_agent::tool::result::WorkspaceRelation;
+use opi_agent::tool::{ToolResult, result};
+use opi_ai::message::OutputContent;
 
 /// Path boundary policy for file tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,36 +33,61 @@ pub enum PathPolicy {
 /// Resolved path metadata shared by file tools.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedToolPath {
+    /// Canonical, verbatim-stripped absolute path used for filesystem operations
+    /// and user-facing display.
     pub path: PathBuf,
     pub workspace_relation: WorkspaceRelation,
+    /// `true` when resolution followed a symlink/junction (canonical form
+    /// differs from the lexical path). Lets callers report traversal rather than
+    /// silently collapsing it to a workspace-boundary result.
+    pub symlink_traversed: bool,
 }
 
 /// Resolve a user-supplied file path for tool execution.
 ///
 /// Relative paths are based on `workspace_root`; absolute paths are preserved.
 /// A leading `@` is ignored for editor-style path mentions, and `~` expands
-/// from HOME/USERPROFILE when available.
+/// from HOME/USERPROFILE when available. The canonical path is stripped of the
+/// Windows verbatim (`\\?\`) prefix so it does not leak into user-facing
+/// metadata. Symlink/junction traversal is detected and reported via
+/// [`ResolvedToolPath::symlink_traversed`]. Returns a typed [`FsToolError`] for
+/// workspace-boundary and unresolved-root causes so each carries a distinct
+/// `CODE_TOOL_*` diagnostic instead of a generic string.
 pub fn resolve_tool_path(
     workspace_root: &Path,
     user_path: &str,
     policy: PathPolicy,
-) -> Result<ResolvedToolPath, String> {
+) -> Result<ResolvedToolPath, FsToolError> {
     let expanded = expand_user_path(user_path);
-    let resolved = if expanded.is_absolute() {
-        expanded
-    } else {
-        workspace_root.join(expanded)
+    let canonical_root = match std::fs::canonicalize(workspace_root) {
+        Ok(root) => strip_verbatim_prefix(&root),
+        Err(e) => {
+            return Err(FsToolError::UnresolvedWorkspaceRoot {
+                source: e.to_string(),
+            });
+        }
     };
-    let canonical_root = std::fs::canonicalize(workspace_root)
-        .map_err(|e| format!("cannot canonicalize workspace root: {e}"))?;
-    let canonical = canonicalize_existing_or_nearest(&resolved)?;
+    let lexical_abs = if expanded.is_absolute() {
+        strip_verbatim_prefix(&expanded)
+    } else {
+        canonical_root.join(&expanded)
+    };
+    let lexical = normalize_path_components(&lexical_abs);
+    let canonical = canonicalize_existing_or_nearest(&lexical_abs)
+        .map(|c| strip_verbatim_prefix(&c))
+        .map_err(|e| FsToolError::UnresolvedWorkspaceRoot { source: e })?;
+    // A symlink/junction traversal makes the canonical path diverge from the
+    // lexical path. On case-insensitive filesystems (Windows NTFS) a bare casing
+    // difference would also diverge, so compare case-insensitively there to avoid
+    // false-positive traversal reports; case-sensitive hosts use exact equality.
+    let symlink_traversed = paths_diverge_indicating_traversal(&canonical, &lexical);
     let inside_workspace = canonical.starts_with(&canonical_root);
 
     if policy == PathPolicy::WorkspaceOnly && !inside_workspace {
-        return Err(format!(
-            "path '{}' resolves outside the workspace",
-            user_path
-        ));
+        return Err(FsToolError::OutsideWorkspace {
+            user_path: user_path.to_string(),
+            symlink_traversed,
+        });
     }
 
     Ok(ResolvedToolPath {
@@ -69,12 +97,55 @@ pub fn resolve_tool_path(
         } else {
             WorkspaceRelation::Outside
         },
+        symlink_traversed,
     })
 }
 
-pub fn validate_workspace_path(workspace_root: &Path, user_path: &str) -> Result<PathBuf, String> {
-    resolve_tool_path(workspace_root, user_path, PathPolicy::WorkspaceOnly)
-        .map(|resolved| resolved.path)
+pub fn validate_workspace_path(
+    workspace_root: &Path,
+    user_path: &str,
+) -> Result<PathBuf, FsToolError> {
+    resolve_tool_path(workspace_root, user_path, PathPolicy::WorkspaceOnly).map(|r| r.path)
+}
+
+/// Strip the Windows verbatim (`\\?\`) prefix from a canonical path so it does
+/// not leak into user-facing metadata. No-op on non-Windows hosts.
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+/// Decide whether canonical-vs-lexical divergence reflects an actual
+/// symlink/junction traversal (true) rather than mere case-folding (false).
+#[cfg(windows)]
+fn paths_diverge_indicating_traversal(canonical: &Path, lexical: &Path) -> bool {
+    canonical.to_string_lossy().to_lowercase() != lexical.to_string_lossy().to_lowercase()
+}
+
+#[cfg(not(windows))]
+fn paths_diverge_indicating_traversal(canonical: &Path, lexical: &Path) -> bool {
+    canonical != lexical
+}
+
+/// Build an error [`ToolResult`] for a filesystem/tool cause, carrying the
+/// per-cause diagnostic so the agent loop can lift it into Phase 7 traces.
+pub fn fs_error_result(error: FsToolError) -> ToolResult {
+    let text = error.message();
+    let mut result = result::err(vec![OutputContent::Text { text }]);
+    result.diagnostics.push(error.to_diagnostic());
+    result
 }
 
 fn expand_user_path(user_path: &str) -> PathBuf {
@@ -158,6 +229,113 @@ mod tests {
             std::fs::canonicalize(workspace.path())
                 .unwrap()
                 .join("target.txt")
+        );
+    }
+
+    use opi_agent::diagnostic::code;
+
+    #[test]
+    fn resolve_outside_workspace_returns_typed_outside_error() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("escape.txt");
+        std::fs::write(&outside_file, "x").unwrap();
+        let abs = outside_file.to_string_lossy().to_string();
+        let err = resolve_tool_path(workspace.path(), &abs, PathPolicy::WorkspaceOnly)
+            .expect_err("outside path must be denied");
+        assert_eq!(err.code(), code::CODE_TOOL_OUTSIDE_WORKSPACE);
+        assert!(err.message().contains("outside the workspace"));
+    }
+
+    #[test]
+    fn resolve_unresolved_workspace_root_returns_typed_error() {
+        let bogus = std::env::temp_dir().join("opi-11-2-nonexistent-root-zzz");
+        let _ = std::fs::remove_dir_all(&bogus);
+        let err = resolve_tool_path(&bogus, "anything.txt", PathPolicy::WorkspaceOnly)
+            .expect_err("nonexistent root must fail");
+        assert_eq!(err.code(), code::CODE_TOOL_UNRESOLVED_WORKSPACE_ROOT);
+    }
+
+    fn make_dir_link(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dst, src)
+        }
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args([
+                    "/C",
+                    "mklink",
+                    "/J",
+                    &src.to_string_lossy(),
+                    &dst.to_string_lossy(),
+                ])
+                .status()?;
+            status
+                .success()
+                .then_some(())
+                .ok_or_else(|| std::io::Error::other("mklink /J failed"))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (src, dst);
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "symlinks unsupported",
+            ))
+        }
+    }
+
+    #[test]
+    fn resolve_reports_symlink_or_junction_traversal() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = workspace.path().join("link");
+        if let Err(e) = make_dir_link(&link, outside.path()) {
+            eprintln!("skipping symlink traversal test; link creation failed: {e}");
+            return;
+        }
+        let resolved =
+            resolve_tool_path(workspace.path(), "link", PathPolicy::AllowOutsideWorkspace)
+                .expect("link should resolve");
+        assert!(
+            resolved.symlink_traversed,
+            "symlink/junction traversal must be reported"
+        );
+        assert_eq!(resolved.workspace_relation, WorkspaceRelation::Outside);
+    }
+
+    #[test]
+    fn resolve_outside_workspace_via_symlink_reports_traversal() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = workspace.path().join("link");
+        if let Err(e) = make_dir_link(&link, outside.path()) {
+            eprintln!("skipping symlink-escape test; link creation failed: {e}");
+            return;
+        }
+        let err = resolve_tool_path(workspace.path(), "link", PathPolicy::WorkspaceOnly)
+            .expect_err("escape should be denied");
+        assert_eq!(err.code(), code::CODE_TOOL_OUTSIDE_WORKSPACE);
+        let ctx = err.context();
+        assert_eq!(
+            ctx.get("symlink_traversed").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_strips_windows_verbatim_prefix() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("f.txt"), "x").unwrap();
+        let resolved =
+            resolve_tool_path(workspace.path(), "f.txt", PathPolicy::WorkspaceOnly).unwrap();
+        let s = resolved.path.to_string_lossy().to_string();
+        assert!(
+            !s.contains(r"\\?\"),
+            "verbatim prefix leaked into resolved path: {s}"
         );
     }
 }

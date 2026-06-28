@@ -2,6 +2,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
+use opi_agent::diagnostic::FsToolError;
 use opi_agent::tool::result::WorkspaceRelation;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
@@ -80,20 +81,37 @@ impl Tool for FindTool {
                 match super::resolve_tool_path(&workspace_root, p, super::PathPolicy::WorkspaceOnly)
                 {
                     Ok(resolved) => {
-                        if resolved.path.is_file() {
-                            return Ok(result::err(vec![OutputContent::Text {
-                                text: format!("'{}' is not a directory", p),
-                            }]));
+                        if !resolved.path.exists() {
+                            return Ok(super::fs_error_result(FsToolError::NotFound {
+                                user_path: p.clone(),
+                                resolved_path: Some(resolved.path.clone()),
+                            }));
+                        }
+                        if !resolved.path.is_dir() {
+                            return Ok(super::fs_error_result(FsToolError::NotADirectory {
+                                path: resolved.path.clone(),
+                            }));
                         }
                         (resolved.path, resolved.workspace_relation)
                     }
-                    Err(msg) => {
-                        return Ok(result::err(vec![OutputContent::Text { text: msg }]));
+                    Err(e) => {
+                        return Ok(super::fs_error_result(e));
                     }
                 }
             } else {
                 (workspace_root.clone(), WorkspaceRelation::Inside)
             };
+
+            // Surface an unreadable search root instead of silently walking it to
+            // zero entries. Traversal-level permission errors in nested dirs are
+            // deferred to the nav-consistency task.
+            if let Err(e) = std::fs::read_dir(&search_root)
+                && e.kind() == std::io::ErrorKind::PermissionDenied
+            {
+                return Ok(super::fs_error_result(FsToolError::PermissionDenied {
+                    path: search_root.clone(),
+                }));
+            }
 
             let mut matched_paths = Vec::new();
             let mut builder = ignore::WalkBuilder::new(&search_root);
@@ -105,11 +123,18 @@ impl Tool for FindTool {
                 .add_custom_ignore_filename(".gitignore");
             let walker = builder.build();
 
+            let mut non_utf8 = 0usize;
             for entry in walker.flatten() {
                 if entry.file_type().is_some_and(|ft| ft.is_file()) {
                     let path = entry.path();
                     let relative = path.strip_prefix(&workspace_root).unwrap_or(path);
                     if glob_matcher.is_match(relative) || glob_matcher.is_match(path) {
+                        if path.to_str().is_none() {
+                            // Non-UTF-8 entry name (Unix-only in practice): skip
+                            // and report via UnsupportedEncoding, not U+FFFD.
+                            non_utf8 += 1;
+                            continue;
+                        }
                         matched_paths.push(path.to_string_lossy().into_owned());
                     }
                 }
@@ -123,7 +148,16 @@ impl Tool for FindTool {
                 "workspace_relation": workspace_relation,
             });
 
-            Ok(result::ok(vec![OutputContent::Text { text }], details))
+            let mut tool_result = result::ok(vec![OutputContent::Text { text }], details);
+            if non_utf8 > 0 {
+                tool_result.diagnostics.push(
+                    FsToolError::UnsupportedEncoding {
+                        omitted_count: non_utf8,
+                    }
+                    .to_diagnostic(),
+                );
+            }
+            Ok(tool_result)
         })
     }
 

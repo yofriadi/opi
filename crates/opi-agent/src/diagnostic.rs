@@ -16,6 +16,7 @@
 //! for logs and tests, not a presentation format.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -239,6 +240,17 @@ pub mod code {
     pub const CODE_TOOL_UNKNOWN: &str = "tool_unknown";
     pub const CODE_TOOL_VALIDATION_FAILED: &str = "tool_validation_failed";
     pub const CODE_TOOL_EXECUTION_FAILED: &str = "tool_execution_failed";
+    // Filesystem/tool-error taxonomy codes (Phase 11.2). Each maps to a distinct
+    // `FsToolError` variant, replacing the single `CODE_TOOL_EXECUTION_FAILED`
+    // collapse for tool-reported path/filesystem causes.
+    pub const CODE_TOOL_PATH_NOT_FOUND: &str = "tool_path_not_found";
+    pub const CODE_TOOL_NOT_A_FILE: &str = "tool_not_a_file";
+    pub const CODE_TOOL_NOT_A_DIRECTORY: &str = "tool_not_a_directory";
+    pub const CODE_TOOL_PERMISSION_DENIED: &str = "tool_permission_denied";
+    pub const CODE_TOOL_BINARY_FILE: &str = "tool_binary_file";
+    pub const CODE_TOOL_UNSUPPORTED_ENCODING: &str = "tool_unsupported_encoding";
+    pub const CODE_TOOL_OUTSIDE_WORKSPACE: &str = "tool_outside_workspace";
+    pub const CODE_TOOL_UNRESOLVED_WORKSPACE_ROOT: &str = "tool_unresolved_workspace_root";
     // Session/compaction classification codes.
     pub const CODE_SESSION_COMPACTED: &str = "session_compacted";
     pub const CODE_COMPACTION_NOTHING_TO_COMPACT: &str = "compaction_nothing_to_compact";
@@ -261,6 +273,152 @@ pub mod code {
     pub const CODE_TRACE_SINK_FAILED: &str = "trace_sink_failed";
     /// A requested trace could not be prepared before the run (fail-closed).
     pub const CODE_TRACE_SETUP_FAILED: &str = "trace_setup_failed";
+}
+
+/// Shared filesystem/tool-error taxonomy (Phase 11.2).
+///
+/// Each variant maps to a distinct [`code::CODE_TOOL_*`](code) identifier so
+/// tool-reported path/filesystem causes are no longer collapsed into
+/// [`code::CODE_TOOL_EXECUTION_FAILED`]. Tools construct the relevant variant
+/// and call [`FsToolError::to_diagnostic`] to attach a
+/// [`crate::tool::ToolDiagnostic`] to the failing [`crate::tool::ToolResult`];
+/// the agent loop lifts those into Phase 7 diagnostics/traces in a later task.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FsToolError {
+    /// A path that should exist was not found.
+    NotFound {
+        user_path: String,
+        resolved_path: Option<PathBuf>,
+    },
+    /// A path expected to be a regular file was a directory or other type.
+    NotAFile { path: PathBuf },
+    /// A path expected to be a directory was a file or other type.
+    NotADirectory { path: PathBuf },
+    /// The process lacks permission to access the path.
+    PermissionDenied { path: PathBuf },
+    /// The path points at binary content. Substrate variant; content detection
+    /// is owned by the read-hardening task, not the taxonomy itself.
+    BinaryFile { path: PathBuf },
+    /// One or more filesystem entry names could not be converted to valid UTF-8.
+    /// Carries the count of omitted entries so the diagnostic never has to embed
+    /// a lossy (U+FFFD) path string.
+    UnsupportedEncoding { omitted_count: usize },
+    /// A path resolves outside the workspace under a workspace-only policy.
+    /// `symlink_traversed` records whether the escape crossed a symlink/junction
+    /// so callers report traversal rather than silently collapsing to the
+    /// workspace-boundary denial.
+    OutsideWorkspace {
+        user_path: String,
+        symlink_traversed: bool,
+    },
+    /// The workspace root itself could not be canonicalized/resolved.
+    UnresolvedWorkspaceRoot { source: String },
+}
+
+impl FsToolError {
+    /// Stable diagnostic code for this cause.
+    pub fn code(&self) -> &'static str {
+        match self {
+            FsToolError::NotFound { .. } => code::CODE_TOOL_PATH_NOT_FOUND,
+            FsToolError::NotAFile { .. } => code::CODE_TOOL_NOT_A_FILE,
+            FsToolError::NotADirectory { .. } => code::CODE_TOOL_NOT_A_DIRECTORY,
+            FsToolError::PermissionDenied { .. } => code::CODE_TOOL_PERMISSION_DENIED,
+            FsToolError::BinaryFile { .. } => code::CODE_TOOL_BINARY_FILE,
+            FsToolError::UnsupportedEncoding { .. } => code::CODE_TOOL_UNSUPPORTED_ENCODING,
+            FsToolError::OutsideWorkspace { .. } => code::CODE_TOOL_OUTSIDE_WORKSPACE,
+            FsToolError::UnresolvedWorkspaceRoot { .. } => {
+                code::CODE_TOOL_UNRESOLVED_WORKSPACE_ROOT
+            }
+        }
+    }
+
+    /// User-facing, byte-stable cause message. This is also the
+    /// [`fmt::Display`] rendering, so `.to_string()` preserves the message tools
+    /// emit today (no variant-name prefix leaks into agent-visible text).
+    pub fn message(&self) -> String {
+        match self {
+            FsToolError::NotFound { user_path, .. } => {
+                format!("path '{user_path}' does not exist")
+            }
+            FsToolError::NotAFile { path } => format!("'{}' is not a file", path.display()),
+            FsToolError::NotADirectory { path } => {
+                format!("'{}' is not a directory", path.display())
+            }
+            FsToolError::PermissionDenied { path } => {
+                format!("permission denied: '{}'", path.display())
+            }
+            FsToolError::BinaryFile { path } => {
+                format!("'{}' appears to be a binary file", path.display())
+            }
+            FsToolError::UnsupportedEncoding { omitted_count } => {
+                if *omitted_count == 1 {
+                    "1 entry with a non-UTF-8 name omitted".to_string()
+                } else {
+                    format!("{omitted_count} entries with non-UTF-8 names omitted")
+                }
+            }
+            FsToolError::OutsideWorkspace { user_path, .. } => {
+                format!("path '{user_path}' resolves outside the workspace")
+            }
+            FsToolError::UnresolvedWorkspaceRoot { source } => {
+                format!("cannot resolve workspace root: {source}")
+            }
+        }
+    }
+
+    /// Structured per-cause context payload (becomes `Diagnostic::details` at the
+    /// agent-loop lift).
+    pub fn context(&self) -> serde_json::Value {
+        match self {
+            FsToolError::NotFound {
+                user_path,
+                resolved_path,
+            } => {
+                let mut obj = serde_json::Map::new();
+                obj.insert("user_path".into(), serde_json::json!(user_path));
+                if let Some(resolved) = resolved_path {
+                    obj.insert(
+                        "resolved_path".into(),
+                        serde_json::json!(resolved.display().to_string()),
+                    );
+                }
+                serde_json::Value::Object(obj)
+            }
+            FsToolError::NotAFile { path }
+            | FsToolError::NotADirectory { path }
+            | FsToolError::PermissionDenied { path }
+            | FsToolError::BinaryFile { path } => {
+                serde_json::json!({ "path": path.display().to_string() })
+            }
+            FsToolError::UnsupportedEncoding { omitted_count } => {
+                serde_json::json!({ "omitted_count": omitted_count })
+            }
+            FsToolError::OutsideWorkspace {
+                user_path,
+                symlink_traversed,
+            } => {
+                serde_json::json!({ "user_path": user_path, "symlink_traversed": symlink_traversed })
+            }
+            FsToolError::UnresolvedWorkspaceRoot { source } => {
+                serde_json::json!({ "source": source })
+            }
+        }
+    }
+
+    /// Build the tool-owned [`crate::tool::ToolDiagnostic`] carrying this cause.
+    pub fn to_diagnostic(&self) -> crate::tool::ToolDiagnostic {
+        crate::tool::ToolDiagnostic {
+            code: self.code().to_string(),
+            message: self.message(),
+            context: self.context(),
+        }
+    }
+}
+
+impl fmt::Display for FsToolError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message())
+    }
 }
 
 const REDACTED: &str = "[REDACTED]";
@@ -291,6 +449,12 @@ const CONTENT_SENSITIVE_KEYS: &[&str] = &[
     "package_error",
     "package_message",
     "adapter_error",
+    // Filesystem/tool taxonomy context (Phase 11.2): per-cause path fields are
+    // scrubbed in Summary mode so the 11.8 diagnostic lift is safe regardless of
+    // the absolute-path regex heuristic.
+    "path",
+    "resolved_path",
+    "user_path",
 ];
 
 /// Heuristic absolute-path detector used in summary mode. Matches Windows drive
@@ -511,5 +675,88 @@ mod tests {
         assert!(is_content_sensitive_key("TOOL_OUTPUT"));
         assert!(is_content_sensitive_key("Env"));
         assert!(!is_content_sensitive_key("endpoint"));
+    }
+
+    #[test]
+    fn fs_tool_error_codes_are_stable_literals() {
+        assert_eq!(code::CODE_TOOL_PATH_NOT_FOUND, "tool_path_not_found");
+        assert_eq!(code::CODE_TOOL_NOT_A_FILE, "tool_not_a_file");
+        assert_eq!(code::CODE_TOOL_NOT_A_DIRECTORY, "tool_not_a_directory");
+        assert_eq!(code::CODE_TOOL_PERMISSION_DENIED, "tool_permission_denied");
+        assert_eq!(code::CODE_TOOL_BINARY_FILE, "tool_binary_file");
+        assert_eq!(
+            code::CODE_TOOL_UNSUPPORTED_ENCODING,
+            "tool_unsupported_encoding"
+        );
+        assert_eq!(code::CODE_TOOL_OUTSIDE_WORKSPACE, "tool_outside_workspace");
+        assert_eq!(
+            code::CODE_TOOL_UNRESOLVED_WORKSPACE_ROOT,
+            "tool_unresolved_workspace_root"
+        );
+    }
+
+    #[test]
+    fn fs_tool_error_taxonomy_maps_each_variant_to_its_code() {
+        use std::path::PathBuf;
+        let cases: Vec<(FsToolError, &str)> = vec![
+            (
+                FsToolError::NotFound {
+                    user_path: "a/b.txt".into(),
+                    resolved_path: None,
+                },
+                code::CODE_TOOL_PATH_NOT_FOUND,
+            ),
+            (
+                FsToolError::NotAFile {
+                    path: PathBuf::from("a"),
+                },
+                code::CODE_TOOL_NOT_A_FILE,
+            ),
+            (
+                FsToolError::NotADirectory {
+                    path: PathBuf::from("a"),
+                },
+                code::CODE_TOOL_NOT_A_DIRECTORY,
+            ),
+            (
+                FsToolError::PermissionDenied {
+                    path: PathBuf::from("a"),
+                },
+                code::CODE_TOOL_PERMISSION_DENIED,
+            ),
+            (
+                FsToolError::BinaryFile {
+                    path: PathBuf::from("a"),
+                },
+                code::CODE_TOOL_BINARY_FILE,
+            ),
+            (
+                FsToolError::UnsupportedEncoding { omitted_count: 2 },
+                code::CODE_TOOL_UNSUPPORTED_ENCODING,
+            ),
+            (
+                FsToolError::OutsideWorkspace {
+                    user_path: "../escape".into(),
+                    symlink_traversed: false,
+                },
+                code::CODE_TOOL_OUTSIDE_WORKSPACE,
+            ),
+            (
+                FsToolError::UnresolvedWorkspaceRoot {
+                    source: "io error".into(),
+                },
+                code::CODE_TOOL_UNRESOLVED_WORKSPACE_ROOT,
+            ),
+        ];
+        for (err, expected_code) in cases {
+            assert_eq!(err.code(), expected_code, "variant code mismatch");
+            assert!(
+                !err.message().is_empty(),
+                "variant message must be non-empty"
+            );
+            let diag = err.to_diagnostic();
+            assert_eq!(diag.code, expected_code);
+            assert_eq!(diag.message, err.message());
+        }
     }
 }

@@ -2,6 +2,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
+use opi_agent::diagnostic::FsToolError;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
@@ -70,10 +71,8 @@ impl Tool for ReadTool {
         let resolved_path =
             match super::resolve_tool_path(&self.workspace_root, &args.path, self.path_policy) {
                 Ok(p) => p,
-                Err(msg) => {
-                    return Box::pin(async move {
-                        Ok(result::err(vec![OutputContent::Text { text: msg }]))
-                    });
+                Err(e) => {
+                    return Box::pin(async move { Ok(super::fs_error_result(e)) });
                 }
             };
         let workspace_relation = resolved_path.workspace_relation;
@@ -81,13 +80,34 @@ impl Tool for ReadTool {
         let workspace_root = self.workspace_root.clone();
         let path_for_display = args.path.clone();
         Box::pin(async move {
+            if file_path.is_dir() {
+                return Ok(super::fs_error_result(FsToolError::NotAFile {
+                    path: file_path.clone(),
+                }));
+            }
             let content = match tokio::fs::read_to_string(&file_path).await {
                 Ok(c) => c,
-                Err(e) => {
-                    return Ok(result::err(vec![OutputContent::Text {
-                        text: format!("failed to read {}: {e}", file_path.display()),
-                    }]));
-                }
+                Err(e) => match e.kind() {
+                    std::io::ErrorKind::NotFound => {
+                        return Ok(super::fs_error_result(FsToolError::NotFound {
+                            user_path: path_for_display.clone(),
+                            resolved_path: Some(file_path.clone()),
+                        }));
+                    }
+                    std::io::ErrorKind::PermissionDenied => {
+                        return Ok(super::fs_error_result(FsToolError::PermissionDenied {
+                            path: file_path.clone(),
+                        }));
+                    }
+                    _ => {
+                        // Other causes (including non-UTF-8 file content, owned
+                        // by the read-hardening task) stay a plain message
+                        // without a taxonomy code.
+                        return Ok(result::err(vec![OutputContent::Text {
+                            text: format!("failed to read {}: {e}", file_path.display()),
+                        }]));
+                    }
+                },
             };
 
             let lines: Vec<&str> = content.lines().collect();

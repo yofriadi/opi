@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use opi_agent::diagnostic::code;
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
 use opi_coding_agent::tool::{BashTool, EditTool, PathPolicy, ReadTool, WriteTool};
 use serde_json::json;
@@ -188,11 +189,15 @@ async fn read_tool_allow_outside_policy_reads_absolute_outside_path() {
             .and_then(|value| value.as_str()),
         Some("outside")
     );
+    let resolved = details_string(&details, "resolved_path");
+    assert!(
+        !resolved.contains(r"\\?\"),
+        "resolved_path must not leak the Windows verbatim prefix: {resolved}"
+    );
+    // The stripped display path must still resolve to the same file.
     assert_eq!(
-        details_string(&details, "resolved_path"),
-        std::fs::canonicalize(&outside_file)
-            .unwrap()
-            .to_string_lossy()
+        std::fs::canonicalize(resolved).unwrap(),
+        std::fs::canonicalize(&outside_file).unwrap()
     );
 }
 
@@ -482,8 +487,237 @@ async fn uniform_tool_result_details_contract() {
         .unwrap();
     assert!(missing.is_error);
     assert!(!missing.truncated);
-    assert!(missing.diagnostics.is_empty());
+    assert!(
+        missing
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_PATH_NOT_FOUND),
+        "missing-file failure should carry tool_path_not_found: {:?}",
+        missing.diagnostics
+    );
     assert!(missing.details.is_none(), "failure details must stay None");
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem error taxonomy (Phase 11.2)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn filesystem_error_taxonomy_path_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("file.txt"), "x").unwrap();
+    std::fs::create_dir(dir.path().join("subdir")).unwrap();
+    let read = ReadTool::new(dir.path().to_path_buf());
+
+    // NotFound: missing file carries tool_path_not_found.
+    let missing = read
+        .execute(
+            "tax-1",
+            json!({ "path": "nope.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(missing.is_error);
+    assert!(
+        missing
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_PATH_NOT_FOUND),
+        "missing file should carry tool_path_not_found: {:?}",
+        missing.diagnostics
+    );
+    assert!(tool_result_text(&missing).contains("does not exist"));
+
+    // NotAFile: reading a directory carries tool_not_a_file.
+    let dir_read = read
+        .execute(
+            "tax-2",
+            json!({ "path": "subdir" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(dir_read.is_error);
+    assert!(
+        dir_read
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_NOT_A_FILE),
+        "reading a directory should carry tool_not_a_file: {:?}",
+        dir_read.diagnostics
+    );
+    assert!(tool_result_text(&dir_read).contains("not a file"));
+
+    // OutsideWorkspace: workspace-only read of an outside absolute path.
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("o.txt");
+    std::fs::write(&outside_file, "x").unwrap();
+    let abs = outside_file.to_string_lossy().to_string();
+    let outside_read = read
+        .execute(
+            "tax-3",
+            json!({ "path": abs }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(outside_read.is_error);
+    assert!(
+        outside_read
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_OUTSIDE_WORKSPACE),
+        "outside-workspace read should carry tool_outside_workspace: {:?}",
+        outside_read.diagnostics
+    );
+    assert!(tool_result_text(&outside_read).contains("outside the workspace"));
+}
+
+#[tokio::test]
+async fn unicode_path_metadata_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let name = "café-日本語.txt";
+    std::fs::write(dir.path().join(name), "x").unwrap();
+    let read = ReadTool::new(dir.path().to_path_buf());
+    let result = read
+        .execute(
+            "uni-1",
+            json!({ "path": name }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    let details = result.details.expect("read details");
+    let resolved = details_string(&details, "resolved_path");
+    assert!(
+        resolved.contains("café") && resolved.contains("日本語"),
+        "unicode filename must round-trip in resolved_path: {resolved}"
+    );
+    assert!(
+        !resolved.contains('\u{FFFD}'),
+        "no lossy U+FFFD replacement: {resolved}"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_drive_prefix() {
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::write(workspace.path().join("f.txt"), "x").unwrap();
+    // Feed the verbatim canonical form back to the tool and require the
+    // user-facing resolved path to be clean (no \\?\ leak).
+    let verbatim = std::fs::canonicalize(workspace.path().join("f.txt")).unwrap();
+    let read = ReadTool::new_with_policy(
+        workspace.path().to_path_buf(),
+        PathPolicy::AllowOutsideWorkspace,
+    );
+    let result = read
+        .execute(
+            "win-1",
+            json!({ "path": verbatim.to_string_lossy() }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    let details = result.details.expect("details");
+    let resolved = details_string(&details, "resolved_path");
+    assert!(
+        !resolved.contains(r"\\?\"),
+        "verbatim prefix must not leak into resolved_path: {resolved}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn read_tool_permission_denied_is_classified() {
+    extern "C" {
+        fn getuid() -> u32;
+    }
+    if unsafe { getuid() } == 0 {
+        eprintln!("skipping permission test under root");
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("locked.txt");
+    std::fs::write(&file, "x").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let read = ReadTool::new(dir.path().to_path_buf());
+    let result = read
+        .execute(
+            "pd-1",
+            json!({ "path": "locked.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644));
+    assert!(result.is_error);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_PERMISSION_DENIED),
+        "unreadable file should carry tool_permission_denied: {:?}",
+        result.diagnostics
+    );
+    assert!(tool_result_text(&result).contains("permission denied"));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_drive_prefix_forms() {
+    let workspace = tempfile::tempdir().unwrap();
+    let read = ReadTool::new(workspace.path().to_path_buf());
+    // C:\foo (drive-absolute) is outside the workspace -> OutsideWorkspace, and
+    // the message must not leak the verbatim prefix.
+    let result = read
+        .execute(
+            "win-form-1",
+            json!({ "path": "C:\\nonexistent-opi-11-2-probe.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_OUTSIDE_WORKSPACE),
+        "drive-absolute outside path should be denied: {:?}",
+        result.diagnostics
+    );
+    assert!(!tool_result_text(&result).contains(r"\\?\"));
+    // C:foo (drive-relative) is handled deterministically without leaking the
+    // verbatim prefix (treated as relative under the workspace root).
+    let rel = read
+        .execute(
+            "win-form-2",
+            json!({ "path": "C:nonexistent.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    if let Some(p) = rel
+        .details
+        .as_ref()
+        .and_then(|d| d.get("resolved_path"))
+        .and_then(|v| v.as_str())
+    {
+        assert!(!p.contains(r"\\?\"));
+    }
 }
 
 // ---------------------------------------------------------------------------

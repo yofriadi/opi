@@ -2,6 +2,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
+use opi_agent::diagnostic::FsToolError;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
@@ -78,28 +79,48 @@ impl Tool for LsTool {
                 super::PathPolicy::WorkspaceOnly,
             ) {
                 Ok(r) => r,
-                Err(msg) => {
-                    return Ok(result::err(vec![OutputContent::Text { text: msg }]));
+                Err(e) => {
+                    return Ok(super::fs_error_result(e));
                 }
             };
             let target = resolved.path;
             let workspace_relation = resolved.workspace_relation;
 
             if !target.exists() {
-                return Ok(result::err(vec![OutputContent::Text {
-                    text: format!("path '{}' does not exist", path_arg),
-                }]));
+                return Ok(super::fs_error_result(FsToolError::NotFound {
+                    user_path: path_arg.clone(),
+                    resolved_path: Some(target.clone()),
+                }));
             }
 
             if !target.is_dir() {
-                return Ok(result::err(vec![OutputContent::Text {
-                    text: format!("'{}' is not a directory", path_arg),
-                }]));
+                return Ok(super::fs_error_result(FsToolError::NotADirectory {
+                    path: target.clone(),
+                }));
+            }
+
+            // Surface an unreadable target directory instead of silently listing
+            // it as empty. Nested-dir permission errors during recursion are
+            // deferred to the nav-consistency task.
+            if let Err(e) = std::fs::read_dir(&target)
+                && e.kind() == std::io::ErrorKind::PermissionDenied
+            {
+                return Ok(super::fs_error_result(FsToolError::PermissionDenied {
+                    path: target.clone(),
+                }));
             }
 
             // Read and sort directory entries
             let mut entries: Vec<Entry> = Vec::new();
-            collect_entries(&workspace_root, &target, &mut entries, 0, max_depth);
+            let mut non_utf8 = 0usize;
+            collect_entries(
+                &workspace_root,
+                &target,
+                &mut entries,
+                &mut non_utf8,
+                0,
+                max_depth,
+            );
 
             entries.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
 
@@ -137,6 +158,14 @@ impl Tool for LsTool {
 
             let mut tool_result = result::ok(vec![OutputContent::Text { text }], details);
             tool_result.truncated = truncated;
+            if non_utf8 > 0 {
+                tool_result.diagnostics.push(
+                    FsToolError::UnsupportedEncoding {
+                        omitted_count: non_utf8,
+                    }
+                    .to_diagnostic(),
+                );
+            }
             Ok(tool_result)
         })
     }
@@ -155,6 +184,7 @@ fn collect_entries(
     workspace_root: &std::path::Path,
     dir: &std::path::Path,
     entries: &mut Vec<Entry>,
+    non_utf8: &mut usize,
     current_depth: usize,
     max_depth: usize,
 ) {
@@ -165,11 +195,13 @@ fn collect_entries(
 
     for entry in read_dir.flatten() {
         let path = entry.path();
-        let relative = path
-            .strip_prefix(workspace_root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
+        let relative_os = path.strip_prefix(workspace_root).unwrap_or(&path);
+        let Some(relative) = relative_os.to_str() else {
+            // Non-UTF-8 entry name (Unix-only in practice): skip and report via
+            // an UnsupportedEncoding diagnostic instead of silent U+FFFD.
+            *non_utf8 += 1;
+            continue;
+        };
         let is_dir = path.is_dir();
 
         // Skip gitignored entries
@@ -178,12 +210,19 @@ fn collect_entries(
         }
 
         entries.push(Entry {
-            relative_path: relative.clone(),
+            relative_path: relative.to_owned(),
             is_dir,
         });
 
         if is_dir && current_depth < max_depth {
-            collect_entries(workspace_root, &path, entries, current_depth + 1, max_depth);
+            collect_entries(
+                workspace_root,
+                &path,
+                entries,
+                non_utf8,
+                current_depth + 1,
+                max_depth,
+            );
         }
     }
 }
