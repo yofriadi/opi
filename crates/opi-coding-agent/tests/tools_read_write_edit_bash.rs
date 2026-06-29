@@ -1450,6 +1450,485 @@ fn tool_result_details_use_shared_builders_guard() {
 }
 
 // ---------------------------------------------------------------------------
+// Read tool hardening (Phase 11.3)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn read_tool_line_ranges_are_stable() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("lines.txt");
+    std::fs::write(&file_path, "line1\nline2\nline3\nline4\nline5").unwrap();
+    let tool = ReadTool::new(dir.path().to_path_buf());
+
+    // Full read: 1-based default offset, all five lines, not truncated.
+    let r = tool
+        .execute(
+            "lr1",
+            json!({ "path": "lines.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error, "{}", tool_result_text(&r));
+    let d = r.details.as_ref().expect("details");
+    assert_eq!(d.get("line_count").and_then(|v| v.as_u64()), Some(5));
+    assert_eq!(d.get("offset").and_then(|v| v.as_u64()), Some(1));
+    assert_eq!(d.get("limit").and_then(|v| v.as_u64()), Some(2000));
+    assert_eq!(d.get("truncated").and_then(|v| v.as_bool()), Some(false));
+    let text = tool_result_text(&r);
+    for line in ["line1", "line2", "line3", "line4", "line5"] {
+        assert!(text.contains(line), "expected {line} in body");
+    }
+
+    // offset=2, limit=2 selects lines 2-3 (1-based); lines 4-5 remain after the
+    // window, so the result is truncated with omitted == 2.
+    let r = tool
+        .execute(
+            "lr2",
+            json!({ "path": "lines.txt", "offset": 2, "limit": 2 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(r.truncated);
+    let text = tool_result_text(&r);
+    assert!(text.contains("line2") && text.contains("line3"));
+    assert!(!text.contains("line1") && !text.contains("line4"));
+    let d = r.details.as_ref().expect("details");
+    assert_eq!(d.get("offset").and_then(|v| v.as_u64()), Some(2));
+    assert_eq!(d.get("limit").and_then(|v| v.as_u64()), Some(2));
+    assert_eq!(d.get("line_count").and_then(|v| v.as_u64()), Some(5));
+    assert_eq!(d.get("truncated").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(d.get("omitted").and_then(|v| v.as_u64()), Some(2));
+
+    // offset past EOF is a clear non-error note, not a failure.
+    let r = tool
+        .execute(
+            "lr3",
+            json!({ "path": "lines.txt", "offset": 6 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error, "{}", tool_result_text(&r));
+    assert!(!r.truncated);
+    let text = tool_result_text(&r);
+    assert!(text.contains("past end of file") && text.contains("line_count 5"));
+    let d = r.details.expect("details");
+    assert_eq!(d.get("offset").and_then(|v| v.as_u64()), Some(6));
+    assert_eq!(d.get("line_count").and_then(|v| v.as_u64()), Some(5));
+
+    // Oversized limit clamps to available and is not truncated.
+    let r = tool
+        .execute(
+            "lr4",
+            json!({ "path": "lines.txt", "limit": 10 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(!r.truncated);
+    let d = r.details.expect("details");
+    assert_eq!(d.get("omitted").and_then(|v| v.as_u64()), Some(0));
+
+    // offset=0 is invalid (1-based); it floors to 1, returns line1, and reports
+    // offset=1 so the metadata matches the effective window.
+    let r = tool
+        .execute(
+            "lr5",
+            json!({ "path": "lines.txt", "offset": 0 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(tool_result_text(&r).contains("line1"));
+    let d = r.details.expect("details");
+    assert_eq!(d.get("offset").and_then(|v| v.as_u64()), Some(1));
+}
+
+#[tokio::test]
+async fn read_tool_line_range_edge_cases() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = ReadTool::new(dir.path().to_path_buf());
+
+    // limit: 0 on a non-empty file returns no lines and is truncated; the marker
+    // is appended without a leading blank line.
+    let three = dir.path().join("three.txt");
+    std::fs::write(&three, "a\nb\nc").unwrap();
+    let r = tool
+        .execute(
+            "ec1",
+            json!({ "path": "three.txt", "limit": 0 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(r.truncated);
+    let text = tool_result_text(&r);
+    assert!(text.contains("... 3 lines omitted"));
+    assert!(
+        !text.contains("\n\n..."),
+        "truncation marker must not follow a blank line"
+    );
+    let d = r.details.expect("details");
+    assert_eq!(d.get("omitted").and_then(|v| v.as_u64()), Some(3));
+
+    // Empty file: not an error, zero lines, not truncated, no past-EOF note.
+    let empty = dir.path().join("empty.txt");
+    std::fs::write(&empty, "").unwrap();
+    let r = tool
+        .execute(
+            "ec2",
+            json!({ "path": "empty.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(!r.truncated);
+    let d = r.details.as_ref().expect("details");
+    assert_eq!(d.get("line_count").and_then(|v| v.as_u64()), Some(0));
+    assert_eq!(d.get("omitted").and_then(|v| v.as_u64()), Some(0));
+    assert!(
+        !tool_result_text(&r).contains("past end of file"),
+        "empty file must not emit the past-EOF note"
+    );
+
+    // offset == total_lines returns the last line and is NOT out of range.
+    let r = tool
+        .execute(
+            "ec3",
+            json!({ "path": "three.txt", "offset": 3 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(!r.truncated);
+    let d = r.details.as_ref().expect("details");
+    assert_eq!(d.get("offset").and_then(|v| v.as_u64()), Some(3));
+    assert_eq!(d.get("omitted").and_then(|v| v.as_u64()), Some(0));
+    assert!(
+        !tool_result_text(&r).contains("past end of file"),
+        "offset at the last line is in range"
+    );
+}
+
+#[tokio::test]
+async fn read_tool_truncates_large_file_and_sets_truncated_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let big_path = dir.path().join("big.txt");
+    // 2001 lines, no trailing newline.
+    let big: String = (1..=2001u32)
+        .map(|i| format!("L{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&big_path, &big).unwrap();
+    let tool = ReadTool::new(dir.path().to_path_buf());
+
+    // Default args cap at 2000 lines; 1 omitted; top-level truncated flag set.
+    let r = tool
+        .execute(
+            "tr1",
+            json!({ "path": "big.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error, "{}", tool_result_text(&r));
+    assert!(r.truncated, "top-level truncated flag must be set");
+    let text = tool_result_text(&r);
+    assert!(text.contains("L2000"), "line 2000 should be present");
+    assert!(!text.contains("L2001"), "line 2001 must be omitted");
+    assert!(
+        text.contains("... 1 lines omitted"),
+        "truncation marker missing: {text}"
+    );
+    let d = r.details.expect("details");
+    assert_eq!(d.get("truncated").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(d.get("omitted").and_then(|v| v.as_u64()), Some(1));
+    assert_eq!(d.get("line_count").and_then(|v| v.as_u64()), Some(2001));
+    assert_eq!(d.get("limit").and_then(|v| v.as_u64()), Some(2000));
+    assert_eq!(d.get("offset").and_then(|v| v.as_u64()), Some(1));
+    for key in [
+        "workspace_root",
+        "path",
+        "resolved_path",
+        "workspace_relation",
+    ] {
+        assert!(
+            d.get(key).is_some(),
+            "truncated result missing path key {key}"
+        );
+    }
+
+    // Explicit limit=2001 is honored exactly (no default-cap reapply): not truncated.
+    let r = tool
+        .execute(
+            "tr2",
+            json!({ "path": "big.txt", "limit": 2001 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(!r.truncated);
+    let d = r.details.as_ref().expect("details");
+    assert_eq!(d.get("omitted").and_then(|v| v.as_u64()), Some(0));
+    assert!(tool_result_text(&r).contains("L2001"));
+
+    // Boundary: exactly 2000 lines is not truncated under default args.
+    let boundary_path = dir.path().join("boundary.txt");
+    let boundary: String = (1..=2000u32)
+        .map(|i| format!("L{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&boundary_path, &boundary).unwrap();
+    let r = tool
+        .execute(
+            "tr3",
+            json!({ "path": "boundary.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert!(!r.truncated);
+    let d = r.details.expect("details");
+    assert_eq!(d.get("line_count").and_then(|v| v.as_u64()), Some(2000));
+    assert_eq!(d.get("omitted").and_then(|v| v.as_u64()), Some(0));
+}
+
+#[tokio::test]
+async fn read_tool_detects_binary_file_and_returns_diagnostic_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin_path = dir.path().join("binary.bin");
+    std::fs::write(&bin_path, b"hello\x00world").unwrap();
+    let tool = ReadTool::new(dir.path().to_path_buf());
+
+    let r = tool
+        .execute(
+            "bin1",
+            json!({ "path": "binary.bin" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error, "binary file must be reported as an error");
+    assert!(
+        r.diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_BINARY_FILE),
+        "expected tool_binary_file diagnostic: {:?}",
+        r.diagnostics
+    );
+    let text = tool_result_text(&r);
+    assert!(
+        text.contains("appears to be a binary file"),
+        "binary message missing: {text}"
+    );
+    assert!(
+        !text.contains("failed to read"),
+        "must not collapse to the generic IO message"
+    );
+    assert!(r.details.is_none(), "error result must not carry details");
+    assert!(!r.truncated);
+}
+
+#[tokio::test]
+async fn read_file_rejects_invalid_utf8_with_unsupported_encoding() {
+    let dir = tempfile::tempdir().unwrap();
+    let bad_path = dir.path().join("bad_utf8.txt");
+    // Valid UTF-8 prefix "abc" then invalid continuation bytes; no NUL byte.
+    std::fs::write(&bad_path, b"abc\xff\xfe").unwrap();
+    let tool = ReadTool::new(dir.path().to_path_buf());
+
+    let r = tool
+        .execute(
+            "utf1",
+            json!({ "path": "bad_utf8.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error, "invalid UTF-8 must be reported as an error");
+    let diag = r
+        .diagnostics
+        .iter()
+        .find(|d| d.code == code::CODE_TOOL_UNSUPPORTED_ENCODING)
+        .expect("tool_unsupported_encoding diagnostic");
+    let text = tool_result_text(&r);
+    assert!(
+        text.contains("is not valid UTF-8"),
+        "encoding message missing: {text}"
+    );
+    assert!(
+        !text.contains("failed to read"),
+        "must not collapse to the generic IO message"
+    );
+    assert!(
+        !text.contains('\u{FFFD}'),
+        "must not lossy-replace with U+FFFD"
+    );
+    let ctx = diag.context.as_object().expect("context object");
+    assert!(
+        ctx.get("path").and_then(|v| v.as_str()).is_some(),
+        "context.path missing"
+    );
+    assert_eq!(
+        ctx.get("byte_offset").and_then(|v| v.as_u64()),
+        Some(3),
+        "byte_offset should be the length of the valid UTF-8 prefix"
+    );
+    assert!(r.details.is_none());
+    assert!(!r.truncated);
+}
+
+#[tokio::test]
+async fn read_tool_returns_typed_diagnostic_context() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("file.txt"), "x").unwrap();
+    std::fs::create_dir(dir.path().join("subdir")).unwrap();
+    std::fs::write(dir.path().join("binary.bin"), b"hello\x00world").unwrap();
+    std::fs::write(dir.path().join("bad_utf8.txt"), b"abc\xff\xfe").unwrap();
+    let tool = ReadTool::new(dir.path().to_path_buf());
+
+    // NotFound
+    let r = tool
+        .execute(
+            "tc-notfound",
+            json!({ "path": "nope.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error);
+    let d = r
+        .diagnostics
+        .iter()
+        .find(|x| x.code == code::CODE_TOOL_PATH_NOT_FOUND)
+        .expect("tool_path_not_found diagnostic");
+    assert!(
+        d.context
+            .get("user_path")
+            .and_then(|v| v.as_str())
+            .is_some()
+    );
+    assert!(tool_result_text(&r).contains("does not exist"));
+    assert!(r.details.is_none());
+
+    // NotAFile
+    let r = tool
+        .execute(
+            "tc-notafile",
+            json!({ "path": "subdir" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error);
+    let d = r
+        .diagnostics
+        .iter()
+        .find(|x| x.code == code::CODE_TOOL_NOT_A_FILE)
+        .expect("tool_not_a_file diagnostic");
+    assert!(d.context.get("path").and_then(|v| v.as_str()).is_some());
+    assert!(tool_result_text(&r).contains("not a file"));
+
+    // OutsideWorkspace (absolute outside path under WorkspaceOnly)
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("escape.txt");
+    std::fs::write(&outside_file, "x").unwrap();
+    let r = tool
+        .execute(
+            "tc-outside",
+            json!({ "path": outside_file }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error);
+    let d = r
+        .diagnostics
+        .iter()
+        .find(|x| x.code == code::CODE_TOOL_OUTSIDE_WORKSPACE)
+        .expect("tool_outside_workspace diagnostic");
+    assert!(
+        d.context
+            .get("user_path")
+            .and_then(|v| v.as_str())
+            .is_some()
+    );
+    assert!(
+        d.context
+            .get("symlink_traversed")
+            .and_then(|v| v.as_bool())
+            .is_some()
+    );
+    assert!(tool_result_text(&r).contains("outside the workspace"));
+
+    // BinaryFile
+    let r = tool
+        .execute(
+            "tc-binary",
+            json!({ "path": "binary.bin" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error);
+    let d = r
+        .diagnostics
+        .iter()
+        .find(|x| x.code == code::CODE_TOOL_BINARY_FILE)
+        .expect("tool_binary_file diagnostic");
+    assert!(d.context.get("path").and_then(|v| v.as_str()).is_some());
+
+    // UnsupportedEncoding
+    let r = tool
+        .execute(
+            "tc-encoding",
+            json!({ "path": "bad_utf8.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error);
+    let d = r
+        .diagnostics
+        .iter()
+        .find(|x| x.code == code::CODE_TOOL_UNSUPPORTED_ENCODING)
+        .expect("tool_unsupported_encoding diagnostic");
+    assert!(d.context.get("path").and_then(|v| v.as_str()).is_some());
+    assert_eq!(
+        d.context.get("byte_offset").and_then(|v| v.as_u64()),
+        Some(3)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Tool definition tests
 // ---------------------------------------------------------------------------
 
