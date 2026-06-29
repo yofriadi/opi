@@ -6,7 +6,7 @@
 use std::fs;
 
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
-use opi_coding_agent::tool::FindTool;
+use opi_coding_agent::tool::{FindTool, MAX_NAV_RESULTS};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -58,7 +58,7 @@ async fn find_tool_matches_files_by_glob_pattern() {
 }
 
 #[tokio::test]
-async fn find_tool_no_match_returns_empty() {
+async fn find_tool_no_match_returns_message() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("file.txt"), "data").unwrap();
 
@@ -78,6 +78,16 @@ async fn find_tool_no_match_returns_empty() {
     assert!(
         !text.contains("file.txt"),
         "should not match unrelated files"
+    );
+    // Phase 11.7: a zero-match query returns a clear non-empty no-matches
+    // message (never the empty string), locking find's parity with grep/glob.
+    assert!(
+        !text.is_empty(),
+        "find zero-match must be non-empty: {text:?}"
+    );
+    assert!(
+        text.to_lowercase().contains("no matches"),
+        "find zero-match must name the cause: {text}"
     );
 }
 
@@ -423,5 +433,96 @@ async fn find_tool_permission_denied_scope_is_classified() {
             .any(|d| d.code == code::CODE_TOOL_PERMISSION_DENIED),
         "unreadable scope should carry tool_permission_denied: {:?}",
         result.diagnostics
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11.7: read-only navigation tools consistency (find variants)
+// ---------------------------------------------------------------------------
+
+/// find honors a NESTED `.gitignore` (the only rule for `secret.txt` lives in
+/// `sub/`), matching grep/glob/ls.
+#[tokio::test]
+async fn nested_ignore_consistent_across_nav_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join(".gitignore"), "unrelated_pattern_xyz\n").unwrap();
+    fs::create_dir_all(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("sub/.gitignore"), "secret.txt\n").unwrap();
+    fs::write(dir.path().join("sub/secret.txt"), "x").unwrap();
+    fs::write(dir.path().join("sub/keep.txt"), "x").unwrap();
+
+    let find = FindTool::new(dir.path().to_path_buf())
+        .execute(
+            "ni-f1",
+            json!({ "pattern": "sub/*.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let text = tool_result_text(&find);
+    assert!(!find.is_error, "{}", text);
+    assert!(text.contains("keep.txt"));
+    assert!(
+        !text.contains("secret.txt"),
+        "find must honor nested .gitignore: {text}"
+    );
+}
+
+/// find emits relative paths in strict lexicographic order.
+#[tokio::test]
+async fn nav_tools_emit_sorted_results() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["c.rs", "a.rs", "b.rs"] {
+        fs::write(dir.path().join(name), "x").unwrap();
+    }
+    let find = FindTool::new(dir.path().to_path_buf())
+        .execute(
+            "so-f1",
+            json!({ "pattern": "*.rs" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!find.is_error);
+    let text = tool_result_text(&find);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines,
+        vec!["a.rs", "b.rs", "c.rs"],
+        "find sorted relative: {text}"
+    );
+    for l in &lines {
+        assert!(
+            !l.starts_with('/') && !l.starts_with('\\') && !l.contains(':'),
+            "find must emit relative paths only: {l}"
+        );
+    }
+}
+
+/// find honors the CancellationToken mid-walk (pre-cancelled -> zero matches).
+#[tokio::test]
+async fn nav_tools_honour_cancellation_token() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_NAV_RESULTS + 200) {
+        fs::write(dir.path().join(format!("f_{i:04}.txt")), "x").unwrap();
+    }
+    let token = CancellationToken::new();
+    token.cancel();
+    let find = FindTool::new(dir.path().to_path_buf())
+        .execute("cn-f1", json!({ "pattern": "f_*.txt" }), token, None)
+        .await
+        .unwrap();
+    assert!(!find.is_error);
+    let details = find.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("cancelled").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        details.get("match_count").and_then(|v| v.as_u64()),
+        Some(0),
+        "pre-cancelled walk must match zero files"
     );
 }

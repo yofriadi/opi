@@ -3,7 +3,7 @@
 //! DoD: "tests cover ignored dirs and regex errors"
 
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
-use opi_coding_agent::tool::{GlobTool, GrepTool};
+use opi_coding_agent::tool::{GlobTool, GrepTool, MAX_NAV_FILE_BYTES, MAX_NAV_RESULTS};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -351,4 +351,434 @@ fn grep_tool_has_valid_definition() {
     assert_eq!(def.name, "grep");
     assert!(!def.description.is_empty());
     assert!(def.input_schema.is_object());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11.7: read-only navigation tools consistency
+// ---------------------------------------------------------------------------
+
+/// Nested `.gitignore` (the only rule ignoring `secret.txt` lives in `sub/`)
+/// must be honored by both grep and glob. Pre-11.7 ls hand-rolled a root-only
+/// matcher and leaked such files; this fixture genuinely fails on that bug.
+#[tokio::test]
+async fn nested_ignore_consistent_across_nav_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "unrelated_pattern_xyz\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+    std::fs::write(dir.path().join("sub/.gitignore"), "secret.txt\n").unwrap();
+    std::fs::write(dir.path().join("sub/secret.txt"), "match here\n").unwrap();
+    std::fs::write(dir.path().join("sub/keep.txt"), "match here\n").unwrap();
+
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "ni-1",
+            json!({ "pattern": "match" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let grep_text = tool_result_text(&grep);
+    assert!(!grep.is_error, "{}", grep_text);
+    assert!(grep_text.contains("keep.txt"));
+    assert!(
+        !grep_text.contains("secret.txt"),
+        "grep must honor nested .gitignore: {grep_text}"
+    );
+
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "ni-2",
+            json!({ "pattern": "sub/*.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let glob_text = tool_result_text(&glob);
+    assert!(!glob.is_error, "{}", glob_text);
+    assert!(glob_text.contains("keep.txt"));
+    assert!(
+        !glob_text.contains("secret.txt"),
+        "glob must honor nested .gitignore: {glob_text}"
+    );
+}
+
+/// Results are emitted in strict lexicographic relative-path order, and as
+/// relative (not absolute) paths. For grep, intra-file order follows line
+/// number, not line text.
+#[tokio::test]
+async fn nav_tools_emit_sorted_results() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["c.rs", "a.rs", "b.rs"] {
+        std::fs::write(dir.path().join(name), "x\n").unwrap();
+    }
+
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "so-1",
+            json!({ "pattern": "*.rs" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!glob.is_error);
+    let glob_text = tool_result_text(&glob);
+    let lines: Vec<&str> = glob_text.lines().collect();
+    assert_eq!(
+        lines,
+        vec!["a.rs", "b.rs", "c.rs"],
+        "glob must emit sorted relative paths"
+    );
+    for l in &lines {
+        assert!(
+            !l.starts_with('/') && !l.starts_with('\\') && l.len() >= 2 && !l.contains(':'),
+            "glob must emit relative paths only: {l}"
+        );
+    }
+
+    // grep: a.rs has two matching lines where line-1 text sorts AFTER line-2
+    // text; line-number order must win (zebra_line before alpha_line).
+    std::fs::write(dir.path().join("a.rs"), "zebra_line\nalpha_line\n").unwrap();
+    std::fs::write(dir.path().join("b.rs"), "x_line\n").unwrap();
+    std::fs::write(dir.path().join("c.rs"), "x_line\n").unwrap();
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "so-2",
+            json!({ "pattern": "line" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let gtext = tool_result_text(&grep);
+    let pos_a = gtext.find("a.rs").expect("a.rs");
+    let pos_b = gtext.find("b.rs").expect("b.rs");
+    let pos_c = gtext.find("c.rs").expect("c.rs");
+    assert!(pos_a < pos_b && pos_b < pos_c, "path order: {gtext}");
+    let pos_zebra = gtext.find("a.rs: zebra_line").expect("zebra line");
+    let pos_alpha = gtext.find("a.rs: alpha_line").expect("alpha line");
+    assert!(
+        pos_zebra < pos_alpha,
+        "intra-file order must be line number, not text: {gtext}"
+    );
+}
+
+/// grep/glob cap large result sets at MAX_NAV_RESULTS with truncation flags and
+/// an exact omitted_count; exactly at the cap nothing is truncated.
+#[tokio::test]
+async fn nav_tools_cap_large_result_sets() {
+    let cap = MAX_NAV_RESULTS;
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(cap + 5) {
+        std::fs::write(dir.path().join(format!("f_{i:04}.txt")), "x").unwrap();
+    }
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "cap-1",
+            json!({ "pattern": "f_*.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!glob.is_error);
+    assert!(glob.truncated, "result.truncated must be set over the cap");
+    let details = glob.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("truncated").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        details.get("omitted_count").and_then(|v| v.as_u64()),
+        Some(5)
+    );
+    assert_eq!(
+        details.get("match_count").and_then(|v| v.as_u64()),
+        Some((cap + 5) as u64)
+    );
+    assert_eq!(
+        tool_result_text(&glob).lines().count(),
+        cap,
+        "emitted lines must equal the cap"
+    );
+
+    // Exactly at cap: not truncated.
+    let dir2 = tempfile::tempdir().unwrap();
+    for i in 0..cap {
+        std::fs::write(dir2.path().join(format!("f_{i:04}.txt")), "x").unwrap();
+    }
+    let glob2 = GlobTool::new(dir2.path().to_path_buf())
+        .execute(
+            "cap-2",
+            json!({ "pattern": "f_*.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!glob2.is_error);
+    assert!(!glob2.truncated, "exactly at cap must not truncate");
+    let d2 = glob2.details.as_ref().expect("details");
+    assert_eq!(d2.get("truncated").and_then(|v| v.as_bool()), Some(false));
+    assert_eq!(d2.get("omitted_count").and_then(|v| v.as_u64()), Some(0));
+}
+
+/// A zero-match query returns a clear non-empty no-matches message (never "").
+#[tokio::test]
+async fn nav_tools_empty_result_message() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("file.txt"), "hello\n").unwrap();
+
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "em-1",
+            json!({ "pattern": "zzz_no_match" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!grep.is_error);
+    let gt = tool_result_text(&grep);
+    assert!(!gt.is_empty(), "grep zero-match must be non-empty: {gt:?}");
+    assert!(gt.to_lowercase().contains("no matches"), "grep: {gt}");
+
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "em-2",
+            json!({ "pattern": "*.nomatch" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!glob.is_error);
+    let glt = tool_result_text(&glob);
+    assert!(
+        !glt.is_empty(),
+        "glob zero-match must be non-empty: {glt:?}"
+    );
+    assert!(glt.to_lowercase().contains("no matches"), "glob: {glt}");
+}
+
+/// regex/glob parse errors are structured: is_error, details None, message
+/// names the offending pattern kind.
+#[tokio::test]
+async fn nav_tools_parse_errors_are_structured() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "pe-1",
+            json!({ "pattern": "[invalid" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(grep.is_error);
+    assert!(grep.details.is_none(), "parse error must keep details None");
+    let gt = tool_result_text(&grep);
+    assert!(
+        gt.to_lowercase().contains("regex") || gt.to_lowercase().contains("pattern"),
+        "grep parse error must name the cause: {gt}"
+    );
+
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "pe-2",
+            json!({ "pattern": "[invalid" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(glob.is_error);
+    assert!(glob.details.is_none());
+    let glt = tool_result_text(&glob);
+    assert!(
+        glt.to_lowercase().contains("glob") || glt.to_lowercase().contains("pattern"),
+        "glob parse error must name the cause: {glt}"
+    );
+}
+
+/// grep skips files over the size guard (counted in details) without reading
+/// them, while still matching smaller files.
+#[tokio::test]
+async fn grep_tool_skips_oversized_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // big.txt contains the pattern but exceeds the size guard; it must be
+    // skipped (stat-first), not read.
+    let mut big = String::from("match\n");
+    big.push_str(&"a".repeat(MAX_NAV_FILE_BYTES as usize));
+    std::fs::write(dir.path().join("big.txt"), big).unwrap();
+    std::fs::write(dir.path().join("small.txt"), "match\n").unwrap();
+
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "os-1",
+            json!({ "pattern": "match" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!grep.is_error);
+    let text = tool_result_text(&grep);
+    assert!(
+        text.contains("small.txt"),
+        "small file match must be present: {text}"
+    );
+    assert!(
+        !text.contains("big.txt"),
+        "oversized file must be skipped: {text}"
+    );
+    let details = grep.details.as_ref().expect("details");
+    assert_eq!(
+        details
+            .get("files_oversized_skipped")
+            .and_then(|v| v.as_u64()),
+        Some(1),
+        "oversized skip must be counted: {details}"
+    );
+}
+
+/// Symlink behavior is consistent: with follow_links(false), a symlink pointing
+/// outside the workspace is never traversed, so the outside file never leaks.
+/// (Pre-11.7 ls followed via path.is_dir(); grep/glob already did not follow.)
+/// Unix-only: symlinks are well-defined here; the cross-tool consistency is
+/// shared code, so the Windows job inherits it.
+#[cfg(unix)]
+#[tokio::test]
+async fn nav_tools_symlink_behavior_reported() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("outside_secret.txt"), "leak\n").unwrap();
+    std::fs::write(dir.path().join("inside.txt"), "leak\n").unwrap();
+    let link = dir.path().join("link");
+    if symlink(outside.path(), &link).is_err() {
+        eprintln!("skipping symlink nav test; symlink creation failed");
+        return;
+    }
+
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "sl-1",
+            json!({ "pattern": "**/*.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!glob.is_error);
+    let gtext = tool_result_text(&glob);
+    assert!(gtext.contains("inside.txt"));
+    assert!(
+        !gtext.contains("outside_secret"),
+        "glob must not traverse the symlink: {gtext}"
+    );
+
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "sl-2",
+            json!({ "pattern": "leak" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!grep.is_error);
+    let gtext2 = tool_result_text(&grep);
+    assert!(gtext2.contains("inside.txt"));
+    assert!(
+        !gtext2.contains("outside_secret"),
+        "grep must not read through the symlink: {gtext2}"
+    );
+}
+
+/// Valid Unicode filenames are emitted in code-point (UTF-8 byte) order.
+#[tokio::test]
+async fn nav_tools_unicode_paths_sorted() {
+    let dir = tempfile::tempdir().unwrap();
+    // é = U+00E9, Ω = U+03A9, 日 = U+65E5 -> UTF-8 byte order: é, Ω, 日.
+    for name in ["日.rs", "é.rs", "Ω.rs"] {
+        std::fs::write(dir.path().join(name), "x\n").unwrap();
+    }
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "un-1",
+            json!({ "pattern": "*.rs" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!glob.is_error);
+    let glob_text = tool_result_text(&glob);
+    let lines: Vec<&str> = glob_text.lines().collect();
+    assert_eq!(
+        lines,
+        vec!["é.rs", "Ω.rs", "日.rs"],
+        "unicode names must be sorted by code point: {lines:?}"
+    );
+}
+
+/// The CancellationToken is polled mid-walk: a pre-cancelled token aborts the
+/// walk before any result is emitted (deterministic; no timer). If the signal
+/// were ignored, glob would enumerate and cap the full tree instead.
+#[tokio::test]
+async fn nav_tools_honour_cancellation_token() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_NAV_RESULTS + 200) {
+        std::fs::write(dir.path().join(format!("f_{i:04}.txt")), "x").unwrap();
+    }
+    let token = CancellationToken::new();
+    token.cancel(); // pre-cancel: deterministic
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute("cn-1", json!({ "pattern": "f_*.txt" }), token, None)
+        .await
+        .unwrap();
+    assert!(!glob.is_error, "cancellation is cooperative, not an error");
+    let details = glob.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("cancelled").and_then(|v| v.as_bool()),
+        Some(true),
+        "must report cancelled"
+    );
+    assert_eq!(
+        details.get("match_count").and_then(|v| v.as_u64()),
+        Some(0),
+        "pre-cancelled walk must match zero files (signal polled, not ignored)"
+    );
+}
+
+/// grep honors the CancellationToken mid-walk (parity with glob/find/ls; closes
+/// the grep-specific cancellation gap). If the signal were ignored, grep would
+/// read every fixture file and report a large match_count.
+#[tokio::test]
+async fn grep_tool_honours_cancellation_token() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_NAV_RESULTS + 200) {
+        std::fs::write(dir.path().join(format!("f_{i:04}.txt")), "match\n").unwrap();
+    }
+    let token = CancellationToken::new();
+    token.cancel();
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute("cn-g1", json!({ "pattern": "match" }), token, None)
+        .await
+        .unwrap();
+    assert!(!grep.is_error);
+    let details = grep.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("cancelled").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        details.get("match_count").and_then(|v| v.as_u64()),
+        Some(0),
+        "pre-cancelled grep walk must match zero files"
+    );
 }

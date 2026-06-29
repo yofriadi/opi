@@ -38,7 +38,10 @@ impl Tool for FindTool {
     fn definition(&self) -> ToolDef {
         ToolDef {
             name: "find".into(),
-            description: "Gitignore-aware file discovery by glob pattern. Optionally scope search to a subdirectory.".into(),
+            description: "Gitignore-aware file discovery by glob pattern. \
+                Optionally scope search to a subdirectory. Results are relative \
+                paths in lexicographic order, capped at a fixed limit."
+                .into(),
             input_schema: self.schema.clone(),
         }
     }
@@ -47,7 +50,7 @@ impl Tool for FindTool {
         &self,
         _call_id: &str,
         arguments: serde_json::Value,
-        _signal: CancellationToken,
+        signal: CancellationToken,
         _on_update: Option<opi_agent::tool::UpdateCallback>,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>> {
         let args: FindArgs = match serde_json::from_value(arguments) {
@@ -104,7 +107,7 @@ impl Tool for FindTool {
 
             // Surface an unreadable search root instead of silently walking it to
             // zero entries. Traversal-level permission errors in nested dirs are
-            // deferred to the nav-consistency task.
+            // swallowed by WalkBuilder (consistent with grep/glob/ls).
             if let Err(e) = std::fs::read_dir(&search_root)
                 && e.kind() == std::io::ErrorKind::PermissionDenied
             {
@@ -113,42 +116,54 @@ impl Tool for FindTool {
                 }));
             }
 
-            let mut matched_paths = Vec::new();
-            let mut builder = ignore::WalkBuilder::new(&search_root);
-            builder
-                .hidden(false)
-                .git_ignore(true)
-                .git_global(false)
-                .git_exclude(false)
-                .add_custom_ignore_filename(".gitignore");
-            let walker = builder.build();
-
+            let mut matched: Vec<String> = Vec::new();
             let mut non_utf8 = 0usize;
+            let mut cancelled = false;
+            let walker = super::nav_walk_builder(&search_root).build();
+
             for entry in walker.flatten() {
-                if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                    let path = entry.path();
-                    let relative = path.strip_prefix(&workspace_root).unwrap_or(path);
-                    if glob_matcher.is_match(relative) || glob_matcher.is_match(path) {
-                        if path.to_str().is_none() {
-                            // Non-UTF-8 entry name (Unix-only in practice): skip
-                            // and report via UnsupportedEncoding, not U+FFFD.
-                            non_utf8 += 1;
-                            continue;
-                        }
-                        matched_paths.push(path.to_string_lossy().into_owned());
-                    }
+                // Honor the cancellation token mid-walk (sync poll; blocking
+                // iterator). Cooperative: return partial results on cancel.
+                if signal.is_cancelled() {
+                    cancelled = true;
+                    break;
                 }
+                if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                    continue;
+                }
+                let path = entry.path();
+                let relative = path.strip_prefix(&workspace_root).unwrap_or(path);
+                // Match against both the relative and absolute forms so scoped
+                // and absolute-style patterns still work; emit the RELATIVE form
+                // for consistency with grep/ls (Phase 11.7).
+                if !(glob_matcher.is_match(relative) || glob_matcher.is_match(path)) {
+                    continue;
+                }
+                let Some(rel_str) = relative.to_str() else {
+                    // Non-UTF-8 entry name (Unix-only in practice): skip and
+                    // report via UnsupportedEncoding, not U+FFFD.
+                    non_utf8 += 1;
+                    continue;
+                };
+                matched.push(rel_str.to_owned());
             }
 
-            let text = matched_paths.join("\n");
+            matched.sort();
+            let total = matched.len();
+            let (text, truncated, omitted_count) =
+                super::cap_nav_results(matched, &format!("no matches for pattern: {pattern}"));
+
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
                 "pattern": pattern,
-                "match_count": matched_paths.len(),
+                "match_count": total,
                 "workspace_relation": workspace_relation,
+                "truncated": truncated,
+                "omitted_count": omitted_count,
+                "cancelled": cancelled,
             });
-
             let mut tool_result = result::ok(vec![OutputContent::Text { text }], details);
+            tool_result.truncated = truncated;
             if non_utf8 > 0 {
                 tool_result.diagnostics.push(
                     FsToolError::UnsupportedEncoding {

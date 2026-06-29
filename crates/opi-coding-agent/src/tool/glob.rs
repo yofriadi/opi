@@ -2,6 +2,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
+use opi_agent::diagnostic::FsToolError;
 use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
@@ -33,7 +34,10 @@ impl Tool for GlobTool {
     fn definition(&self) -> ToolDef {
         ToolDef {
             name: "glob".into(),
-            description: "Gitignore-aware file discovery by glob pattern.".into(),
+            description: "Gitignore-aware file discovery by glob pattern. \
+                Results are relative paths in lexicographic order, capped at a \
+                fixed limit. An opi convenience (not pi-parity)."
+                .into(),
             input_schema: self.schema.clone(),
         }
     }
@@ -42,7 +46,7 @@ impl Tool for GlobTool {
         &self,
         _call_id: &str,
         arguments: serde_json::Value,
-        _signal: CancellationToken,
+        signal: CancellationToken,
         _on_update: Option<opi_agent::tool::UpdateCallback>,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>> {
         let args: GlobArgs = match serde_json::from_value(arguments) {
@@ -67,36 +71,61 @@ impl Tool for GlobTool {
                 }
             };
 
-            let mut matched_paths = Vec::new();
-            let mut builder = ignore::WalkBuilder::new(&workspace_root);
-            builder
-                .hidden(false)
-                .git_ignore(true)
-                .git_global(false)
-                .git_exclude(false)
-                .add_custom_ignore_filename(".gitignore");
-            let walker = builder.build();
+            let mut matched: Vec<String> = Vec::new();
+            let mut non_utf8 = 0usize;
+            let mut cancelled = false;
+            let walker = super::nav_walk_builder(&workspace_root).build();
 
             for entry in walker.flatten() {
-                if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                    let path = entry.path();
-                    let relative = path.strip_prefix(&workspace_root).unwrap_or(path);
-                    if glob_matcher.is_match(relative) || glob_matcher.is_match(path) {
-                        matched_paths.push(path.to_string_lossy().into_owned());
-                    }
+                // Honor the cancellation token mid-walk (sync poll; blocking
+                // iterator). Cooperative: return partial results on cancel.
+                if signal.is_cancelled() {
+                    cancelled = true;
+                    break;
                 }
+                if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                    continue;
+                }
+                let path = entry.path();
+                let relative = path.strip_prefix(&workspace_root).unwrap_or(path);
+                if !(glob_matcher.is_match(relative) || glob_matcher.is_match(path)) {
+                    continue;
+                }
+                let Some(rel_str) = relative.to_str() else {
+                    // Non-UTF-8 entry name (Unix-only in practice): skip and
+                    // report via UnsupportedEncoding, not U+FFFD (parity with find).
+                    non_utf8 += 1;
+                    continue;
+                };
+                matched.push(rel_str.to_owned());
             }
 
-            let text = matched_paths.join("\n");
+            matched.sort();
+            let total = matched.len();
+            let (text, truncated, omitted_count) =
+                super::cap_nav_results(matched, &format!("no matches for pattern: {pattern}"));
+
             // glob walks the workspace root directly, so the relation is always `inside`.
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
                 "pattern": pattern,
-                "match_count": matched_paths.len(),
+                "match_count": total,
                 "workspace_relation": result::WorkspaceRelation::Inside,
+                "truncated": truncated,
+                "omitted_count": omitted_count,
+                "cancelled": cancelled,
             });
-
-            Ok(result::ok(vec![OutputContent::Text { text }], details))
+            let mut tool_result = result::ok(vec![OutputContent::Text { text }], details);
+            tool_result.truncated = truncated;
+            if non_utf8 > 0 {
+                tool_result.diagnostics.push(
+                    FsToolError::UnsupportedEncoding {
+                        omitted_count: non_utf8,
+                    }
+                    .to_diagnostic(),
+                );
+            }
+            Ok(tool_result)
         })
     }
 

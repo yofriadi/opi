@@ -148,6 +148,67 @@ pub fn fs_error_result(error: FsToolError) -> ToolResult {
     result
 }
 
+/// Shared `ignore::WalkBuilder` configuration for the four read-only navigation
+/// tools (grep/find/ls/glob), so ignore-file handling, hidden-file defaults,
+/// and no-follow symlink behavior are identical across them (Phase 11.7).
+///
+/// `hidden(false)` keeps dotfiles visible (matching prior behavior);
+/// `git_ignore(true)` honors nested `.gitignore` files (ls previously
+/// hand-rolled a root-only matcher); `follow_links` stays at the builder
+/// default of `false` so symlinks are reported as entries but never traversed,
+/// uniformly across all four tools (the Phase 11.7 symlink-consistency fix).
+pub(crate) fn nav_walk_builder(root: &std::path::Path) -> ignore::WalkBuilder {
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .add_custom_ignore_filename(".gitignore");
+    builder
+}
+
+/// Default cap on the number of results grep/find/glob return inline. Results
+/// beyond this are dropped with `truncated` set and an `omitted_count` in
+/// details. ls keeps its own `max_entries` override (`ls::DEFAULT_MAX_ENTRIES`);
+/// the values match but the policies differ, so the constants are separate.
+/// Exposed as `pub` so behavioral tests can build fixtures sized to the cap.
+pub const MAX_NAV_RESULTS: usize = 200;
+
+/// Upper bound on the size of a single file grep will read. Files whose
+/// metadata length exceeds this are skipped (counted in
+/// `details.files_oversized_skipped`) so one giant file cannot dominate memory
+/// or time. find/glob/ls do not read file content and are bounded by the
+/// result-count cap instead. Exposed as `pub` for behavioral tests.
+pub const MAX_NAV_FILE_BYTES: u64 = 1 << 20; // 1 MiB
+
+/// Join already-sorted nav-tool result lines, applying the [`MAX_NAV_RESULTS`]
+/// cap. Returns `(text, truncated, omitted_count)`. When there are no lines,
+/// `no_match_message` is returned instead, so a zero-match query is never the
+/// empty string (Phase 11.7). Callers sort before invoking so the cap preserves
+/// the lexicographic prefix.
+pub(crate) fn cap_nav_results(
+    mut items: Vec<String>,
+    no_match_message: &str,
+) -> (String, bool, usize) {
+    let total = items.len();
+    let truncated = total > MAX_NAV_RESULTS;
+    let omitted_count = if truncated {
+        total - MAX_NAV_RESULTS
+    } else {
+        0
+    };
+    if truncated {
+        items.truncate(MAX_NAV_RESULTS);
+    }
+    let text = if items.is_empty() {
+        no_match_message.to_string()
+    } else {
+        items.join("\n")
+    };
+    (text, truncated, omitted_count)
+}
+
 fn expand_user_path(user_path: &str) -> PathBuf {
     let path = user_path.strip_prefix('@').unwrap_or(user_path);
     if path == "~" {

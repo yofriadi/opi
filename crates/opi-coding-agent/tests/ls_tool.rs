@@ -216,35 +216,88 @@ async fn ls_tool_truncates_at_max_entries() {
     );
 }
 
-// --- Bounded output: max_depth ---
+// --- Bounded output: max_depth (Phase 11.7: pins the WalkBuilder max_depth+1
+//     mapping after ls switched off hand-rolled recursion) ---
 
 #[tokio::test]
 async fn ls_tool_respects_max_depth() {
     let dir = tempfile::tempdir().unwrap();
+    // Depths relative to workspace root: a/ =1, a/a1.txt =2, a/b/b1.txt =3,
+    // a/b/c/c1.txt =4. ls max_depth=N must include entries down to depth N+1
+    // (WalkBuilder depth is inclusive with root=0, so ls uses max_depth(N+1)
+    // and skips the depth-0 root).
     fs::create_dir_all(dir.path().join("a/b/c")).unwrap();
     fs::write(dir.path().join("a/a1.txt"), "").unwrap();
     fs::write(dir.path().join("a/b/b1.txt"), "").unwrap();
     fs::write(dir.path().join("a/b/c/c1.txt"), "").unwrap();
-
     let tool = LsTool::new(dir.path().to_path_buf());
-    let result = tool
-        .execute(
-            "c8",
-            json!({ "path": ".", "max_depth": 1 }),
-            CancellationToken::new(),
-            None,
-        )
-        .await
-        .unwrap();
 
-    assert!(!result.is_error);
-    let text = tool_result_text(&result);
-    // With max_depth=1, should only list immediate children (a/ and its direct entries)
-    // but NOT recurse into a/b/
-    assert!(
-        text.contains("a1.txt") || text.contains("a"),
-        "should contain entries at depth 1"
+    // max_depth=0: only immediate children of root (a/), nothing deeper.
+    let t0 = tool_result_text(
+        &tool
+            .execute(
+                "d0",
+                json!({ "path": ".", "max_depth": 0 }),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap(),
     );
+    assert!(t0.contains("a"), "depth 0 lists immediate child a/: {t0}");
+    assert!(!t0.contains("a1.txt"), "depth 0 must not recurse: {t0}");
+    assert!(!t0.contains("c1.txt"));
+
+    // max_depth=1: a/, a/a1.txt, a/b/ — but not b1.txt or c1.txt.
+    let t1 = tool_result_text(
+        &tool
+            .execute(
+                "d1",
+                json!({ "path": ".", "max_depth": 1 }),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    assert!(t1.contains("a1.txt"), "depth 1 includes a/a1.txt: {t1}");
+    assert!(
+        !t1.contains("b1.txt"),
+        "depth 1 must exclude a/b/b1.txt: {t1}"
+    );
+    assert!(!t1.contains("c1.txt"));
+
+    // max_depth=2: + a/b/b1.txt, a/b/c/ — but not c1.txt.
+    let t2 = tool_result_text(
+        &tool
+            .execute(
+                "d2",
+                json!({ "path": ".", "max_depth": 2 }),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    assert!(t2.contains("b1.txt"), "depth 2 includes a/b/b1.txt: {t2}");
+    assert!(
+        !t2.contains("c1.txt"),
+        "depth 2 must exclude a/b/c/c1.txt: {t2}"
+    );
+
+    // max_depth=3: + a/b/c/c1.txt.
+    let t3 = tool_result_text(
+        &tool
+            .execute(
+                "d3",
+                json!({ "path": ".", "max_depth": 3 }),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap(),
+    );
+    assert!(t3.contains("c1.txt"), "depth 3 includes a/b/c/c1.txt: {t3}");
 }
 
 // --- Missing arguments ---
@@ -564,5 +617,133 @@ async fn ls_tool_reports_unsupported_encoding_for_non_utf8_names() {
     assert!(
         !text.contains('\u{FFFD}'),
         "no lossy U+FFFD in output: {text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11.7: read-only navigation tools consistency (ls variants)
+// ---------------------------------------------------------------------------
+
+/// ls honors a NESTED `.gitignore` (the only rule for `secret.txt` lives in
+/// `sub/`), matching grep/find/glob. Pre-11.7 ls hand-rolled a root-only
+/// `GitignoreBuilder` and leaked such files — this fixture catches that bug.
+#[tokio::test]
+async fn nested_ignore_consistent_across_nav_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join(".gitignore"), "unrelated_pattern_xyz\n").unwrap();
+    fs::create_dir_all(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("sub/.gitignore"), "secret.txt\n").unwrap();
+    fs::write(dir.path().join("sub/secret.txt"), "x").unwrap();
+    fs::write(dir.path().join("sub/keep.txt"), "x").unwrap();
+
+    let ls = LsTool::new(dir.path().to_path_buf());
+    // max_depth must recurse into sub/ so the nested .gitignore is exercised
+    // (ls defaults to a flat listing).
+    let result = ls
+        .execute(
+            "ni-l1",
+            json!({ "path": ".", "max_depth": 3 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let text = tool_result_text(&result);
+    assert!(!result.is_error, "{}", text);
+    assert!(text.contains("keep.txt"));
+    assert!(
+        !text.contains("secret.txt"),
+        "ls must honor nested .gitignore (was hand-rolled root-only): {text}"
+    );
+}
+
+/// ls treats symlinks consistently with the other nav tools: a symlink pointing
+/// outside the workspace is never traversed, so the outside file never leaks.
+/// Pre-11.7 ls followed symlinks via path.is_dir() and diverged. Unix-only.
+#[cfg(unix)]
+#[tokio::test]
+async fn nav_tools_symlink_behavior_reported() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("outside_secret.txt"), "x").unwrap();
+    fs::write(dir.path().join("inside.txt"), "x").unwrap();
+    let link = dir.path().join("link");
+    if symlink(outside.path(), &link).is_err() {
+        eprintln!("skipping ls symlink test; symlink creation failed");
+        return;
+    }
+
+    let ls = LsTool::new(dir.path().to_path_buf());
+    let result = ls
+        .execute(
+            "sl-l1",
+            json!({ "path": "." }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let text = tool_result_text(&result);
+    assert!(!result.is_error, "{}", text);
+    assert!(text.contains("inside.txt"));
+    assert!(
+        !text.contains("outside_secret"),
+        "ls must not traverse the symlink (was diverging via path.is_dir): {text}"
+    );
+}
+
+/// A zero-entry listing returns a clear non-empty message, never "".
+#[tokio::test]
+async fn ls_tool_empty_directory_returns_message() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("empty")).unwrap();
+
+    let ls = LsTool::new(dir.path().to_path_buf());
+    let result = ls
+        .execute(
+            "em-l1",
+            json!({ "path": "empty" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let text = tool_result_text(&result);
+    assert!(!result.is_error);
+    assert!(
+        !text.is_empty(),
+        "empty dir must return a non-empty message: {text:?}"
+    );
+    assert!(
+        text.to_lowercase().contains("no entries"),
+        "empty dir message: {text}"
+    );
+}
+
+/// ls honors the CancellationToken mid-walk (pre-cancelled -> zero entries).
+#[tokio::test]
+async fn nav_tools_honour_cancellation_token() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..50 {
+        fs::write(dir.path().join(format!("f_{i:02}.txt")), "x").unwrap();
+    }
+    let token = CancellationToken::new();
+    token.cancel();
+    let ls = LsTool::new(dir.path().to_path_buf());
+    let result = ls
+        .execute("cn-l1", json!({ "path": "." }), token, None)
+        .await
+        .unwrap();
+    assert!(!result.is_error);
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("cancelled").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        details.get("total_entries").and_then(|v| v.as_u64()),
+        Some(0),
+        "pre-cancelled walk must yield zero entries"
     );
 }

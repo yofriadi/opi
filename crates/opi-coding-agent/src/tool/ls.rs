@@ -43,7 +43,11 @@ impl Tool for LsTool {
     fn definition(&self) -> ToolDef {
         ToolDef {
             name: "ls".into(),
-            description: "List directory contents with bounded output. Entries are sorted deterministically. Directories are indicated with a trailing /.".into(),
+            description: "List directory contents with bounded output. Entries \
+                are sorted deterministically. Directories are indicated with a \
+                trailing /. Honors nested .gitignore files like the other nav \
+                tools."
+                .into(),
             input_schema: self.schema.clone(),
         }
     }
@@ -52,7 +56,7 @@ impl Tool for LsTool {
         &self,
         _call_id: &str,
         arguments: serde_json::Value,
-        _signal: CancellationToken,
+        signal: CancellationToken,
         _on_update: Option<opi_agent::tool::UpdateCallback>,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>> {
         let args: LsArgs = match serde_json::from_value(arguments) {
@@ -100,8 +104,9 @@ impl Tool for LsTool {
             }
 
             // Surface an unreadable target directory instead of silently listing
-            // it as empty. Nested-dir permission errors during recursion are
-            // deferred to the nav-consistency task.
+            // it as empty (WalkBuilder.flatten would otherwise swallow the
+            // target-level EACCES). Nested-dir permission errors during the
+            // walk are swallowed by flatten(), consistent with grep/find/glob.
             if let Err(e) = std::fs::read_dir(&target)
                 && e.kind() == std::io::ErrorKind::PermissionDenied
             {
@@ -110,22 +115,59 @@ impl Tool for LsTool {
                 }));
             }
 
-            // Read and sort directory entries
+            // Walk via the shared ignore configuration so ls honors nested
+            // .gitignore files and treats symlinks identically to grep/find/glob
+            // (no follow). ignore::WalkBuilder depth is INCLUSIVE with the walk
+            // root at depth 0; to reproduce the prior collect_entries(current=0,
+            // max_depth) semantics — list the target's children and recurse
+            // `max_depth` levels below them — cap the walker at `max_depth + 1`
+            // and skip the root entry itself (depth 0).
+            let walker = super::nav_walk_builder(&target)
+                .max_depth(Some(max_depth + 1))
+                .build();
+
             let mut entries: Vec<Entry> = Vec::new();
             let mut non_utf8 = 0usize;
-            collect_entries(
-                &workspace_root,
-                &target,
-                &mut entries,
-                &mut non_utf8,
-                0,
-                max_depth,
-            );
+            let mut cancelled = false;
+            for entry in walker.flatten() {
+                // Honor the cancellation token mid-walk (sync poll; blocking
+                // iterator). Cooperative: return partial results on cancel.
+                if signal.is_cancelled() {
+                    cancelled = true;
+                    break;
+                }
+                if entry.depth() == 0 {
+                    // The target directory itself; skip (we list its contents).
+                    continue;
+                }
+                let path = entry.path();
+                let relative_os = path.strip_prefix(&workspace_root).unwrap_or(path);
+                let Some(relative) = relative_os.to_str() else {
+                    // Non-UTF-8 entry name (Unix-only in practice): skip and
+                    // report via an UnsupportedEncoding diagnostic instead of
+                    // silent U+FFFD.
+                    non_utf8 += 1;
+                    continue;
+                };
+                // Use the entry's file_type (does NOT follow symlinks) so a
+                // symlink-to-dir is not marked as a directory and not recursed
+                // — consistent with grep/find/glob (Phase 11.7).
+                let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+                entries.push(Entry {
+                    relative_path: relative.to_owned(),
+                    is_dir,
+                });
+            }
 
             entries.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
 
             let total_entries = entries.len();
             let truncated = total_entries > max_entries;
+            let omitted = if truncated {
+                total_entries - max_entries
+            } else {
+                0
+            };
             entries.truncate(max_entries);
 
             let mut lines: Vec<String> = entries
@@ -140,13 +182,17 @@ impl Tool for LsTool {
                 .collect();
 
             if truncated {
-                lines.push(format!(
-                    "... (truncated, {} entries omitted)",
-                    total_entries - max_entries
-                ));
+                lines.push(format!("... (truncated, {} entries omitted)", omitted));
             }
 
-            let text = lines.join("\n");
+            let text = if lines.is_empty() {
+                // Non-empty no-entries message (Phase 11.7): never the empty
+                // string for a zero-match listing.
+                "no entries".to_string()
+            } else {
+                lines.join("\n")
+            };
+
             let details = serde_json::json!({
                 "workspace_root": workspace_root.to_string_lossy(),
                 "path": path_arg,
@@ -154,6 +200,7 @@ impl Tool for LsTool {
                 "total_entries": total_entries,
                 "truncated": truncated,
                 "workspace_relation": workspace_relation,
+                "cancelled": cancelled,
             });
 
             let mut tool_result = result::ok(vec![OutputContent::Text { text }], details);
@@ -178,67 +225,4 @@ impl Tool for LsTool {
 struct Entry {
     relative_path: String,
     is_dir: bool,
-}
-
-fn collect_entries(
-    workspace_root: &std::path::Path,
-    dir: &std::path::Path,
-    entries: &mut Vec<Entry>,
-    non_utf8: &mut usize,
-    current_depth: usize,
-    max_depth: usize,
-) {
-    let read_dir = match std::fs::read_dir(dir) {
-        Ok(rd) => rd,
-        Err(_) => return,
-    };
-
-    for entry in read_dir.flatten() {
-        let path = entry.path();
-        let relative_os = path.strip_prefix(workspace_root).unwrap_or(&path);
-        let Some(relative) = relative_os.to_str() else {
-            // Non-UTF-8 entry name (Unix-only in practice): skip and report via
-            // an UnsupportedEncoding diagnostic instead of silent U+FFFD.
-            *non_utf8 += 1;
-            continue;
-        };
-        let is_dir = path.is_dir();
-
-        // Skip gitignored entries
-        if is_gitignored(workspace_root, &path) {
-            continue;
-        }
-
-        entries.push(Entry {
-            relative_path: relative.to_owned(),
-            is_dir,
-        });
-
-        if is_dir && current_depth < max_depth {
-            collect_entries(
-                workspace_root,
-                &path,
-                entries,
-                non_utf8,
-                current_depth + 1,
-                max_depth,
-            );
-        }
-    }
-}
-
-fn is_gitignored(workspace_root: &std::path::Path, path: &std::path::Path) -> bool {
-    let mut builder = ignore::gitignore::GitignoreBuilder::new(workspace_root);
-    // Load .gitignore if present
-    let gitignore_path = workspace_root.join(".gitignore");
-    if gitignore_path.exists() {
-        let _ = builder.add(&gitignore_path);
-    }
-    match builder.build() {
-        Ok(gi) => {
-            let relative = path.strip_prefix(workspace_root).unwrap_or(path);
-            gi.matched(relative, path.is_dir()).is_ignore()
-        }
-        Err(_) => false,
-    }
 }
