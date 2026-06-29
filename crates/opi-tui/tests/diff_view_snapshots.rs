@@ -134,3 +134,23 @@ fn diff_view_content_to_empty_80x24() {
     let dv = DiffView::new("deleted_file.rs", "fn main() {}\n", "");
     insta::assert_snapshot!("diff_view_content_to_empty_80x24", render(dv, 80, 24));
 }
+
+// ---------------------------------------------------------------------------
+// DiffView: edit diff-preview metadata (Phase 11.5)
+// ---------------------------------------------------------------------------
+
+/// Phase 11.5: the ratatui DiffView surface that renders changed-file edits.
+/// The edit tool emits before/after string previews and interactive.rs feeds
+/// them to DiffView; this snapshots the rendered surface for a representative
+/// single-line edit so the changed-file rendering path is covered and reviewed
+/// (not auto-accepted).
+#[test]
+fn phase11_edit_diff_preview_metadata_snapshot() {
+    let old = "fn greet() {\n    println!(\"hi\");\n}\n";
+    let new = "fn greet() {\n    println!(\"hello\");\n}\n";
+    let dv = DiffView::new("src/greet.rs", old, new);
+    insta::assert_snapshot!(
+        "phase11_edit_diff_preview_metadata_snapshot",
+        render(dv, 80, 24)
+    );
+}

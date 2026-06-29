@@ -651,6 +651,504 @@ async fn edit_tool_safety_context_in_details() {
 }
 
 // ---------------------------------------------------------------------------
+// Edit tool hardening (Phase 11.5)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn edit_crlf_preservation() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("crlf.txt");
+    std::fs::write(&file_path, b"alpha\r\nbeta\r\ngamma\r\n").unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "ecrlf",
+            json!({ "path": "crlf.txt", "old_string": "beta", "new_string": "BETA" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "edit: {}", tool_result_text(&result));
+
+    // Raw bytes: only "beta"->"BETA" changes; every CRLF is preserved exactly.
+    let after = std::fs::read(&file_path).unwrap();
+    assert_eq!(after, b"alpha\r\nBETA\r\ngamma\r\n");
+}
+
+#[tokio::test]
+async fn edit_final_newline_preservation() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // File WITH a trailing newline keeps it.
+    let with_nl = dir.path().join("with_nl.txt");
+    std::fs::write(&with_nl, "foo bar\n").unwrap();
+    let r = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "enl1",
+            json!({ "path": "with_nl.txt", "old_string": "foo", "new_string": "FOO" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error, "{}", tool_result_text(&r));
+    assert_eq!(std::fs::read(&with_nl).unwrap(), b"FOO bar\n");
+
+    // File WITHOUT a trailing newline stays without one.
+    let no_nl = dir.path().join("no_nl.txt");
+    std::fs::write(&no_nl, "foo bar").unwrap();
+    let r = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "enl2",
+            json!({ "path": "no_nl.txt", "old_string": "foo", "new_string": "FOO" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error, "{}", tool_result_text(&r));
+    assert_eq!(std::fs::read(&no_nl).unwrap(), b"FOO bar");
+}
+
+#[tokio::test]
+async fn edit_not_found_diagnostic_richness() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("rich.txt");
+    std::fs::write(&file_path, "line one\nline two\n").unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "enf",
+            json!({ "path": "rich.txt", "old_string": "absent token", "new_string": "x" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "should be error when old_string not found");
+    assert!(
+        result.details.is_none(),
+        "edit-semantic errors omit details (cause is in diagnostics.context)"
+    );
+    let text = tool_result_text(&result);
+    assert!(
+        text.contains("rich.txt"),
+        "message must name the file: {text}"
+    );
+    assert!(
+        text.contains("absent token"),
+        "message must name the attempted old_string: {text}"
+    );
+    let diag = result.diagnostics.first().expect("diagnostic present");
+    assert_eq!(diag.code, code::CODE_TOOL_EXECUTION_FAILED);
+    let ctx = &diag.context;
+    assert_eq!(ctx["occurrences"], 0);
+    assert_eq!(ctx["old_string"], "absent token");
+    assert_eq!(ctx["old_string_len"], 12);
+    assert_eq!(ctx["file_bytes"], 18); // "line one\nline two\n"
+    assert_eq!(ctx["line_count"], 2);
+}
+
+#[tokio::test]
+async fn edit_multiple_match_behavior() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("multi.txt");
+    std::fs::write(&file_path, "dup\ndup\ndup\n").unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "emulti",
+            json!({ "path": "multi.txt", "old_string": "dup", "new_string": "X" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "non-unique old_string must be refused");
+    assert!(
+        result.details.is_none(),
+        "edit-semantic errors omit details"
+    );
+    let diag = result.diagnostics.first().expect("diagnostic present");
+    assert_eq!(diag.code, code::CODE_TOOL_EXECUTION_FAILED);
+    let ctx = &diag.context;
+    assert_eq!(ctx["occurrences"], 3);
+    let offsets = ctx["sample_offsets"]
+        .as_array()
+        .expect("sample_offsets array");
+    assert!(offsets.len() <= 3, "sample_offsets capped: {offsets:?}");
+    let text = tool_result_text(&result);
+    assert!(
+        text.contains("not unique") && text.contains("3 occurrences"),
+        "msg: {text}"
+    );
+    // File untouched on refusal.
+    assert_eq!(std::fs::read(&file_path).unwrap(), b"dup\ndup\ndup\n");
+}
+
+#[tokio::test]
+async fn edit_multiple_match_caps_sample_offsets() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("many.txt"), "zzzzzzzzzz").unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "ecap",
+            json!({ "path": "many.txt", "old_string": "z", "new_string": "q" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    let ctx = &result.diagnostics.first().expect("diagnostic").context;
+    assert_eq!(ctx["occurrences"], 10);
+    let offsets = ctx["sample_offsets"].as_array().expect("offsets");
+    assert_eq!(offsets.len(), 3, "sample_offsets capped at 3: {offsets:?}");
+}
+
+#[tokio::test]
+async fn edit_no_fuzzy_near_miss_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("near.txt");
+    std::fs::write(&file_path, "hello world\n").unwrap();
+    let tool = EditTool::new(dir.path().to_path_buf());
+
+    // (a) single-character substitution of a present string.
+    let r = tool
+        .execute(
+            "e1",
+            json!({ "path": "near.txt", "old_string": "hallo world", "new_string": "x" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error, "single-char near-miss must fail (no fuzzy)");
+
+    // (b) trailing-whitespace difference.
+    let r = tool
+        .execute(
+            "e2",
+            json!({ "path": "near.txt", "old_string": "hello world ", "new_string": "x" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error, "whitespace near-miss must fail (no fuzzy)");
+
+    // (c) CRLF-vs-LF difference: file uses LF after "world", old_string claims CRLF.
+    let r = tool
+        .execute(
+            "e3",
+            json!({ "path": "near.txt", "old_string": "hello world\r\n", "new_string": "x" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error, "line-ending near-miss must fail (no fuzzy)");
+}
+
+#[tokio::test]
+async fn edit_diff_preview_metadata_consistent() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("preview.txt"), "fn main() { hello }").unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "eprev",
+            json!({ "path": "preview.txt", "old_string": "hello", "new_string": "world" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+
+    let details = result.details.as_ref().expect("edit details");
+    assert_eq!(details["action"], "edited");
+    assert_eq!(details["occurrences"], 1);
+    // before/after must be STRING-valued: interactive.rs reads them via
+    // as_str() to render the ratatui DiffView.
+    assert!(details["before"].is_string(), "before must be string-typed");
+    assert!(details["after"].is_string(), "after must be string-typed");
+    assert_eq!(details["before"], "fn main() { hello }");
+    assert_eq!(details["after"], "fn main() { world }");
+    for key in [
+        "workspace_root",
+        "path",
+        "resolved_path",
+        "workspace_relation",
+    ] {
+        assert!(details.get(key).is_some(), "edit details missing {key}");
+    }
+    // Small file: the truncation flags must be ABSENT (only set when a preview
+    // is capped), pinning the conditional so a small-file edit never reports
+    // spurious truncation.
+    assert!(
+        details.get("before_truncated").is_none(),
+        "before_truncated must be absent for a small file"
+    );
+    assert!(
+        details.get("after_truncated").is_none(),
+        "after_truncated must be absent for a small file"
+    );
+}
+
+#[tokio::test]
+async fn edit_rejects_empty_old_string() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("empty_old.txt");
+    std::fs::write(&file_path, "something").unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "ee",
+            json!({ "path": "empty_old.txt", "old_string": "", "new_string": "x" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    let ctx = &result.diagnostics.first().expect("diagnostic").context;
+    assert_eq!(ctx["old_string_len"], 0);
+    let text = tool_result_text(&result);
+    assert!(text.contains("must not be empty"), "msg: {text}");
+    // No file side effect on a rejected edit.
+    assert_eq!(std::fs::read(&file_path).unwrap(), b"something");
+}
+
+#[tokio::test]
+async fn edit_rejects_noop_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("noop.txt"), "abc").unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "en",
+            json!({ "path": "noop.txt", "old_string": "abc", "new_string": "abc" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    let text = tool_result_text(&result);
+    assert!(text.contains("no-op"), "msg: {text}");
+}
+
+#[tokio::test]
+async fn edit_rejects_oversized_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("huge.txt");
+    let big = "a".repeat(1024 * 1024 + 1);
+    std::fs::write(&file_path, &big).unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "eo",
+            json!({ "path": "huge.txt", "old_string": "a", "new_string": "b" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    let ctx = &result.diagnostics.first().expect("diagnostic").context;
+    let file_bytes = ctx["file_bytes"].as_u64().expect("file_bytes");
+    let limit_bytes = ctx["limit_bytes"].as_u64().expect("limit_bytes");
+    assert_eq!(limit_bytes, 1024 * 1024);
+    assert!(file_bytes > limit_bytes);
+    let text = tool_result_text(&result);
+    assert!(text.contains("exceeds"), "msg: {text}");
+    // File untouched: the guard fires before any write.
+    assert_eq!(std::fs::read(&file_path).unwrap(), big.as_bytes());
+}
+
+#[tokio::test]
+async fn edit_accepts_file_at_size_limit() {
+    // Boundary: a file of EXACTLY MAX_EDIT_FILE_BYTES (1 MiB) is accepted --
+    // the guard is a strict `>`, so at-limit must pass. Pins `>` vs `>=`.
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("atlimit.txt");
+    let body = "a".repeat(1024 * 1024 - "UNIQUE".len());
+    let content = format!("{body}UNIQUE");
+    assert_eq!(content.len(), 1024 * 1024, "fixture must be exactly 1 MiB");
+    std::fs::write(&file_path, &content).unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "elimit",
+            json!({ "path": "atlimit.txt", "old_string": "UNIQUE", "new_string": "DONE" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !result.is_error,
+        "at-limit file must be editable: {}",
+        tool_result_text(&result)
+    );
+    // The edit applied.
+    assert!(
+        std::fs::read_to_string(&file_path)
+            .unwrap()
+            .ends_with("DONE")
+    );
+}
+
+#[tokio::test]
+async fn edit_on_directory_returns_not_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("adir")).unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "edir",
+            json!({ "path": "adir", "old_string": "x", "new_string": "y" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    let diag = result.diagnostics.first().expect("diagnostic");
+    assert_eq!(diag.code, code::CODE_TOOL_NOT_A_FILE);
+}
+
+#[tokio::test]
+async fn edit_preserves_crlf_when_old_string_spans_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("span.txt");
+    std::fs::write(&file_path, b"x\r\ny\r\n").unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "espan",
+            json!({ "path": "span.txt", "old_string": "x\r\n", "new_string": "Z\r\n" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    assert_eq!(std::fs::read(&file_path).unwrap(), b"Z\r\ny\r\n");
+}
+
+#[tokio::test]
+async fn edit_preserves_leading_bom() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("bom.txt");
+    let bom = b"\xEF\xBB\xBF";
+    let mut content = bom.to_vec();
+    content.extend_from_slice(b"hello world");
+    std::fs::write(&file_path, &content).unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "ebom",
+            json!({ "path": "bom.txt", "old_string": "hello", "new_string": "HELLO" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    let after = std::fs::read(&file_path).unwrap();
+    assert_eq!(&after[0..3], bom, "BOM bytes preserved at file start");
+    assert_eq!(&after[3..], b"HELLO world");
+}
+
+#[tokio::test]
+async fn edit_truncates_before_after_for_large_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_path = dir.path().join("large_preview.txt");
+    // 80 KiB filler + a unique marker: under the 1 MiB edit limit, over the
+    // 64 KiB preview cap, with exactly one match so the edit succeeds.
+    let filler = "x".repeat(80 * 1024);
+    let content = format!("{filler}UNIQUE\n");
+    std::fs::write(&file_path, &content).unwrap();
+
+    let result = EditTool::new(dir.path().to_path_buf())
+        .execute(
+            "etrunc",
+            json!({ "path": "large_preview.txt", "old_string": "UNIQUE", "new_string": "UNIQUE2" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(details["before_truncated"], true);
+    assert_eq!(details["after_truncated"], true);
+    let before = details["before"].as_str().expect("before string");
+    let after = details["after"].as_str().expect("after string");
+    assert!(
+        before.len() <= 64 * 1024,
+        "before preview bounded: {}",
+        before.len()
+    );
+    assert!(
+        after.len() <= 64 * 1024,
+        "after preview bounded: {}",
+        after.len()
+    );
+}
+
+/// Phase 11.5 structural guard: EditTool applies edits via a sibling temp file
+/// and a rename into place (atomic, no partial writes), matching the 11.4 write
+/// standard, never a direct overwrite of the destination.
+#[test]
+fn edit_uses_temp_and_rename_guard() {
+    let root = phase11_workspace_root();
+    let src = std::fs::read_to_string(root.join("crates/opi-coding-agent/src/tool/edit.rs"))
+        .expect("read edit.rs");
+    let s = phase11_strip_comments(&src);
+    assert!(
+        s.contains("rename"),
+        "edit.rs must rename a sibling temp file into place (atomic write)"
+    );
+    assert!(
+        s.contains(".opi-edit-tmp"),
+        "edit.rs must use the sibling temp marker (.opi-edit-tmp)"
+    );
+    assert!(
+        !s.contains("fs::write(&file_path"),
+        "edit.rs must not write the destination directly; temp+rename"
+    );
+}
+
+/// Phase 11.5 no-fuzzy pin: edit must use exact matching only. The behavioral
+/// near-miss tests prove a near-miss fails; this guard is a regression lock
+/// against future re-introduction of levenshtein/edit_distance/fuzzy logic.
+#[test]
+fn edit_no_fuzzy_symbols_guard() {
+    let root = phase11_workspace_root();
+    let src = std::fs::read_to_string(root.join("crates/opi-coding-agent/src/tool/edit.rs"))
+        .expect("read edit.rs");
+    let s = phase11_strip_comments(&src);
+    for needle in ["levenshtein", "edit_distance", "fuzzy"] {
+        assert!(
+            !s.to_lowercase().contains(needle),
+            "edit.rs must not use fuzzy-matching symbol '{needle}'"
+        );
+    }
+    // Positive control: exact (non-fuzzy) match primitives are present.
+    assert!(
+        s.contains("matches(") || s.contains("match_indices("),
+        "edit.rs uses exact match primitives"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Uniform tool-result contract (Phase 11.1)
 // ---------------------------------------------------------------------------
 

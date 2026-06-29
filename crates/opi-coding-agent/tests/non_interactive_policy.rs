@@ -248,3 +248,28 @@ fn write_tool_denied_before_execution_without_allow_mutating() {
             .contains("mutating tool 'write' requires --allow-mutating")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 11.5: edit is a mutating tool denied before execution without opt-in.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn edit_tool_denied_before_execution_without_allow_mutating() {
+    // Policy-resolution level: requesting edit without --allow-mutating in
+    // non-interactive mode is a policy error before any tool body runs. (The
+    // runner-level advertisement that edit is an unknown tool is covered by
+    // policy_edit_blocked_by_default above; this binds the resolution-time
+    // deny so the two invariants are not conflated.)
+    let error = ToolRuntimeConfig::resolve(
+        RunMode::NonInteractive,
+        false,
+        ToolSelection::Allowlist(vec!["edit".into()]),
+    )
+    .expect_err("edit should require opt-in");
+
+    assert!(
+        error
+            .to_string()
+            .contains("mutating tool 'edit' requires --allow-mutating")
+    );
+}

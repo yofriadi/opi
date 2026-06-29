@@ -2519,6 +2519,96 @@ async fn write_tool_result_carries_write_audit_details() {
     let _ = std::fs::remove_file(workspace.path().join("out.txt"));
 }
 
+/// Phase 11.5: edit diff-preview details cross the RPC JSONL output boundary.
+/// The ToolExecutionEnd event carries the tool-owned `details` object verbatim,
+/// with before/after as STRING values (the contract interactive.rs depends on)
+/// plus action/occurrences metadata.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn edit_tool_result_carries_diff_preview_details() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    // edit reads the file, so it must pre-exist in the workspace.
+    std::fs::write(workspace.path().join("src.txt"), "hello world").unwrap();
+
+    let provider = MockProvider::new(
+        "mock",
+        vec![
+            opi_ai::test_support::tool_call_response(
+                "tc-edit",
+                "edit",
+                r#"{"path":"src.txt","old_string":"hello","new_string":"HI"}"#,
+            ),
+            opi_ai::test_support::text_response("done"),
+        ],
+    );
+
+    let runner = RpcRunner::new(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        true, // allow_mutating: edit must be executable
+        ToolSelection::Allowlist(vec!["edit".into()]),
+        None,
+        Vec::new(),
+    )
+    .expect("rpc runner with edit tool");
+
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut runner = runner;
+        runner.run_with_channels(command_rx, output_tx).await
+    });
+
+    let _ready = recv_rpc_line(&mut output_rx).await; // rpc_ready
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("e-rpc".into()),
+            message: "edit src.txt".into(),
+        })
+        .unwrap();
+    let accepted = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(accepted["success"], true);
+
+    // Drain events until the edit ToolExecutionEnd is observed (bounded).
+    let mut edit_end: Option<serde_json::Value> = None;
+    for _ in 0..64 {
+        let line = recv_rpc_line(&mut output_rx).await;
+        if line["type"] == "ToolExecutionEnd" && line["tool_name"] == "edit" {
+            edit_end = Some(line);
+            break;
+        }
+        if line["type"] == "AgentEnd" {
+            break;
+        }
+    }
+    let end = edit_end.expect("expected an edit ToolExecutionEnd event");
+    assert_eq!(end["is_error"], false);
+    assert_eq!(end["truncated"], false);
+    let details = end.get("details").expect("details present");
+    assert!(
+        details.is_object(),
+        "details must be an object, got: {details}"
+    );
+    assert_eq!(details["action"], "edited");
+    assert_eq!(details["occurrences"], 1);
+    assert!(
+        details["before"].is_string(),
+        "before must be string-typed at the RPC boundary"
+    );
+    assert!(
+        details["after"].is_string(),
+        "after must be string-typed at the RPC boundary"
+    );
+    assert_eq!(details["before"], "hello world");
+    assert_eq!(details["after"], "HI world");
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _ = recv_response(&mut output_rx, "quit").await;
+    let _ = task.await;
+    let _ = std::fs::remove_file(workspace.path().join("src.txt"));
+}
+
 async fn recv_rpc_line(
     output_rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
 ) -> serde_json::Value {
