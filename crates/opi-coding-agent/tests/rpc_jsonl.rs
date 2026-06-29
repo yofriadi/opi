@@ -2609,6 +2609,107 @@ async fn edit_tool_result_carries_diff_preview_details() {
     let _ = std::fs::remove_file(workspace.path().join("src.txt"));
 }
 
+/// Phase 11.6: bash truncation details + the top-level `truncated` flag cross
+/// the RPC JSONL output boundary. bash is the first built-in tool whose
+/// `ToolResult.truncated` can flip true, and `full_output` is a new details
+/// key; this pins that both survive the agent_loop generic lift into
+/// ToolExecutionEnd (parity with the 11.4 write / 11.5 edit visibility tests).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bash_tool_result_carries_truncation_details() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let cap = opi_coding_agent::tool::MAX_BASH_OUTPUT_BYTES;
+    let n = (cap / 13) + 2000;
+    let command = if cfg!(windows) {
+        format!("FOR /L %i IN (1,1,{n}) DO @echo AAAAAAAAAAAA")
+    } else {
+        format!("yes AAAAAAAAAAAA | head -n {n}")
+    };
+    let args = serde_json::to_string(&serde_json::json!({ "command": command }))
+        .expect("encode bash args");
+
+    let provider = MockProvider::new(
+        "mock",
+        vec![
+            opi_ai::test_support::tool_call_response("tc-bash", "bash", &args),
+            opi_ai::test_support::text_response("done"),
+        ],
+    );
+
+    let runner = RpcRunner::new(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        true, // allow_mutating: bash must be executable
+        ToolSelection::Allowlist(vec!["bash".into()]),
+        None,
+        Vec::new(),
+    )
+    .expect("rpc runner with bash tool");
+
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut runner = runner;
+        runner.run_with_channels(command_rx, output_tx).await
+    });
+
+    let _ready = recv_rpc_line(&mut output_rx).await; // rpc_ready
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("b-rpc".into()),
+            message: "run a noisy command".into(),
+        })
+        .unwrap();
+    let accepted = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(accepted["success"], true);
+
+    // Drain events until the bash ToolExecutionEnd is observed (bounded).
+    let mut bash_end: Option<serde_json::Value> = None;
+    for _ in 0..64 {
+        let line = recv_rpc_line(&mut output_rx).await;
+        if line["type"] == "ToolExecutionEnd" && line["tool_name"] == "bash" {
+            bash_end = Some(line);
+            break;
+        }
+        if line["type"] == "AgentEnd" {
+            break;
+        }
+    }
+    let end = bash_end.expect("expected a bash ToolExecutionEnd event");
+    assert_eq!(end["is_error"], false);
+    assert_eq!(
+        end["truncated"], true,
+        "top-level truncated flag must cross the RPC boundary when output is capped"
+    );
+    let details = end.get("details").expect("details present");
+    assert!(
+        details.is_object(),
+        "details must be an object, got: {details}"
+    );
+    assert_eq!(
+        details["truncated"], true,
+        "details.truncated must mirror the flag at the RPC boundary"
+    );
+    let full = details["full_output"]
+        .as_str()
+        .expect("details.full_output reference must cross the RPC boundary");
+    assert!(!full.is_empty(), "full_output path must be non-empty");
+    // The spilled complete output must exist and exceed the cap.
+    let size = std::fs::metadata(full)
+        .map(|m| m.len())
+        .unwrap_or_else(|e| panic!("full_output file must exist: {e}"));
+    assert!(
+        size as usize > cap,
+        "spilled full_output must hold the complete (>cap) output, got {size}"
+    );
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _ = recv_response(&mut output_rx, "quit").await;
+    let _ = task.await;
+    let _ = std::fs::remove_file(full);
+}
+
 async fn recv_rpc_line(
     output_rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
 ) -> serde_json::Value {

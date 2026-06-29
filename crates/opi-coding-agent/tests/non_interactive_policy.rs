@@ -208,8 +208,14 @@ fn policy_readonly_tools_always_allowed() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Phase 11.6: bash is a mutating tool denied before execution without opt-in.
+// (Renamed from non_interactive_tools_bash_without_allow_mutating_is_policy_error
+// to match the write/edit naming convention; behavior is unchanged.)
+// ---------------------------------------------------------------------------
+
 #[test]
-fn non_interactive_tools_bash_without_allow_mutating_is_policy_error() {
+fn bash_tool_denied_before_execution_without_allow_mutating() {
     let error = ToolRuntimeConfig::resolve(
         RunMode::NonInteractive,
         false,

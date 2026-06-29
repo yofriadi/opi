@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use opi_agent::diagnostic::code;
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
-use opi_coding_agent::tool::{BashTool, EditTool, PathPolicy, ReadTool, WriteTool};
+use opi_coding_agent::tool::{
+    BashTool, EditTool, MAX_BASH_OUTPUT_BYTES, PathPolicy, ReadTool, WriteTool,
+};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -1953,6 +1955,562 @@ async fn bash_tool_env_inheritance_reporting() {
     assert!(!result.is_error);
     let text = tool_result_text(&result);
     assert!(!text.is_empty(), "should have env output");
+}
+
+// ---------------------------------------------------------------------------
+// Bash hardening (Phase 11.6)
+// ---------------------------------------------------------------------------
+
+/// Cross-platform generator for a stdout stream that safely exceeds the cap.
+/// `extra` is added on top of the cap-derived line count so the test tracks the
+/// `MAX_BASH_OUTPUT_BYTES` constant rather than a hard-coded byte total.
+fn bash_oversized_stdout_command(extra_lines: usize) -> String {
+    let n = (MAX_BASH_OUTPUT_BYTES / 13) + extra_lines;
+    if cfg!(windows) {
+        format!("FOR /L %i IN (1,1,{n}) DO @echo AAAAAAAAAAAA")
+    } else {
+        format!("yes AAAAAAAAAAAA | head -n {n}")
+    }
+}
+
+/// Flatten a result's diagnostics into one searchable string (message + context
+/// JSON). `ToolDiagnostic` is not `Serialize`, so this reads its pub fields;
+/// the secret-leak test asserts the canary is absent from this text.
+fn diagnostics_text(result: &ToolResult) -> String {
+    result
+        .diagnostics
+        .iter()
+        .flat_map(|d| {
+            [
+                d.message.clone(),
+                serde_json::to_string(&d.context).unwrap_or_default(),
+            ]
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[tokio::test]
+async fn bash_tool_output_truncation() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "trunc-1",
+            json!({ "command": bash_oversized_stdout_command(2000), "timeout_secs": 30 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    assert!(
+        result.truncated,
+        "ToolResult.truncated must be set when output exceeds the cap"
+    );
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("truncated").and_then(|v| v.as_bool()),
+        Some(true),
+        "details.truncated must mirror the top-level flag"
+    );
+    let full = details
+        .get("full_output")
+        .and_then(|v| v.as_str())
+        .expect("details.full_output reference must be present when truncated");
+    assert!(!full.is_empty(), "full_output path must be non-empty");
+    assert!(full.ends_with(".log"), "full_output path: {full}");
+    let file_size = std::fs::metadata(full)
+        .map(|m| m.len())
+        .unwrap_or_else(|e| panic!("full_output file must exist: {e}"));
+    assert!(
+        file_size as usize > MAX_BASH_OUTPUT_BYTES,
+        "full_output file must hold the complete (>cap) output, got {file_size}"
+    );
+    let content = tool_result_text(&result);
+    assert!(
+        content.len() <= MAX_BASH_OUTPUT_BYTES + 4,
+        "inline content must be capped near the limit, got {} bytes",
+        content.len()
+    );
+    assert!(
+        (content.len() as u64) < file_size,
+        "inline content must be smaller than the full output"
+    );
+    // Stable operation metadata survives the truncation wiring.
+    for key in [
+        "workspace_root",
+        "command",
+        "cwd",
+        "shell",
+        "exit_code",
+        "timed_out",
+        "cancelled",
+        "truncated",
+    ] {
+        assert!(
+            details.get(key).is_some(),
+            "truncation details missing stable key: {key}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn bash_tool_timeout_reports_timed_out_not_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let cmd = if cfg!(windows) {
+        "ping -n 30 127.0.0.1 >nul"
+    } else {
+        "sleep 30"
+    };
+    let result = tool
+        .execute(
+            "to-2",
+            json!({ "command": cmd, "timeout_secs": 1 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error, "timeout must be an error");
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("timed_out").and_then(|v| v.as_bool()),
+        Some(true),
+        "timeout: timed_out must be true"
+    );
+    assert_eq!(
+        details.get("cancelled").and_then(|v| v.as_bool()),
+        Some(false),
+        "timeout: cancelled must be false"
+    );
+    assert!(
+        details.get("full_output").is_none(),
+        "timeout: must not expose a full_output reference"
+    );
+}
+
+#[tokio::test]
+async fn bash_tool_cancellation_reports_cancelled_not_timed_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let token = CancellationToken::new();
+    let cmd = if cfg!(windows) {
+        "ping -n 30 127.0.0.1 >nul"
+    } else {
+        "sleep 30"
+    };
+    let handle = {
+        let token = token.clone();
+        tokio::spawn(async move {
+            tool.execute(
+                "can-2",
+                json!({ "command": cmd, "timeout_secs": 60 }),
+                token,
+                None,
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    token.cancel();
+    let result = handle.await.unwrap().unwrap();
+    assert!(result.is_error, "cancellation must be an error");
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("cancelled").and_then(|v| v.as_bool()),
+        Some(true),
+        "cancel: cancelled must be true"
+    );
+    assert_eq!(
+        details.get("timed_out").and_then(|v| v.as_bool()),
+        Some(false),
+        "cancel: timed_out must be false"
+    );
+    assert!(
+        details.get("full_output").is_none(),
+        "cancel: must not expose a full_output reference"
+    );
+}
+
+#[tokio::test]
+async fn bash_tool_merged_stream_truncation() {
+    // Neither stream alone exceeds the cap, but the MERGED stdout+stderr byte
+    // count does, so truncated must be true. Proves merged (sum) accounting.
+    // Do NOT assert preview content order (cross-platform line-ending variance).
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    // Precondition: each stream individually stays under the cap (3000 lines *
+    // 14 bytes worst-case CRLF = 42000 < cap), so truncation can ONLY come from
+    // the merged sum. Enforced at compile time so a future fixture-count or cap
+    // edit that breaks the SUM-accounting premise fails the build.
+    const _: () = assert!(3000 * 14 < MAX_BASH_OUTPUT_BYTES);
+    let cmd = if cfg!(windows) {
+        // Parenthesize each FOR so cmd does NOT absorb the `&`-joined second
+        // command into the first FOR's body (which would re-run it per iteration).
+        "(FOR /L %i IN (1,1,3000) DO @echo AAAAAAAAAAAA) & (FOR /L %i IN (1,1,3000) DO @echo AAAAAAAAAAAA 1>&2)"
+            .to_string()
+    } else {
+        "yes AAAAAAAAAAAA | head -n 3000; yes AAAAAAAAAAAA | head -n 3000 >&2".to_string()
+    };
+    let result = tool
+        .execute(
+            "merged-1",
+            json!({ "command": cmd, "timeout_secs": 30 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        result.truncated,
+        "merged stdout+stderr over the cap must set truncated; output: {}",
+        tool_result_text(&result)
+    );
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("truncated").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert!(
+        details
+            .get("full_output")
+            .and_then(|v| v.as_str())
+            .is_some(),
+        "merged truncation must expose a full_output reference"
+    );
+}
+
+#[tokio::test]
+async fn bash_tool_nonzero_exit_with_truncated_output() {
+    // Load-bearing intersection: a command that writes >cap AND exits nonzero
+    // must carry BOTH is_error=true (nonzero) AND truncated=true + full_output,
+    // without the truncation wiring clobbering the success-shape details.
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let n = (MAX_BASH_OUTPUT_BYTES / 13) + 2000;
+    let cmd = if cfg!(windows) {
+        // Parenthesize the FOR so cmd runs it fully before `& exit /b 3`
+        // (otherwise `& exit` is absorbed into the FOR body and aborts on iter 1).
+        format!("(FOR /L %i IN (1,1,{n}) DO @echo AAAAAAAAAAAA) & exit /b 3")
+    } else {
+        format!("yes AAAAAAAAAAAA | head -n {n}; exit 3")
+    };
+    let result = tool
+        .execute(
+            "nz-trunc",
+            json!({ "command": cmd, "timeout_secs": 30 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error, "nonzero exit must be an error");
+    assert!(
+        result.truncated,
+        "truncated flag must hold even on nonzero exit"
+    );
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("exit_code").and_then(|v| v.as_i64()),
+        Some(3),
+        "exit_code must be 3"
+    );
+    assert_eq!(
+        details.get("timed_out").and_then(|v| v.as_bool()),
+        Some(false)
+    );
+    assert_eq!(
+        details.get("cancelled").and_then(|v| v.as_bool()),
+        Some(false)
+    );
+    assert_eq!(
+        details.get("truncated").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert!(
+        details
+            .get("full_output")
+            .and_then(|v| v.as_str())
+            .is_some(),
+        "full_output must be present on nonzero+truncated"
+    );
+}
+
+#[tokio::test]
+async fn bash_tool_exit_code_and_cwd_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "exit-cwd",
+            json!({ "command": "echo done" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("exit_code").and_then(|v| v.as_i64()),
+        Some(0),
+        "success exit_code must be 0"
+    );
+    let cwd = details
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .expect("cwd present");
+    assert!(
+        cwd.contains(dir.path().file_name().unwrap().to_str().unwrap()),
+        "cwd should be the workspace root, got: {cwd}"
+    );
+    assert!(
+        details
+            .get("workspace_root")
+            .and_then(|v| v.as_str())
+            .is_some(),
+        "workspace_root present"
+    );
+}
+
+#[tokio::test]
+async fn bash_tool_env_policy_in_details() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "env-pol",
+            json!({ "command": "echo x" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let env = result
+        .details
+        .as_ref()
+        .expect("details")
+        .get("env")
+        .expect("env policy token present");
+    assert_eq!(
+        env.get("inheritance").and_then(|v| v.as_str()),
+        Some("inherited")
+    );
+    assert_eq!(
+        env.get("values_included").and_then(|v| v.as_bool()),
+        Some(false),
+        "env policy must declare values_included=false"
+    );
+    assert!(
+        env.get("values").is_none(),
+        "env policy token must not carry a values array"
+    );
+    let obj = env.as_object().expect("env is an object");
+    assert_eq!(
+        obj.len(),
+        2,
+        "env token must be exactly {{inheritance, values_included}}"
+    );
+}
+
+/// Process-wide lock so the sentinel-env secret-no-leak test cannot race with
+/// any other env-mutating test. CLAUDE.md requires env-mutating tests serialize.
+static BASH_ENV_CANARY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Phase 11.6: the bash tool inherits the parent environment but must NEVER
+/// dump inherited env VALUES into details/diagnostics. A sentinel secret set in
+/// the parent env must be absent from details and diagnostics in both cases
+/// (benign command, and a command that deliberately prints the env -- where the
+/// canary appears in the command's own OUTPUT but still not in details/diagnostics).
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn bash_tool_no_secret_leakage_in_diagnostics_and_env_reporting() {
+    // Holds BASH_ENV_CANARY_LOCK (std::sync::Mutex) across `.await`. Safe because
+    // #[tokio::test] runs on a current-thread runtime, so the guard never crosses
+    // a thread boundary and cannot deadlock the runtime. The lock serializes env
+    // mutation per CLAUDE.md; remove_var runs in the Drop guard on test exit.
+    let _guard = BASH_ENV_CANARY_LOCK.lock().unwrap();
+    const CANARY_NAME: &str = "OPI_BASH_SECRET_LEAK_CANARY";
+    const CANARY_VALUE: &str = "opi-bash-ZQ9j2x-leak-sentinel-7c3f";
+    // SAFETY: edition 2024 marks env mutation unsafe. We hold BASH_ENV_CANARY_LOCK
+    // for the whole test (no other env-mutating test races), remove the var in the
+    // Drop guard, and the canary is a synthetic value that never appears elsewhere.
+    unsafe {
+        std::env::set_var(CANARY_NAME, CANARY_VALUE);
+    }
+    struct EnvClean;
+    impl Drop for EnvClean {
+        fn drop(&mut self) {
+            // SAFETY: same single-test lock; restores the env on test exit.
+            unsafe {
+                std::env::remove_var("OPI_BASH_SECRET_LEAK_CANARY");
+            }
+        }
+    }
+    let _clean = EnvClean;
+
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+
+    // Case 1: benign command that does NOT print env.
+    let benign = tool
+        .execute(
+            "leak-1",
+            json!({ "command": "echo hi" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let benign_details = serde_json::to_string(benign.details.as_ref().unwrap()).unwrap();
+    let benign_diags = diagnostics_text(&benign);
+    assert!(
+        !tool_result_text(&benign).contains(CANARY_VALUE),
+        "benign: canary must not appear in command output"
+    );
+    assert!(
+        !benign_details.contains(CANARY_VALUE),
+        "benign: canary must not leak into details"
+    );
+    assert!(
+        !benign_diags.contains(CANARY_VALUE),
+        "benign: canary must not leak into diagnostics"
+    );
+    let env = benign.details.as_ref().unwrap().get("env").unwrap();
+    assert_eq!(
+        env.get("values_included").and_then(|v| v.as_bool()),
+        Some(false)
+    );
+
+    // Case 2: command that deliberately prints the sentinel env var.
+    let printcmd = if cfg!(windows) {
+        format!("set {CANARY_NAME}")
+    } else {
+        format!("printenv {CANARY_NAME}")
+    };
+    let printed = tool
+        .execute(
+            "leak-2",
+            json!({ "command": printcmd }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        tool_result_text(&printed).contains(CANARY_VALUE),
+        "printenv: canary should appear in command output (command printed it)"
+    );
+    let printed_details = serde_json::to_string(printed.details.as_ref().unwrap()).unwrap();
+    let printed_diags = diagnostics_text(&printed);
+    assert!(
+        !printed_details.contains(CANARY_VALUE),
+        "printenv: canary must still not leak into details"
+    );
+    assert!(
+        !printed_diags.contains(CANARY_VALUE),
+        "printenv: canary must still not leak into diagnostics"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_tool_unix_shell_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "shell-u",
+            json!({ "command": "echo ok" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error);
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("shell").and_then(|v| v.as_str()),
+        Some("sh"),
+        "unix must select sh and report it in metadata"
+    );
+    assert!(tool_result_text(&result).contains("ok"));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn bash_tool_windows_shell_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "shell-w",
+            json!({ "command": "echo ok" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("shell").and_then(|v| v.as_str()),
+        Some("cmd"),
+        "windows must select cmd and report it in metadata"
+    );
+    assert!(
+        tool_result_text(&result).contains("ok"),
+        "output: {}",
+        tool_result_text(&result)
+    );
+}
+
+#[test]
+fn bash_tool_is_mutating_and_sequential() {
+    use opi_coding_agent::policy::is_mutating_tool;
+    let tool = BashTool::new(std::path::PathBuf::from("."));
+    assert!(
+        is_mutating_tool("bash"),
+        "bash must be classified mutating (policy.rs)"
+    );
+    assert_eq!(tool.execution_mode(), ExecutionMode::Sequential);
+}
+
+/// Phase 11.6: bash must remain a single-shot command tool. Regression lock
+/// against re-introducing persistent background shells / ptys / session pools.
+#[test]
+fn bash_tool_no_background_shell_symbols_guard() {
+    let root = phase11_workspace_root();
+    let src = std::fs::read_to_string(root.join("crates/opi-coding-agent/src/tool/bash.rs"))
+        .expect("read bash.rs");
+    let s = phase11_strip_comments(&src);
+    for needle in [
+        "portable_pty",
+        "portable-pty",
+        "nushell",
+        "session_pool",
+        "background_shell",
+        "BackgroundShell",
+        "PtySession",
+        "persistent_shell",
+        "Lazy<",
+        "OnceCell<",
+        "static mut",
+        "tokio::spawn",
+    ] {
+        assert!(
+            !s.contains(needle),
+            "bash.rs must not use a background-shell / persistence symbol '{needle}'"
+        );
+    }
+    // Positive control: the legitimate single-shot command primitive is present
+    // (proves the guard is not vacuously passing an empty/rewritten file).
+    assert!(
+        s.contains("tokio::process::Command"),
+        "bash.rs must use tokio::process::Command for single-shot execution"
+    );
 }
 
 // ---------------------------------------------------------------------------

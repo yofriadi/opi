@@ -7,7 +7,7 @@ mod ls;
 mod read;
 mod write;
 
-pub use bash::BashTool;
+pub use bash::{BashTool, MAX_BASH_OUTPUT_BYTES};
 pub use edit::EditTool;
 pub use find::FindTool;
 pub use glob::GlobTool;
