@@ -223,3 +223,28 @@ fn non_interactive_tools_bash_without_allow_mutating_is_policy_error() {
             .contains("mutating tool 'bash' requires --allow-mutating")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 11.4: write is a mutating tool denied before execution without opt-in.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn write_tool_denied_before_execution_without_allow_mutating() {
+    // Policy-resolution level: requesting write without --allow-mutating in
+    // non-interactive mode is a policy error before any tool body runs. (The
+    // runner-level advertisement that write is an unknown tool is covered by
+    // policy_write_blocked_by_default above; this binds the resolution-time
+    // deny so the two invariants are not conflated.)
+    let error = ToolRuntimeConfig::resolve(
+        RunMode::NonInteractive,
+        false,
+        ToolSelection::Allowlist(vec!["write".into()]),
+    )
+    .expect_err("write should require opt-in");
+
+    assert!(
+        error
+            .to_string()
+            .contains("mutating tool 'write' requires --allow-mutating")
+    );
+}

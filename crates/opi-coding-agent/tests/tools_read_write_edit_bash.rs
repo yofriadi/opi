@@ -294,6 +294,257 @@ async fn write_tool_safety_context_in_details() {
 }
 
 // ---------------------------------------------------------------------------
+// WriteTool hardening (Phase 11.4): create/overwrite audit, atomic temp+rename,
+// CRLF/final-newline preservation, NUL/binary rejection, parent-dir context.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn write_tool_reports_create_then_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = WriteTool::new(dir.path().to_path_buf());
+
+    // First write -> created; no before/after audit keys.
+    let created = tool
+        .execute(
+            "w-audit-1",
+            json!({ "path": "audit.txt", "content": "first" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!created.is_error, "{}", tool_result_text(&created));
+    let cd = created.details.as_ref().expect("created details");
+    assert_eq!(details_string(cd, "action"), "created");
+    assert_eq!(cd.get("bytes_written").and_then(|v| v.as_u64()), Some(5));
+    assert!(
+        cd.get("bytes_before").is_none(),
+        "created must not carry bytes_before"
+    );
+    assert!(
+        cd.get("size_delta").is_none(),
+        "created must not carry size_delta"
+    );
+
+    // Second write -> overwritten, with before/after audit.
+    let overwritten = tool
+        .execute(
+            "w-audit-2",
+            json!({ "path": "audit.txt", "content": "second!" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!overwritten.is_error, "{}", tool_result_text(&overwritten));
+    let od = overwritten.details.as_ref().expect("overwrite details");
+    assert_eq!(details_string(od, "action"), "overwritten");
+    assert_eq!(od.get("bytes_written").and_then(|v| v.as_u64()), Some(7));
+    assert_eq!(od.get("bytes_before").and_then(|v| v.as_u64()), Some(5));
+    assert_eq!(od.get("size_delta").and_then(|v| v.as_i64()), Some(2));
+}
+
+#[tokio::test]
+async fn write_tool_emits_size_or_diff_audit() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = WriteTool::new(dir.path().to_path_buf());
+    let target = dir.path().join("delta.txt");
+    std::fs::write(&target, b"0123456789").unwrap(); // 10 bytes
+
+    // Equal-length overwrite: bytes_written > 0 but size_delta == 0 proves the
+    // delta is computed from before/after sizes, not echoed from bytes_written.
+    let r = tool
+        .execute(
+            "w-delta",
+            json!({ "path": "delta.txt", "content": "abcdefghij" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    let d = r.details.as_ref().expect("details");
+    assert_eq!(d.get("bytes_written").and_then(|v| v.as_u64()), Some(10));
+    assert_eq!(d.get("bytes_before").and_then(|v| v.as_u64()), Some(10));
+    assert_eq!(d.get("size_delta").and_then(|v| v.as_i64()), Some(0));
+    // On-disk size must equal bytes_written (byte count, cross-platform).
+    assert_eq!(std::fs::metadata(&target).unwrap().len(), 10);
+
+    // Negative delta: overwrite with a smaller payload.
+    let smaller = tool
+        .execute(
+            "w-delta-sm",
+            json!({ "path": "delta.txt", "content": "xy" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let sd = smaller.details.as_ref().expect("details");
+    assert_eq!(sd.get("bytes_before").and_then(|v| v.as_u64()), Some(10));
+    assert_eq!(sd.get("bytes_written").and_then(|v| v.as_u64()), Some(2));
+    assert_eq!(sd.get("size_delta").and_then(|v| v.as_i64()), Some(-8));
+    assert_eq!(std::fs::metadata(&target).unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn write_tool_preserves_line_endings() {
+    // Raw byte comparison: no CRLF translation on Windows, no added/removed
+    // trailing newline. Exercises the full JSON-string round-trip.
+    let cases: &[(&str, &[u8])] = &[
+        ("crlf.txt", b"line1\r\nline2\r\n"),
+        ("lf.txt", b"line1\nline2\n"),
+        ("no-trailing.txt", b"no trailing newline"),
+        ("trailing.txt", b"trailing newline\n"),
+        ("multibyte.txt", "héllo 世界\n".as_bytes()),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let tool = WriteTool::new(dir.path().to_path_buf());
+    for (name, bytes) in cases {
+        let content = String::from_utf8(bytes.to_vec()).unwrap();
+        let r = tool
+            .execute(
+                "w-le",
+                json!({ "path": name, "content": content }),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!r.is_error, "{name}: {}", tool_result_text(&r));
+        // bytes_written is a BYTE count (multibyte case: 14 bytes, 9 chars).
+        let d = r.details.as_ref().expect("details");
+        assert_eq!(
+            d.get("bytes_written").and_then(|v| v.as_u64()),
+            Some(bytes.len() as u64),
+            "{name}: bytes_written must be byte length"
+        );
+        let on_disk = std::fs::read(dir.path().join(name)).unwrap();
+        assert_eq!(on_disk, *bytes, "{name}: bytes not preserved verbatim");
+    }
+}
+
+#[tokio::test]
+async fn write_tool_content_policy_for_nul_or_binary_like_input() {
+    // "binary-like" is operationally defined as a NUL byte for a UTF-8 JSON
+    // string (the only non-text signal); other control bytes are valid text.
+    let dir = tempfile::tempdir().unwrap();
+    let tool = WriteTool::new(dir.path().to_path_buf());
+
+    let r = tool
+        .execute(
+            "w-nul",
+            json!({ "path": "bin.txt", "content": "abc\0def" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error, "NUL content must be rejected");
+    assert_eq!(r.diagnostics.len(), 1, "exactly one diagnostic");
+    assert_eq!(r.diagnostics[0].code, code::CODE_TOOL_UNSUPPORTED_ENCODING);
+    assert!(
+        !dir.path().join("bin.txt").exists(),
+        "rejected write must not create a file"
+    );
+
+    // A rejected NUL write into a not-yet-existing nested path must NOT create
+    // parent directories as a side effect (the check runs before any IO).
+    let nested = tool
+        .execute(
+            "w-nul-nest",
+            json!({ "path": "nested/dir/bin.txt", "content": "x\0y" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(nested.is_error);
+    assert!(
+        !dir.path().join("nested").exists(),
+        "rejected NUL write must not create parent dirs"
+    );
+}
+
+#[tokio::test]
+async fn write_tool_atomic_no_partial_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = WriteTool::new(dir.path().to_path_buf());
+    let target = dir.path().join("atomic.txt");
+
+    // Success path: after a large overwrite, no temp sibling leaks and the
+    // target holds the full new content (never a truncated mix).
+    std::fs::write(&target, b"old").unwrap();
+    let big = "X".repeat(4096);
+    let r = tool
+        .execute(
+            "w-atomic-ok",
+            json!({ "path": "atomic.txt", "content": big }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(!r.is_error);
+    assert_eq!(std::fs::read(&target).unwrap(), big.as_bytes());
+    let leaked: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".opi-write-tmp"))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "temp file leaked after successful write: {leaked:?}"
+    );
+
+    // Error path: an overwrite whose new content is rejected (NUL) must leave
+    // the PRIOR content byte-for-byte intact (no partial/truncated mix).
+    let r2 = tool
+        .execute(
+            "w-atomic-rej",
+            json!({ "path": "atomic.txt", "content": "partial\0junk" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r2.is_error);
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        big.as_bytes(),
+        "prior content must be intact after rejected overwrite"
+    );
+}
+
+#[tokio::test]
+async fn write_tool_parent_directory_error_has_context() {
+    // A parent path component that is an existing regular file -> NotADirectory
+    // with directory context, classified deterministically (no ErrorKind match).
+    let dir = tempfile::tempdir().unwrap();
+    let file_parent = dir.path().join("regularfile");
+    std::fs::write(&file_parent, b"i am a file").unwrap();
+
+    let tool = WriteTool::new(dir.path().to_path_buf());
+    let r = tool
+        .execute(
+            "w-parent",
+            json!({ "path": "regularfile/child.txt", "content": "x" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(r.is_error, "writing under a file parent must fail");
+    assert_eq!(r.diagnostics.len(), 1, "exactly one diagnostic");
+    assert_eq!(r.diagnostics[0].code, code::CODE_TOOL_NOT_A_DIRECTORY);
+    let ctx = &r.diagnostics[0].context;
+    assert!(
+        ctx.get("path").is_some(),
+        "NotADirectory diagnostic must carry path context"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // EditTool tests
 // ---------------------------------------------------------------------------
 
@@ -1447,6 +1698,31 @@ fn tool_result_details_use_shared_builders_guard() {
             "result.rs builder missing expected details key: {key}"
         );
     }
+}
+
+/// Phase 11.4 structural guard: WriteTool must persist via a sibling temp file
+/// and a rename into place (atomic, no partial writes), never a direct
+/// overwrite of the destination. Behavioral no-partial/no-leak tests cannot by
+/// themselves prove the mechanism clause in the DoD ("writes to a sibling temp
+/// file and renames into place"), so this locks the implementation shape.
+#[test]
+fn write_uses_temp_and_rename_guard() {
+    let root = phase11_workspace_root();
+    let src = std::fs::read_to_string(root.join("crates/opi-coding-agent/src/tool/write.rs"))
+        .expect("read write.rs");
+    let s = phase11_strip_comments(&src);
+    assert!(
+        s.contains("rename"),
+        "write.rs must rename a sibling temp file into place (atomic write)"
+    );
+    assert!(
+        s.contains(".opi-write-tmp"),
+        "write.rs must use the sibling temp marker (.opi-write-tmp)"
+    );
+    assert!(
+        !s.contains("fs::write(&file_path"),
+        "write.rs must not write the final destination directly; it must temp+rename"
+    );
 }
 
 // ---------------------------------------------------------------------------

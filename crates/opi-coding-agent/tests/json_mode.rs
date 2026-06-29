@@ -296,6 +296,55 @@ async fn json_mode_tool_call_events() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 11.4: write audit details cross the NDJSON output boundary.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn write_tool_result_carries_write_audit_details() {
+    let first = test_support::tool_call_response(
+        "tc-write",
+        "write",
+        r#"{"path":"out.txt","content":"payload"}"#,
+    );
+    let second = test_support::text_response("done");
+    let provider = MockProvider::new("mock", vec![first, second]);
+
+    let workspace = std::env::temp_dir().join(format!("opi-write-json-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&workspace);
+    let mut runner = NonInteractiveRunner::new(
+        Box::new(provider),
+        "mock-model".into(),
+        OpiConfig::default(),
+        workspace.clone(),
+        true, // allow_mutating: write must be executable
+        None,
+        Vec::new(),
+    );
+
+    let result = runner.run_json("Write out.txt").await;
+    assert_eq!(result.exit_code, ExitCode::Success as i32);
+
+    let lines = parse_ndjson(&result.stdout);
+    let end = lines
+        .iter()
+        .find(|v| v["event"]["type"] == "ToolExecutionEnd" && v["event"]["tool_name"] == "write")
+        .expect("expected a write ToolExecutionEnd event in the NDJSON stream");
+
+    assert_eq!(end["event"]["is_error"], false);
+    assert_eq!(end["event"]["truncated"], false);
+    let details = &end["event"]["details"];
+    assert!(
+        details.is_object(),
+        "details must be an object, got: {details}"
+    );
+    assert_eq!(details["action"], "created");
+    assert_eq!(details["bytes_written"], 7); // "payload" == 7 bytes
+
+    let _ = std::fs::remove_file(workspace.join("out.txt"));
+    let _ = std::fs::remove_dir_all(&workspace);
+}
+
+// ---------------------------------------------------------------------------
 // run_json does not duplicate stdout text (no plain text mixed in)
 // ---------------------------------------------------------------------------
 

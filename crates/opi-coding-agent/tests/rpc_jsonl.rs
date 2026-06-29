@@ -2443,6 +2443,82 @@ where
     (command_tx, output_rx, task)
 }
 
+/// Phase 11.4: write audit details cross the RPC JSONL output boundary. The
+/// ToolExecutionEnd event carries the tool-owned `details` object (action +
+/// bytes_written) verbatim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_tool_result_carries_write_audit_details() {
+    let provider = MockProvider::new(
+        "mock",
+        vec![
+            opi_ai::test_support::tool_call_response(
+                "tc-write",
+                "write",
+                r#"{"path":"out.txt","content":"payload"}"#,
+            ),
+            opi_ai::test_support::text_response("done"),
+        ],
+    );
+
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let runner = RpcRunner::new(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        true, // allow_mutating: write must be executable
+        ToolSelection::Allowlist(vec!["write".into()]),
+        None,
+        Vec::new(),
+    )
+    .expect("rpc runner with write tool");
+
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut runner = runner;
+        runner.run_with_channels(command_rx, output_tx).await
+    });
+
+    let _ready = recv_rpc_line(&mut output_rx).await; // rpc_ready
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("w-rpc".into()),
+            message: "write out.txt".into(),
+        })
+        .unwrap();
+    let accepted = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(accepted["success"], true);
+
+    // Drain events until the write ToolExecutionEnd is observed (bounded).
+    let mut write_end: Option<serde_json::Value> = None;
+    for _ in 0..64 {
+        let line = recv_rpc_line(&mut output_rx).await;
+        if line["type"] == "ToolExecutionEnd" && line["tool_name"] == "write" {
+            write_end = Some(line);
+            break;
+        }
+        if line["type"] == "AgentEnd" {
+            break;
+        }
+    }
+    let end = write_end.expect("expected a write ToolExecutionEnd event");
+    assert_eq!(end["is_error"], false);
+    assert_eq!(end["truncated"], false);
+    let details = end.get("details").expect("details present");
+    assert!(
+        details.is_object(),
+        "details must be an object, got: {details}"
+    );
+    assert_eq!(details["action"], "created");
+    assert_eq!(details["bytes_written"], 7); // "payload" == 7 bytes
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _ = recv_response(&mut output_rx, "quit").await;
+    let _ = task.await;
+    let _ = std::fs::remove_file(workspace.path().join("out.txt"));
+}
+
 async fn recv_rpc_line(
     output_rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
 ) -> serde_json::Value {
