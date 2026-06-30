@@ -80,14 +80,6 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
       "exit_criteria_met": true,
       "evaluator_summary": "all Phase 1 exit criteria met; see commit 4d9c64...",
       "snapshot_path": "docs/snapshots/phase1/opi-impl-state.json",
-      "criteria_trace": [
-        {
-          "source": "docs/opi-spec.md §15 Phase 1 exit criteria",
-          "criterion": "Agent loop can execute tool-use turns with a mock provider.",
-          "status": "met",
-          "evidence": "cargo test -p opi-agent --test agent_loop_mock"
-        }
-      ],
       "task_summary": [
         { "id": "1.0", "title": "introduce Phase 1 dependencies", "status": "passing", "verified_at_commit": "4d9c64..." }
       ]
@@ -135,9 +127,17 @@ Atomic writes via `.opi-impl-state.json.tmp` + rename.
 | `tasks[].blocker` | string | runtime | Populated when `status = blocked` |
 | `tasks[].session_notes` | array | runtime | Append-only `{timestamp, attempt, summary, gate_results}` |
 | `phase_exit[N]` | object | runtime | `completed_at` + `exit_criteria_met` + evaluator summary |
-| `phase_exit[N].snapshot_path` | string/null | runtime | Path to a committed full-ledger snapshot at the moment phase `N` exited. `null` while the phase is incomplete. Written under `docs/snapshots/phase<N>/`. |
-| `phase_exit[N].criteria_trace` | array | runtime | Phase-exit evaluator's independent trace from current source-spec success/exit criteria to evidence. Every item uses `status = met`, `deferred-by-updated-design`, or `not-met`. Phase archive is refused if any item is `not-met` or if a deferral lacks an exact current-spec citation. |
+| `phase_exit[N].snapshot_path` | string/null | runtime | Path to a committed phase-local snapshot at the moment phase `N` exited. `null` while the phase is incomplete. Written under `docs/snapshots/phase<N>/`. |
+| `phase_exit[N].criteria_trace` | array | runtime/archive | Phase-exit evaluator's independent trace from current source-spec success/exit criteria to evidence. Every item uses `status = met`, `deferred-by-updated-design`, or `not-met`. Phase archive is refused if any item is `not-met` or if a deferral lacks an exact current-spec citation. Keep detailed traces in the phase-local snapshot or sibling audit markdown; root ledger entries should omit or summarize them to avoid growth. |
 | `phase_exit[N].task_summary` | array | runtime | `[{id, title, status, verified_at_commit}]` for every task that belonged to phase `N` at exit time. Lets `--status` report completed phases without reading the snapshot file. |
+
+Archive snapshots are intentionally phase-local: they include top-level
+schema/spec metadata, the archived phase's completed `tasks`, and only that
+phase's `phase_exit[N]` record. Do not copy older `phase_exit` records into new
+snapshots. The root ledger remains the compact index for dependency checks and
+status reporting through `phase_exit[*].task_summary`; it should hold short
+exit metadata, `snapshot_path`, and `task_summary`, not expanded evidence
+tables.
 
 Validation rule: every path listed in `tasks[].verification.behavioral_tests` MUST be matched by at least one `task_owned_paths` glob before the task graph is confirmed. This prevents Phase C from needing an immediate ownership expansion just to create the task's declared tests.
 

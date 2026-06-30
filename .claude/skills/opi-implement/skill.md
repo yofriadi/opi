@@ -107,6 +107,13 @@ is satisfied if it appears as `passing` in the active `tasks` array OR in any
 `phase_exit[*].task_summary` entry. Tasks with `status: blocked` are skipped
 until `--clear-blocker`.
 
+Root `phase_exit[*].task_summary` entries are the durable dependency/status
+index. Do not replace them with snapshot pointers unless the dependency
+resolver is changed to load phase archives on demand.
+Keep root `phase_exit[*]` compact: store short exit metadata, `snapshot_path`,
+and `task_summary` there. Put long evaluator traces, expanded evidence tables,
+and audit narratives in the phase-local snapshot or sibling audit markdown.
+
 **User-override rule:** Refuse if any `depends_on` is not satisfied by the
 active tasks or archived phase summaries; print which dep is missing.
 
@@ -174,12 +181,18 @@ E is the only phase that mutates git **during normal task execution**.
    - F.3 Else -> print "next unblocked: X.Y" hint
    - F.4 If F.1 passed, run the archive gate:
      - F.4a User gate: "Archive phase `<N>` ledger to
-       `docs/snapshots/phase<N>/opi-impl-state.json` and compact `tasks` array
-       into `phase_exit[<N>].task_summary`?"
-     - F.4b If confirmed: write snapshot file, mutate ledger via atomic
-       protocol (move completed tasks into `task_summary`, set `snapshot_path`,
-       remove from active `tasks` array), commit ONLY the new snapshot file
-       with message `chore: archive opi-implement phase <N> ledger snapshot`.
+       `docs/snapshots/phase<N>/opi-impl-state.json` as a phase-local snapshot
+       and compact `tasks` array into `phase_exit[<N>].task_summary`?"
+     - F.4b If confirmed: write a phase-local snapshot containing the top-level
+       schema/spec metadata, only the completed tasks for phase `<N>`, and only
+       `phase_exit[<N>]` (including any detailed `criteria_trace`; do not copy
+       prior phases' `phase_exit` records into the snapshot). Then mutate the
+       root ledger via atomic protocol: move completed tasks into
+       `phase_exit[<N>].task_summary`, set `phase_exit[<N>].snapshot_path`,
+       keep only compact phase-exit metadata in the root entry, and remove
+       those tasks from the active `tasks` array. Commit ONLY the new snapshot
+       file with message
+       `chore: archive opi-implement phase <N> ledger snapshot`.
      - F.4c If declined: leave tasks array intact; no snapshot written.
 
 **When init/reinit runs:** Read `references/initializer.md` for the full flow.
