@@ -397,3 +397,36 @@ fn format_persist_errors_unit() {
         "should contain second error, got: {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 11.11: CLI help exposes tool-selection + mutating-tool policy
+// ---------------------------------------------------------------------------
+
+/// The public `opi --help` output documents the tool-selection flags and the
+/// mutating-tool opt-in at the command boundary, consistent with the README
+/// and `policy.rs`. Pinned via clap's rendered long help (in-process; no
+/// subprocess). Flag names are the stable contract, so the assertion checks
+/// for flag presence rather than exact doc-comment prose.
+#[test]
+fn phase11_cli_help_tool_policy() {
+    use clap::CommandFactory;
+    use opi_coding_agent::cli::Cli;
+
+    let help = Cli::command().render_long_help().to_string();
+
+    for flag in [
+        "--tools",
+        "--no-tools",
+        "--no-builtin-tools",
+        "--allow-mutating",
+    ] {
+        assert!(
+            help.contains(flag),
+            "opi --help must expose the tool-selection flag {flag}"
+        );
+    }
+    assert!(
+        help.to_lowercase().contains("mutating"),
+        "opi --help must document the mutating-tool opt-in"
+    );
+}
