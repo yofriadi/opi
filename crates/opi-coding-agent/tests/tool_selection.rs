@@ -388,3 +388,42 @@ async fn harness_allowlist_filters_tools() {
         "Allowlist should exclude 'grep'"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 11.8 S5: non-interactive tool visibility contract
+// ---------------------------------------------------------------------------
+
+/// Non-interactive mode without `--allow-mutating` does not advertise the
+/// mutating built-ins (write/edit/bash); the default active set is the five
+/// read-only navigation tools. With `allow_mutating=true` the coding default
+/// (read/write/edit/bash) is advertised. Pins `policy::resolve_active_tool_names`.
+#[test]
+fn non_interactive_mutating_tools_not_advertised_without_allow_mutating() {
+    let denied = ToolRuntimeConfig::resolve(RunMode::NonInteractive, false, ToolSelection::Default)
+        .expect("default NI policy resolves");
+    assert_eq!(
+        denied.active_tool_names,
+        vec!["read", "grep", "find", "ls", "glob"],
+        "NI without --allow-mutating advertises only read-only tools: {:?}",
+        denied.active_tool_names,
+    );
+    assert!(
+        !denied
+            .active_tool_names
+            .iter()
+            .any(|n| matches!(n.as_str(), "write" | "edit" | "bash")),
+        "mutating tools must NOT be advertised without --allow-mutating: {:?}",
+        denied.active_tool_names,
+    );
+
+    let opted_in =
+        ToolRuntimeConfig::resolve(RunMode::NonInteractive, true, ToolSelection::Default)
+            .expect("opted-in NI policy resolves");
+    for expected in ["read", "write", "edit", "bash"] {
+        assert!(
+            opted_in.active_tool_names.iter().any(|n| n == expected),
+            "{expected} IS advertised with --allow-mutating: {:?}",
+            opted_in.active_tool_names,
+        );
+    }
+}

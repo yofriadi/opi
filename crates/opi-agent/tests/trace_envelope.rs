@@ -726,7 +726,7 @@ mod wiring {
 
     use opi_agent::agent_loop;
     use opi_agent::diagnostic::code::*;
-    use opi_agent::diagnostic::{RedactionMode, Severity};
+    use opi_agent::diagnostic::{RedactionMode, SOURCE_TOOL, Severity};
     use opi_agent::diagnostic_sink::RecordingSink;
     use opi_agent::event::{AgentEvent, AgentEventSink};
     use opi_agent::hooks::AgentHooks;
@@ -899,6 +899,56 @@ mod wiring {
                     terminate: false,
                     truncated: false,
                     diagnostics: vec![],
+                })
+            })
+        }
+        fn execution_mode(&self) -> ExecutionMode {
+            ExecutionMode::Sequential
+        }
+    }
+
+    /// A tool whose result carries a populated `ToolDiagnostic` (Phase 11.8 S1):
+    /// the agent loop must lift the per-cause code + structured context into a
+    /// Phase 7 Diagnostic + DiagnosticLinked trace, NOT collapse to the generic
+    /// execution-failed fallback.
+    struct StructuredErrorTool;
+    impl Tool for StructuredErrorTool {
+        fn definition(&self) -> ToolDef {
+            ToolDef {
+                name: "soft_fail".into(),
+                description: "returns a structured error result".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        fn execute(
+            &self,
+            _call_id: &str,
+            _arguments: serde_json::Value,
+            _signal: tokio_util::sync::CancellationToken,
+            _on_update: Option<opi_agent::tool::UpdateCallback>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<ToolResult, opi_agent::tool::ToolError>>
+                    + Send,
+            >,
+        > {
+            Box::pin(async move {
+                Ok(ToolResult {
+                    content: vec![OutputContent::Text {
+                        text: "path not found".into(),
+                    }],
+                    details: None,
+                    is_error: true,
+                    terminate: false,
+                    truncated: false,
+                    diagnostics: vec![opi_agent::tool::ToolDiagnostic {
+                        code: CODE_TOOL_PATH_NOT_FOUND.to_string(),
+                        message: "path 'missing.txt' does not exist".into(),
+                        context: serde_json::json!({
+                            "user_path": "missing.txt",
+                            "resolved_path": "/workspace/missing.txt",
+                        }),
+                    }],
                 })
             })
         }
@@ -1120,6 +1170,93 @@ mod wiring {
 
     #[tokio::test]
     async fn phase7_tool_error_result_emits_failed_trace_and_diagnostic() {
+        // Phase 11.8 S1: a tool that returns is_error=true WITH a populated
+        // ToolDiagnostic must have its per-cause code + structured context
+        // lifted into a Phase 7 Diagnostic (mirrored as a DiagnosticLinked
+        // trace), NOT collapsed to the generic execution-failed diagnostic.
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("tc-1", "soft_fail", r#"{}"#),
+                test_support::text_response("done"),
+            ],
+        );
+        let diag = Arc::new(RecordingSink::new());
+        let trace_sink = Arc::new(RecordingTraceSink::new());
+        let trace = collector(trace_sink.clone(), diag.clone());
+
+        let result = agent_loop(
+            ctx(
+                provider,
+                diag.clone(),
+                Some(trace),
+                vec![Box::new(StructuredErrorTool)],
+            ),
+            config(None),
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let kinds = kinds_of(&trace_sink);
+        assert!(kinds.contains(&TraceKind::ToolCallStarted));
+        assert!(
+            kinds.contains(&TraceKind::ToolCallFailed),
+            "is_error=true tool result must be traced as failed: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&TraceKind::ToolCallCompleted),
+            "is_error=true tool result must not be traced as completed: {kinds:?}"
+        );
+
+        // Sink: exactly ONE diagnostic for soft_fail, carrying the per-cause
+        // code + structured context (not the generic collapse).
+        let snap = diag.snapshot();
+        let soft_fail: Vec<_> = snap
+            .iter()
+            .filter(|d| {
+                d.details.as_ref().and_then(|v| v["tool_name"].as_str()) == Some("soft_fail")
+            })
+            .collect();
+        assert_eq!(
+            soft_fail.len(),
+            1,
+            "exactly one lifted diagnostic for soft_fail: {snap:?}"
+        );
+        assert_eq!(
+            soft_fail[0].code, CODE_TOOL_PATH_NOT_FOUND,
+            "per-cause code must surface, not the generic execution-failed"
+        );
+        assert_eq!(soft_fail[0].severity, Severity::Error);
+        assert_eq!(soft_fail[0].source, SOURCE_TOOL);
+        let details = soft_fail[0].details.as_ref().expect("context present");
+        assert_eq!(details["tool_name"], "soft_fail");
+        assert_eq!(details["user_path"], "missing.txt");
+        // D1 de-dup invariant: no generic execution-failed for this tool.
+        assert!(
+            !snap.iter().any(|d| d.code == CODE_TOOL_EXECUTION_FAILED
+                && d.details.as_ref().and_then(|v| v["tool_name"].as_str()) == Some("soft_fail")),
+            "generic execution-failed must NOT be emitted when per-cause diagnostics are present"
+        );
+
+        // DiagnosticLinked trace carries the per-cause code.
+        assert!(
+            trace_sink.snapshot().iter().any(|r| {
+                r.kind == TraceKind::DiagnosticLinked
+                    && r.diagnostic_code == Some(CODE_TOOL_PATH_NOT_FOUND)
+            }),
+            "DiagnosticLinked trace must carry the per-cause code: {:?}",
+            trace_sink.snapshot()
+        );
+    }
+
+    #[tokio::test]
+    async fn phase7_tool_error_generic_fallback_when_no_diagnostics() {
+        // Phase 11.8 S1: a bare is_error result with NO ToolDiagnostic falls
+        // back to the generic execution-failed diagnostic (preserves the
+        // pre-11.8 contract; guards D1's de-duplication invariant).
         let provider = MockProvider::new(
             "mock",
             vec![
@@ -1146,23 +1283,22 @@ mod wiring {
         .await;
         assert!(result.is_ok(), "{:?}", result.err());
 
-        let kinds = kinds_of(&trace_sink);
-        assert!(kinds.contains(&TraceKind::ToolCallStarted));
-        assert!(
-            kinds.contains(&TraceKind::ToolCallFailed),
-            "is_error=true tool result must be traced as failed: {kinds:?}"
+        let snap = diag.snapshot();
+        let soft_fail: Vec<_> = snap
+            .iter()
+            .filter(|d| {
+                d.details.as_ref().and_then(|v| v["tool_name"].as_str()) == Some("soft_fail")
+            })
+            .collect();
+        assert_eq!(
+            soft_fail.len(),
+            1,
+            "exactly one fallback diagnostic: {snap:?}"
         );
+        assert_eq!(soft_fail[0].code, CODE_TOOL_EXECUTION_FAILED);
         assert!(
-            !kinds.contains(&TraceKind::ToolCallCompleted),
-            "is_error=true tool result must not be traced as completed: {kinds:?}"
-        );
-        assert!(
-            diag.snapshot()
-                .iter()
-                .any(|d| d.code == CODE_TOOL_EXECUTION_FAILED
-                    && d.details.as_ref().and_then(|v| v["tool_name"].as_str())
-                        == Some("soft_fail")),
-            "is_error=true tool result must emit a tool execution diagnostic"
+            !snap.iter().any(|d| d.code == CODE_TOOL_PATH_NOT_FOUND),
+            "no per-cause code synthesized from empty diagnostics"
         );
     }
 

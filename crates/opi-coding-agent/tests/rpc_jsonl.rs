@@ -2609,6 +2609,159 @@ async fn edit_tool_result_carries_diff_preview_details() {
     let _ = std::fs::remove_file(workspace.path().join("src.txt"));
 }
 
+/// Phase 11.8 S1: a tool-failure result's per-cause diagnostic + structured
+/// context cross the RPC JSONL output boundary on `ToolExecutionEnd.diagnostics`
+/// (read of a missing file -> `tool_path_not_found` with path context).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_failure_trace_carries_tool_details() {
+    let provider = MockProvider::new(
+        "mock",
+        vec![
+            opi_ai::test_support::tool_call_response(
+                "tc-read",
+                "read",
+                r#"{"path":"no_such_file_xyz.json"}"#,
+            ),
+            opi_ai::test_support::text_response("done"),
+        ],
+    );
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let runner = RpcRunner::new(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        false, // read is non-mutating
+        ToolSelection::Allowlist(vec!["read".into()]),
+        None,
+        Vec::new(),
+    )
+    .expect("rpc runner with read tool");
+
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut runner = runner;
+        runner.run_with_channels(command_rx, output_tx).await
+    });
+
+    let _ready = recv_rpc_line(&mut output_rx).await; // rpc_ready
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("r-rpc".into()),
+            message: "read missing".into(),
+        })
+        .unwrap();
+    let accepted = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(accepted["success"], true);
+
+    let mut read_end: Option<serde_json::Value> = None;
+    for _ in 0..64 {
+        let line = recv_rpc_line(&mut output_rx).await;
+        if line["type"] == "ToolExecutionEnd" && line["tool_name"] == "read" {
+            read_end = Some(line);
+            break;
+        }
+        if line["type"] == "AgentEnd" {
+            break;
+        }
+    }
+    let end = read_end.expect("expected a read ToolExecutionEnd event");
+    assert_eq!(end["is_error"], true, "missing-file read is_error: {end}");
+    let diags = end["diagnostics"]
+        .as_array()
+        .expect("diagnostics array on RPC ToolExecutionEnd (Phase 11.8 D2)");
+    assert!(
+        diags.iter().any(|d| d["code"] == "tool_path_not_found"),
+        "per-cause tool_path_not_found diagnostic surfaces over RPC: {diags:?}"
+    );
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _ = recv_response(&mut output_rx, "quit").await;
+    let _ = task.await;
+}
+
+/// Phase 11.8 S4: RPC `ToolExecutionEnd` exposes details, diagnostics,
+/// is_error, and truncated consistently for a failing tool result (bash
+/// nonzero exit carries operation details AND a tool-owned diagnostic).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_result_details_diagnostics_and_truncated_shape() {
+    let cmd = if cfg!(windows) {
+        "cmd /C exit 1"
+    } else {
+        "exit 1"
+    };
+    let args = serde_json::to_string(&serde_json::json!({ "command": cmd })).unwrap();
+    let provider = MockProvider::new(
+        "mock",
+        vec![
+            opi_ai::test_support::tool_call_response("tc-bash", "bash", &args),
+            opi_ai::test_support::text_response("done"),
+        ],
+    );
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let runner = RpcRunner::new(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        true, // allow_mutating: bash must be executable
+        ToolSelection::Allowlist(vec!["bash".into()]),
+        None,
+        Vec::new(),
+    )
+    .expect("rpc runner with bash tool");
+
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut runner = runner;
+        runner.run_with_channels(command_rx, output_tx).await
+    });
+
+    let _ready = recv_rpc_line(&mut output_rx).await; // rpc_ready
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("b-rpc".into()),
+            message: "run failing".into(),
+        })
+        .unwrap();
+    let accepted = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(accepted["success"], true);
+
+    let mut bash_end: Option<serde_json::Value> = None;
+    for _ in 0..64 {
+        let line = recv_rpc_line(&mut output_rx).await;
+        if line["type"] == "ToolExecutionEnd" && line["tool_name"] == "bash" {
+            bash_end = Some(line);
+            break;
+        }
+        if line["type"] == "AgentEnd" {
+            break;
+        }
+    }
+    let end = bash_end.expect("expected a bash ToolExecutionEnd event");
+    assert_eq!(end["is_error"], true, "nonzero exit is_error: {end}");
+    assert!(
+        end["details"].is_object(),
+        "operation details present (command/exit_code/...): {end}"
+    );
+    assert_eq!(end["truncated"], false, "no truncation: {end}");
+    let diags = end["diagnostics"]
+        .as_array()
+        .expect("diagnostics array present (Phase 11.8 D2)");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d["code"] == "tool_execution_failed" && d["context"]["exit_code"] == 1),
+        "bash operation diagnostic (exit_code=1) surfaces over RPC: {diags:?}"
+    );
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _ = recv_response(&mut output_rx, "quit").await;
+    let _ = task.await;
+}
+
 /// Phase 11.6: bash truncation details + the top-level `truncated` flag cross
 /// the RPC JSONL output boundary. bash is the first built-in tool whose
 /// `ToolResult.truncated` can flip true, and `full_output` is a new details

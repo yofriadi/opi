@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
 
-use opi_agent::tool::{ExecutionMode, Tool, ToolError, ToolResult, result};
+use opi_agent::diagnostic::code::CODE_TOOL_EXECUTION_FAILED;
+use opi_agent::tool::{ExecutionMode, Tool, ToolDiagnostic, ToolError, ToolResult, result};
 use opi_ai::message::{OutputContent, ToolDef};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -190,6 +191,10 @@ impl Tool for BashTool {
                         details,
                         true,
                         false,
+                        &command,
+                        None,
+                        true,
+                        false,
                     ))
                 }
                 Control::TimedOut => {
@@ -213,6 +218,10 @@ impl Tool for BashTool {
                         details,
                         true,
                         false,
+                        &command,
+                        None,
+                        false,
+                        true,
                     ))
                 }
                 Control::WaitFailed => {
@@ -264,6 +273,10 @@ impl Tool for BashTool {
                         details,
                         is_error,
                         truncated,
+                        &command,
+                        exit_code,
+                        false,
+                        false,
                     ))
                 }
             }
@@ -287,16 +300,63 @@ enum Control {
 /// `is_error` (nonzero exit) and `truncated` (output cap). Mirrors the Phase
 /// 11.1 bash pattern: nonzero-exit keeps the success-shape result with details
 /// present (the stable operation-metadata contract); only `is_error` flips.
+///
+/// On an error result a [`ToolDiagnostic`] carrying the operation context
+/// (command/exit_code/cancelled/timed_out/truncated) is pushed so the agent
+/// loop (Phase 11.8 / S1) lifts it into a Phase 7 Diagnostic + trace.
+#[allow(clippy::too_many_arguments)] // threads the failure discriminators alongside the result builder inputs
 fn bash_result(
     content: Vec<OutputContent>,
     details: Value,
     is_error: bool,
     truncated: bool,
+    command: &str,
+    exit_code: Option<i32>,
+    cancelled: bool,
+    timed_out: bool,
 ) -> ToolResult {
     let mut tool_result = result::ok(content, details);
     tool_result.is_error = is_error;
     tool_result.truncated = truncated;
+    if is_error {
+        tool_result.diagnostics.push(bash_operation_diagnostic(
+            command, exit_code, cancelled, timed_out, truncated,
+        ));
+    }
     tool_result
+}
+
+/// Build the bash operation-failure [`ToolDiagnostic`] carrying the stable
+/// operation context the agent loop lifts into a Phase 7 Diagnostic +
+/// DiagnosticLinked trace (Phase 11.8 / S1). Bash failures have no 11.2
+/// filesystem cause, so the code is the generic [`CODE_TOOL_EXECUTION_FAILED`];
+/// the per-cause detail lives in `context`. `command` is content-sensitive and
+/// is scrubbed by the diagnostic sink in Summary mode.
+fn bash_operation_diagnostic(
+    command: &str,
+    exit_code: Option<i32>,
+    cancelled: bool,
+    timed_out: bool,
+    truncated: bool,
+) -> ToolDiagnostic {
+    let message = if cancelled {
+        "command cancelled"
+    } else if timed_out {
+        "command timed out"
+    } else {
+        "command exited non-zero"
+    };
+    ToolDiagnostic {
+        code: CODE_TOOL_EXECUTION_FAILED.to_string(),
+        message: message.to_string(),
+        context: json!({
+            "command": command,
+            "exit_code": exit_code,
+            "cancelled": cancelled,
+            "timed_out": timed_out,
+            "truncated": truncated,
+        }),
+    }
 }
 
 /// Inject the environment-handling policy token into bash operation metadata.

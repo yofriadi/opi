@@ -546,6 +546,122 @@ async fn h3_sequential_tool_forces_serial_execution() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 11.8 S3: consolidated tool-scheduling contract.
+//
+// Pins the agent_loop batch classification (batch_is_sequential): any
+// Sequential tool in a batch forces serial execution; an all-Parallel batch
+// runs concurrently. Detailed per-case coverage lives in the phase8_* tests
+// below; this is the named scenario anchor that pins both invariants with
+// observable per-tool ordering. Real async sleeps make join_all concurrency
+// observable via interleaving rather than submission order.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn phase8_tool_scheduling_contract() {
+    use std::time::Duration;
+
+    // (1) A batch containing a Sequential tool forces serial execution: the
+    // sequential tool completes before the parallel one starts.
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let provider = RecordingProvider::new(vec![
+        multi_tool_call_response(vec![
+            ("s1", "seq_a", r#"{"arg":"a"}"#),
+            ("s2", "par_a", r#"{"arg":"b"}"#),
+        ]),
+        text_response("done"),
+    ]);
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(OrderTool::new(
+            "seq_a",
+            log.clone(),
+            ExecutionMode::Sequential,
+            false,
+        )),
+        Box::new(OrderTool::new(
+            "par_a",
+            log.clone(),
+            ExecutionMode::Parallel,
+            false,
+        )),
+    ];
+    opi_agent::agent_loop(
+        make_context(Box::new(provider), tools),
+        AgentLoopConfig::default(),
+        &MinimalHooks,
+        noop_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    {
+        let entries = log.lock().unwrap();
+        let seq_end = entries
+            .iter()
+            .position(|e| e == "seq_a:end")
+            .expect("seq_a should end");
+        let par_start = entries
+            .iter()
+            .position(|e| e == "par_a:start")
+            .expect("par_a should start");
+        assert!(
+            seq_end < par_start,
+            "sequential batch: seq_a must complete before par_a starts: {entries:?}"
+        );
+    }
+
+    // (2) An all-Parallel batch runs concurrently: the short tool starts before
+    // the long tool ends (interleaving impossible under serial execution).
+    let log2 = Arc::new(Mutex::new(Vec::new()));
+    let provider2 = RecordingProvider::new(vec![
+        multi_tool_call_response(vec![
+            ("p1", "par_long", r#"{"arg":"a"}"#),
+            ("p2", "par_short", r#"{"arg":"b"}"#),
+        ]),
+        text_response("done"),
+    ]);
+    let tools2: Vec<Box<dyn Tool>> = vec![
+        Box::new(OrderTool::new_with_delay(
+            "par_long",
+            log2.clone(),
+            ExecutionMode::Parallel,
+            false,
+            Duration::from_millis(60),
+        )),
+        Box::new(OrderTool::new_with_delay(
+            "par_short",
+            log2.clone(),
+            ExecutionMode::Parallel,
+            false,
+            Duration::from_millis(5),
+        )),
+    ];
+    opi_agent::agent_loop(
+        make_context(Box::new(provider2), tools2),
+        AgentLoopConfig::default(),
+        &MinimalHooks,
+        noop_sink(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    {
+        let entries = log2.lock().unwrap();
+        let long_end = entries
+            .iter()
+            .position(|e| e == "par_long:end")
+            .expect("par_long should end");
+        let short_start = entries
+            .iter()
+            .position(|e| e == "par_short:start")
+            .expect("par_short should start");
+        assert!(
+            short_start < long_end,
+            "parallel batch: par_short must start before par_long ends (concurrent): {entries:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // H4: Terminate flags
 // ---------------------------------------------------------------------------
 

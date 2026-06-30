@@ -525,6 +525,36 @@ fn is_content_sensitive_key(key: &str) -> bool {
         .any(|sensitive| sensitive.eq_ignore_ascii_case(key))
 }
 
+/// Resolve a tool-owned diagnostic code string (carried on a
+/// [`crate::tool::ToolDiagnostic`]) to its stable `&'static str` identifier,
+/// defaulting to [`code::CODE_TOOL_EXECUTION_FAILED`] for unrecognized codes.
+///
+/// Phase 11.8 lifts each tool-owned `ToolDiagnostic` into a Phase 7
+/// [`Diagnostic`] at the agent-loop boundary. `Diagnostic::code` is `&'static
+/// str` by design (a stable identifier constructed from known literals); this
+/// bridge lets the lift preserve the per-cause code without relaxing that
+/// invariant to an owned string.
+///
+/// [`code::CODE_TOOL_UNKNOWN`] and [`code::CODE_TOOL_VALIDATION_FAILED`] are
+/// intentionally excluded: those codes are emitted directly by the agent loop
+/// (unknown-tool and schema-validation paths), never via a `ToolDiagnostic`.
+pub fn resolve_tool_code(raw: &str) -> &'static str {
+    match raw {
+        code::CODE_TOOL_PATH_NOT_FOUND => code::CODE_TOOL_PATH_NOT_FOUND,
+        code::CODE_TOOL_NOT_A_FILE => code::CODE_TOOL_NOT_A_FILE,
+        code::CODE_TOOL_NOT_A_DIRECTORY => code::CODE_TOOL_NOT_A_DIRECTORY,
+        code::CODE_TOOL_PERMISSION_DENIED => code::CODE_TOOL_PERMISSION_DENIED,
+        code::CODE_TOOL_BINARY_FILE => code::CODE_TOOL_BINARY_FILE,
+        code::CODE_TOOL_UNSUPPORTED_ENCODING => code::CODE_TOOL_UNSUPPORTED_ENCODING,
+        code::CODE_TOOL_OUTSIDE_WORKSPACE => code::CODE_TOOL_OUTSIDE_WORKSPACE,
+        code::CODE_TOOL_UNRESOLVED_WORKSPACE_ROOT => code::CODE_TOOL_UNRESOLVED_WORKSPACE_ROOT,
+        code::CODE_TOOL_EXECUTION_FAILED => code::CODE_TOOL_EXECUTION_FAILED,
+        // Unrecognized (incl. forward-compat or provider/extension-defined) codes
+        // collapse to the generic tool-execution-failed identifier.
+        _ => code::CODE_TOOL_EXECUTION_FAILED,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Classification bridges: map provider and agent-loop errors into Diagnostics.
 // ---------------------------------------------------------------------------

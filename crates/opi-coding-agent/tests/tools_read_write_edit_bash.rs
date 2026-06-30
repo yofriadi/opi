@@ -2089,6 +2089,24 @@ async fn bash_tool_timeout_reports_timed_out_not_cancelled() {
         details.get("full_output").is_none(),
         "timeout: must not expose a full_output reference"
     );
+    // Phase 11.8 S1: the operation context is also carried as a tool-owned
+    // ToolDiagnostic (timed_out=true) that the agent loop lifts into a Phase 7
+    // Diagnostic + DiagnosticLinked trace.
+    assert_eq!(
+        result.diagnostics.len(),
+        1,
+        "timeout pushes exactly one operation diagnostic"
+    );
+    let tdiag = &result.diagnostics[0];
+    assert_eq!(tdiag.code, code::CODE_TOOL_EXECUTION_FAILED);
+    assert_eq!(
+        tdiag.context.get("timed_out").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        tdiag.context.get("cancelled").and_then(|v| v.as_bool()),
+        Some(false)
+    );
 }
 
 #[tokio::test]
@@ -2131,6 +2149,24 @@ async fn bash_tool_cancellation_reports_cancelled_not_timed_out() {
     assert!(
         details.get("full_output").is_none(),
         "cancel: must not expose a full_output reference"
+    );
+    // Phase 11.8 S1: the operation context is also carried as a tool-owned
+    // ToolDiagnostic (cancelled=true) that the agent loop lifts into a Phase 7
+    // Diagnostic + DiagnosticLinked trace.
+    assert_eq!(
+        result.diagnostics.len(),
+        1,
+        "cancellation pushes exactly one operation diagnostic"
+    );
+    let cdiag = &result.diagnostics[0];
+    assert_eq!(cdiag.code, code::CODE_TOOL_EXECUTION_FAILED);
+    assert_eq!(
+        cdiag.context.get("cancelled").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        cdiag.context.get("timed_out").and_then(|v| v.as_bool()),
+        Some(false)
     );
 }
 
@@ -3295,4 +3331,51 @@ fn bash_tool_has_valid_definition() {
     let def = tool.definition();
     assert_eq!(def.name, "bash");
     assert!(!def.description.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11.8 S3: built-in tools ExecutionMode contract
+// ---------------------------------------------------------------------------
+
+/// Pin the `ExecutionMode` of every built-in tool so the agent loop's
+/// `batch_is_sequential` classification (any Sequential tool -> serial batch)
+/// holds. write/edit/bash are Sequential (mutating, side-effectful); the five
+/// read-only navigation tools are Parallel. `execution_mode()` is a pure
+/// declaration, so a dummy workspace root is sufficient.
+#[test]
+fn all_tools_execution_mode_contract() {
+    use opi_coding_agent::tool::{FindTool, GlobTool, GrepTool, LsTool};
+    let root = std::path::PathBuf::from(".");
+
+    let sequential: [(&str, Box<dyn Tool>); 3] = [
+        ("write", Box::new(WriteTool::new(root.clone()))),
+        ("edit", Box::new(EditTool::new(root.clone()))),
+        ("bash", Box::new(BashTool::new(root.clone()))),
+    ];
+    for (name, tool) in &sequential {
+        assert_eq!(
+            tool.execution_mode(),
+            ExecutionMode::Sequential,
+            "{name} must be Sequential"
+        );
+    }
+
+    let parallel: [(&str, Box<dyn Tool>); 5] = [
+        ("read", Box::new(ReadTool::new(root.clone()))),
+        ("grep", Box::new(GrepTool::new(root.clone()))),
+        ("find", Box::new(FindTool::new(root.clone()))),
+        ("ls", Box::new(LsTool::new(root.clone()))),
+        ("glob", Box::new(GlobTool::new(root.clone()))),
+    ];
+    for (name, tool) in &parallel {
+        assert_eq!(
+            tool.execution_mode(),
+            ExecutionMode::Parallel,
+            "{name} must be Parallel"
+        );
+    }
+
+    // Sanity: exactly eight built-in tools (3 Sequential + 5 Parallel).
+    assert_eq!(sequential.len(), 3);
+    assert_eq!(parallel.len(), 5);
 }

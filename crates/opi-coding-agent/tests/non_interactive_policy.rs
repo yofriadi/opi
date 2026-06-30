@@ -279,3 +279,46 @@ fn edit_tool_denied_before_execution_without_allow_mutating() {
             .contains("mutating tool 'edit' requires --allow-mutating")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 11.8 S5: consolidated mutating-tool deny contract. Each mutating
+// built-in is denied at policy resolution before any tool body runs; read-only
+// tools resolve without opt-in. (The per-tool write/edit/bash tests above pin
+// each individually; this is the named scenario anchor covering all three.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mutating_tools_denied_before_execution_without_allow_mutating() {
+    use opi_coding_agent::policy::is_mutating_tool;
+    for tool in ["write", "edit", "bash"] {
+        assert!(is_mutating_tool(tool), "{tool} must be classified mutating");
+        let msg = format!("{tool} should require opt-in");
+        let err = ToolRuntimeConfig::resolve(
+            RunMode::NonInteractive,
+            false,
+            ToolSelection::Allowlist(vec![tool.into()]),
+        )
+        .expect_err(&msg);
+        assert!(
+            err.to_string()
+                .contains(&format!("mutating tool '{tool}' requires --allow-mutating")),
+            "{tool} deny message: {err}"
+        );
+    }
+
+    // Read-only tools resolve without opt-in.
+    for tool in ["read", "grep"] {
+        let msg = format!("{tool} should resolve without opt-in");
+        let cfg = ToolRuntimeConfig::resolve(
+            RunMode::NonInteractive,
+            false,
+            ToolSelection::Allowlist(vec![tool.into()]),
+        )
+        .expect(&msg);
+        assert!(
+            cfg.active_tool_names.iter().any(|n| n == tool),
+            "{tool} should be active: {:?}",
+            cfg.active_tool_names,
+        );
+    }
+}

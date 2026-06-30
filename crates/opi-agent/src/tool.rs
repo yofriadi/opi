@@ -6,6 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use opi_ai::message::{OutputContent, ToolDef};
+use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 /// Callback for progress updates during tool execution.
@@ -34,10 +35,13 @@ pub trait Tool: Send + Sync {
 /// Owned, lightweight diagnostic entry carried on a [`ToolResult`].
 ///
 /// Deliberately not coupled to [`crate::diagnostic`] so `tool.rs` keeps its
-/// zero-internal-dependency layering. Task 11.8 lifts each entry into a Phase 7
+/// zero-internal-dependency layering. Phase 11.8 lifts each entry into a Phase 7
 /// [`Diagnostic`](crate::diagnostic::Diagnostic) plus a diagnostic-linked trace
-/// record; until then the carrier is carried empty by every built-in tool.
-#[derive(Debug, Clone, PartialEq)]
+/// record at the agent-loop boundary. The entry also serializes into the
+/// agent-facing `AgentEvent::ToolExecutionEnd.diagnostics` wire field (NDJSON /
+/// RPC) so headless consumers see per-cause context. It is deliberately NOT
+/// added to the provider-facing `ToolResultMessage`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDiagnostic {
     /// Stable snake_case code (forward-compatible with `CODE_TOOL_*` constants).
     pub code: String,

@@ -19,7 +19,7 @@ use crate::hooks::{
 };
 use crate::loop_types::{AgentError, AgentLoopConfig, AgentLoopContext};
 use crate::message::AgentMessage;
-use crate::tool::{ExecutionMode, Tool, ToolResult};
+use crate::tool::{ExecutionMode, Tool, ToolDiagnostic, ToolResult};
 use crate::trace::{TraceCollector, TraceKind};
 use crate::validation;
 
@@ -59,7 +59,7 @@ pub async fn agent_loop(
     events(AgentEvent::AgentStart);
     trace_run(&trace, TraceKind::RunStarted);
 
-    let mut has_tools_pending;
+    let mut has_tools_pending = false;
     for turn_idx in 0..config.max_turns {
         let turn_id = format!("t{turn_idx}");
         if cancel.is_cancelled() {
@@ -213,6 +213,7 @@ pub async fn agent_loop(
                                         let is_error = result.is_error;
                                         let details = result.details.clone();
                                         let truncated = result.truncated;
+                                        let diagnostics = result.diagnostics.clone();
                                         terminate_flags.push(result.terminate);
                                         events(AgentEvent::ToolExecutionEnd {
                                             tool_call_id: parsed.tool_call.id.clone(),
@@ -221,6 +222,7 @@ pub async fn agent_loop(
                                             details,
                                             truncated,
                                             is_error,
+                                            diagnostics,
                                         });
 
                                         let trm = ToolResultMessage {
@@ -293,6 +295,7 @@ pub async fn agent_loop(
                                         let is_error = result.is_error;
                                         let details = result.details.clone();
                                         let truncated = result.truncated;
+                                        let diagnostics = result.diagnostics.clone();
                                         terminate_flags.push(result.terminate);
                                         events(AgentEvent::ToolExecutionEnd {
                                             tool_call_id: parsed.tool_call.id.clone(),
@@ -301,6 +304,7 @@ pub async fn agent_loop(
                                             details,
                                             truncated,
                                             is_error,
+                                            diagnostics,
                                         });
                                         let trm = ToolResultMessage {
                                             tool_call_id: parsed.tool_call.id.clone(),
@@ -516,6 +520,19 @@ pub async fn agent_loop(
         }
     }
 
+    // Phase 11.8 (S2): the for-loop only falls through when `turn_idx` reached
+    // `config.max_turns`. If tools were still pending on the final turn the run
+    // hit the turn cap mid-work — emit a max-turns warning diagnostic + trace
+    // (BEFORE AgentEnd, mirroring the cancellation ordering at the top of the
+    // loop) and return `AgentError::MaxTurnsExceeded` instead of a silent Ok. A
+    // zero-turn run, or exhaustion without pending tools (e.g. steering kept the
+    // loop alive), completes normally.
+    if has_tools_pending {
+        let err = AgentError::MaxTurnsExceeded(config.max_turns);
+        observe(&diagnostic_sink, &trace, Diagnostic::from(&err));
+        emit_agent_end(&events, &trace, &messages);
+        return Err(err);
+    }
     emit_agent_end(&events, &trace, &messages);
     Ok(messages)
 }
@@ -724,15 +741,28 @@ async fn execute_tool(
                 AfterToolCallResult::Replace(replacement) => replacement,
             };
             if final_result.is_error {
-                observe(
-                    sink,
-                    trace,
-                    tool_diagnostic(
-                        CODE_TOOL_EXECUTION_FAILED,
-                        tool_name,
-                        "tool returned an error result",
-                    ),
-                );
+                // Phase 11.8 (S1): lift tool-owned structured failure context from
+                // `final_result.diagnostics` into Phase 7 Diagnostics (per-cause
+                // code + structured context), mirrored as DiagnosticLinked trace
+                // records. The lift reads diagnostics AFTER `after_tool_call`, so a
+                // hook `Replace` owns the lifted set. When the tool reported a bare
+                // is_error result with no diagnostics, fall back to the generic
+                // execution-failed diagnostic so a failure is always observed.
+                if final_result.diagnostics.is_empty() {
+                    observe(
+                        sink,
+                        trace,
+                        tool_diagnostic(
+                            CODE_TOOL_EXECUTION_FAILED,
+                            tool_name,
+                            "tool returned an error result",
+                        ),
+                    );
+                } else {
+                    for tool_diag in &final_result.diagnostics {
+                        observe(sink, trace, tool_owned_diagnostic(tool_diag, tool_name));
+                    }
+                }
                 trace_tool(trace, TraceKind::ToolCallFailed, tool_name, turn_id);
             } else {
                 trace_tool(trace, TraceKind::ToolCallCompleted, tool_name, turn_id);
@@ -894,4 +924,30 @@ fn cancelled_diagnostic(phase: &str) -> Diagnostic {
 fn tool_diagnostic(code: &'static str, tool_name: &str, message: &str) -> Diagnostic {
     Diagnostic::new(Severity::Error, code, SOURCE_TOOL, message)
         .details(json!({ "tool_name": tool_name }))
+}
+
+/// Lift one tool-owned [`ToolDiagnostic`] into a Phase 7 [`Diagnostic`] (Phase
+/// 11.8 / S1). The tool-owned code is resolved to its stable `&'static str`
+/// via [`crate::diagnostic::resolve_tool_code`], and `tool_name` is merged into
+/// the structured context so the record carries both the owning tool and the
+/// per-cause fields (path for read/write/edit; command/exit_code/cancelled/
+/// timed_out/truncated for bash). Routed through [`observe`] so the entry lands
+/// in both the diagnostic sink (redacted in Summary mode) and the
+/// DiagnosticLinked trace (code + severity only).
+fn tool_owned_diagnostic(tool_diag: &ToolDiagnostic, tool_name: &str) -> Diagnostic {
+    let code = crate::diagnostic::resolve_tool_code(&tool_diag.code);
+    let mut context = tool_diag.context.clone();
+    if let Some(obj) = context.as_object_mut() {
+        obj.insert("tool_name".to_string(), json!(tool_name));
+    } else {
+        // Non-object context (or null): wrap so tool_name is always present.
+        context = json!({ "context": context, "tool_name": tool_name });
+    }
+    Diagnostic::new(
+        Severity::Error,
+        code,
+        SOURCE_TOOL,
+        tool_diag.message.clone(),
+    )
+    .details(context)
 }

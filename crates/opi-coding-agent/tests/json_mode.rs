@@ -22,6 +22,60 @@ fn parse_ndjson(output: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Phase 11.8 D2 wire-compat: a `ToolExecutionEnd` with empty diagnostics omits
+/// the `diagnostics` key (`skip_serializing_if`), an old payload without the
+/// field round-trips back via `#[serde(default)]`, and populated diagnostics
+/// serialize as `{code,message,context}` entries.
+#[test]
+fn tool_execution_end_diagnostics_field_is_wire_compat() {
+    use opi_agent::event::AgentEvent;
+    use opi_agent::tool::ToolDiagnostic;
+
+    // Empty diagnostics: the key is omitted on the wire.
+    let with_empty = AgentEvent::ToolExecutionEnd {
+        tool_call_id: "c1".into(),
+        tool_name: "read".into(),
+        result: serde_json::json!([]),
+        details: None,
+        is_error: false,
+        truncated: false,
+        diagnostics: Vec::new(),
+    };
+    let json = serde_json::to_string(&with_empty).expect("serializes");
+    assert!(
+        !json.contains("\"diagnostics\""),
+        "empty diagnostics must be omitted (skip_serializing_if): {json}"
+    );
+
+    // Old payload (no diagnostics field) deserializes via #[serde(default)].
+    let old = r#"{"type":"ToolExecutionEnd","tool_call_id":"c2","tool_name":"read","result":[],"details":null,"is_error":false,"truncated":false}"#;
+    let back: AgentEvent = serde_json::from_str(old).expect("old payload round-trips");
+    match back {
+        AgentEvent::ToolExecutionEnd { diagnostics, .. } => {
+            assert!(diagnostics.is_empty(), "defaults empty for old payload");
+        }
+        other => panic!("expected ToolExecutionEnd, got {other:?}"),
+    }
+
+    // Populated diagnostics serialize as an array of {code,message,context}.
+    let with_diag = AgentEvent::ToolExecutionEnd {
+        tool_call_id: "c3".into(),
+        tool_name: "bash".into(),
+        result: serde_json::json!([]),
+        details: None,
+        is_error: true,
+        truncated: false,
+        diagnostics: vec![ToolDiagnostic {
+            code: "tool_execution_failed".into(),
+            message: "command exited non-zero".into(),
+            context: serde_json::json!({ "exit_code": 1 }),
+        }],
+    };
+    let v: serde_json::Value = serde_json::to_value(&with_diag).expect("serializes");
+    assert_eq!(v["diagnostics"][0]["code"], "tool_execution_failed");
+    assert_eq!(v["diagnostics"][0]["context"]["exit_code"], 1);
+}
+
 // ---------------------------------------------------------------------------
 // Schema version header
 // ---------------------------------------------------------------------------
@@ -697,6 +751,72 @@ mod phase7 {
                 .any(|d| d["code"] == code::CODE_SESSION_TRUNCATED_LINE
                     && d["source"] == SOURCE_SESSION),
             "resume recovery diagnostic should be emitted as startup diagnostics: {diagnostics:?}"
+        );
+    }
+
+    /// Phase 11.8 S4: JSON/NDJSON output exposes tool result details,
+    /// diagnostics, is_error, and truncated for a failing tool result. bash
+    /// nonzero-exit carries operation details AND a tool-owned diagnostic, so
+    /// all four fields are observable in one result.
+    #[tokio::test]
+    async fn tool_result_details_diagnostics_and_truncated_shape() {
+        let cmd = if cfg!(windows) {
+            "cmd /C exit 1"
+        } else {
+            "exit 1"
+        };
+        let args =
+            serde_json::to_string(&serde_json::json!({ "command": cmd })).expect("args serialize");
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("c1", "bash", &args),
+                test_support::text_response("done"),
+            ],
+        );
+        let mut runner = NonInteractiveRunner::new(
+            Box::new(provider),
+            "mock-model".into(),
+            OpiConfig::default(),
+            workspace_root(),
+            true, // allow_mutating so bash is an active built-in
+            None,
+            Vec::new(),
+        );
+        let result = runner.run_json("run it").await;
+        assert_eq!(
+            result.exit_code,
+            ExitCode::Success as i32,
+            "stderr: {}",
+            result.stderr
+        );
+
+        let lines = parse_ndjson(&result.stdout);
+        let tee = lines
+            .iter()
+            .filter_map(|l| {
+                if l["type"] == "Agent" && l["event"]["type"] == "ToolExecutionEnd" {
+                    Some(&l["event"])
+                } else {
+                    None
+                }
+            })
+            .next()
+            .expect("a ToolExecutionEnd event on the NDJSON stream");
+        assert_eq!(tee["is_error"], true, "nonzero exit is_error: {tee}");
+        assert!(
+            tee["details"].is_object(),
+            "operation details present (command/exit_code/...): {tee}"
+        );
+        assert_eq!(tee["truncated"], false, "no truncation: {tee}");
+        let diags = tee["diagnostics"]
+            .as_array()
+            .expect("diagnostics array present on ToolExecutionEnd (Phase 11.8 D2)");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d["code"] == "tool_execution_failed" && d["context"]["exit_code"] == 1),
+            "bash operation diagnostic (exit_code=1) surfaces in NDJSON: {diags:?}"
         );
     }
 

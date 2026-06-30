@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::message::AgentMessage;
 use crate::session_event::{CompactionReason, CompactionResult};
+use crate::tool::ToolDiagnostic;
 
 /// Callback type for emitting agent events to subscribers.
 pub type AgentEventSink = Box<dyn Fn(AgentEvent) + Send + Sync>;
@@ -59,6 +60,15 @@ pub enum AgentEvent {
         is_error: bool,
         #[serde(default)]
         truncated: bool,
+        /// Tool-owned structured failure context lifted from `ToolResult::diagnostics`
+        /// (Phase 11.8). Agent-facing only: flows to NDJSON (`AgentSessionEvent::Agent`)
+        /// and RPC (`agent_event_to_value`) but is NOT carried on the provider-facing
+        /// `ToolResultMessage`. Empty for success/no-diagnostics results; omitted from
+        /// the wire when empty (`skip_serializing_if`). NOTE: this field is serialized
+        /// verbatim — event-path redaction is deferred to a wire-format task; it is
+        /// wire-parity with the pre-existing unredacted `details` field.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diagnostics: Vec<ToolDiagnostic>,
     },
     /// Queue messages were delivered to the conversation.
     QueueUpdate {

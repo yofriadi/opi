@@ -770,4 +770,93 @@ mod runtime_emission {
         let details = unknown.details.as_ref().expect("carries tool_name");
         assert_eq!(details["tool_name"], "ghost");
     }
+
+    #[tokio::test]
+    async fn max_turns_exhaustion_emits_warning_diagnostic_and_error() {
+        // Phase 11.8 S2: exhausting max_turns with tools still pending emits a
+        // CODE_AGENT_MAX_TURNS_EXCEEDED warning diagnostic and returns
+        // AgentError::MaxTurnsExceeded (not a silent Ok(messages)).
+        use opi_agent::tool::{Tool, ToolError, ToolResult};
+        use opi_ai::message::{OutputContent, ToolDef};
+        use std::future::Future;
+        use std::pin::Pin;
+
+        struct PendingTool;
+        impl Tool for PendingTool {
+            fn definition(&self) -> ToolDef {
+                ToolDef {
+                    name: "pending".into(),
+                    description: "always succeeds; keeps the loop calling".into(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                }
+            }
+            fn execute(
+                &self,
+                _call_id: &str,
+                _arguments: serde_json::Value,
+                _signal: tokio_util::sync::CancellationToken,
+                _on_update: Option<opi_agent::tool::UpdateCallback>,
+            ) -> Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send>> {
+                Box::pin(async {
+                    Ok(ToolResult {
+                        content: vec![OutputContent::Text { text: "ok".into() }],
+                        details: None,
+                        is_error: false,
+                        terminate: false,
+                        truncated: false,
+                        diagnostics: vec![],
+                    })
+                })
+            }
+        }
+
+        let provider = MockProvider::new(
+            "mock",
+            vec![
+                test_support::tool_call_response("c1", "pending", "{}"),
+                test_support::tool_call_response("c2", "pending", "{}"),
+            ],
+        );
+        let sink = Arc::new(RecordingSink::new());
+        let loop_ctx = AgentLoopContext {
+            provider: Box::new(provider),
+            tools: vec![Box::new(PendingTool)],
+            messages: vec![user_msg("go")],
+            model: "mock-model".into(),
+            system: None,
+            steering_queue: None,
+            follow_up_queue: None,
+            diagnostic_sink: Some(sink.clone() as Arc<dyn DiagnosticSink>),
+            trace: None,
+        };
+        let cfg = AgentLoopConfig {
+            max_turns: 2,
+            ..Default::default()
+        };
+        let result = agent_loop(
+            loop_ctx,
+            cfg,
+            &NoopHooks,
+            null_event_sink(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+
+        // Returns MaxTurnsExceeded(2), not Ok.
+        let err = result.expect_err("max-turns exhaustion must return an error, not Ok");
+        assert!(
+            matches!(err, AgentError::MaxTurnsExceeded(2)),
+            "expected MaxTurnsExceeded(2), got {err:?}"
+        );
+
+        // Emits the warning diagnostic with the limit in details.
+        let snap = sink.snapshot();
+        let mt = snap
+            .iter()
+            .find(|d| d.code == CODE_AGENT_MAX_TURNS_EXCEEDED)
+            .expect("max-turns warning diagnostic must be emitted");
+        assert_eq!(mt.severity, Severity::Warning);
+        assert_eq!(mt.source, SOURCE_AGENT);
+        assert_eq!(mt.details.as_ref().expect("details")["max_turns"], 2);
+    }
 }
