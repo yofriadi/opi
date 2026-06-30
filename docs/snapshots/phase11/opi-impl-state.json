@@ -1,0 +1,3129 @@
+{
+  "schema_version": 2,
+  "spec_files": [
+    "docs/opi-spec.md",
+    "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+  ],
+  "spec_files_sha256": {
+    "docs/opi-spec.md": "9adcac9a3dfee9855bd7e46e9606173dc1594a2fbed19666f02d3bdf075f168e",
+    "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md": "6119841c30d0d3bd28be943e287a65b8856ebf82c0cd10d40da5f44b9f60623d"
+  },
+  "task_graph_confirmed_at": "2026-06-28T10:34:13Z",
+  "current_phase": 11,
+  "tasks": [
+    {
+      "id": "11.1",
+      "phase": 11,
+      "title": "Tool result contract and path-metadata normalization",
+      "crate": "workspace",
+      "parent_spec_row": null,
+      "definition_of_done": "ToolResult (crates/opi-agent/src/tool.rs) gains a typed `truncated: bool` field and a typed optional `diagnostics` carrier; shared ToolResult success/error builders replace the ad-hoc serde_json::json! details blocks across all built-in tool branches, including bash timeout/cancel paths rather than only one success branch per tool. Path-addressed tools emit a uniform path-metadata block {workspace_root, path (user-facing), resolved_path, workspace_relation in {inside, outside, unresolved}} when a concrete path applies; command/search tools emit operation-specific metadata through the same builders instead of fake path fields. Bash operation metadata keeps a stable key set across success, timeout, cancellation, and nonzero-exit results: command, cwd, workspace_root, shell, exit_code (nullable when no process exit exists), timed_out, cancelled, truncated, and full_output reference when applicable. ToolResultMessage (crates/opi-ai/src/message.rs) carries truncated. grep/find/glob/ls details gain workspace_relation parity where they resolve a scoped/root path. Parametric tests iterate over each built-in tool success and representative failure/cancel result asserting the shared base contract, top-level truncated flag, and applicable path-or-operation metadata; a guard asserts no built-in tool constructs ToolResult with a hand-written details literal outside the builder.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Derived from design '## Tool Result Contract' table (fields content/details/is_error/diagnostics/truncated/path metadata) and SC1; current ToolResult has only content/details/is_error/terminate.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Tool Result Contract"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Foundation contract consumed by 11.2-11.8; no upstream Phase 11 task.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Cross-crate (opi-agent ToolResult + opi-coding-agent builders + opi-ai ToolResultMessage); workspace tier satisfies the multi-crate validation rule.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Tool Result Contract"
+        },
+        {
+          "field": "crate",
+          "reason": "workspace",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No built-in permission popup system.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No language server integration.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No new workflow tools such as todo, plan mode, or sub-agents in core.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No sandbox implementation.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "glob remains an opi convenience. (## Relationship to pi)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Reviewed wording was too broad: the design says path metadata is applicable when a tool has a path; bash/search tools need operation metadata, not fake path fields.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Graph review found the original builder guard counted only eight success blocks and missed bash cancel/timeout inline details. The DoD now covers all built-in result branches and defines a stable bash operation metadata key set.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "crates/opi-agent/src/agent_loop.rs: Step 1 struct-field addition forced updates to the 5 ToolResult construction sites in execute_tool/malformed_tool_arguments_result; Step 6 also propagates truncated at the two batch lift sites.",
+          "source": "Phase C Step 1 (C.1a ownership expansion) 2026-06-28"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "crates/opi-agent/src/event.rs: Step 6 adds truncated to AgentEvent::ToolExecutionEnd (parity with existing details/is_error sibling fields).",
+          "source": "Phase C Step 1 (C.1a ownership expansion) 2026-06-28"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "crates/opi-agent/tests/**: Step 1 struct-field addition forced ~20 ToolResult literals across opi-agent integration tests (trace_envelope, hooks_queues, tool_validation, extensions, sdk_embedding, agent_loop_semantics, agent_loop_mock) to add default fields to compile.",
+          "source": "Phase C Step 1 (C.1a ownership expansion) 2026-06-28"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "crates/opi-coding-agent/src/adapter_extension.rs: Step 1 struct-field addition forced the production ToolResult construction at the extension-adapter boundary to add default fields.",
+          "source": "Phase C Step 1 (C.1a ownership expansion) 2026-06-28"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "crates/opi-agent/src/tool/result.rs: new shared-builder module created by 11.1 (submodule of tool, not covered by the tool.rs file path).",
+          "source": "Phase C Step 2 (C.1a) 2026-06-28"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "crates/opi-ai/tests/**: ToolResultMessage field addition (truncated) forced fixture updates in bedrock_fixtures, output_content_image, stream_events; tool_result_no_leak.rs is the new provider no-leak guard.",
+          "source": "Phase C Step 6/7 (C.1a) 2026-06-28"
+        }
+      ],
+      "tier": "workspace",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy --workspace --all-targets -- -D warnings",
+          "cargo test --workspace --all-targets",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/tools_read_write_edit_bash.rs",
+          "crates/opi-coding-agent/tests/tools_glob_grep.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-uniform-tool-result-contract",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Tool Result Contract + #Success Criteria 1",
+          "scenario": "Each built-in tool success result and representative error/cancel result carries the shared base result contract and top-level truncated flag. Path-addressed tools carry normalized path metadata; bash/search/navigation calls carry operation metadata appropriate to their schema. Bash timeout/cancel details keep the same stable operation-key set with timed_out/cancelled as discriminators. grep/find/glob/ls gain workspace_relation parity where a scoped/root path is resolved.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash uniform_tool_result_details_contract",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_cancel_timeout_details_contract",
+            "cargo test -p opi-coding-agent --test tools_glob_grep uniform_tool_result_details_contract"
+          ],
+          "production_call_sites": [
+            "opi_agent::agent_loop (ToolResultMessage build at agent_loop.rs:224-231,300-307)",
+            "crates/opi-coding-agent/src/harness.rs build_tools startup registration"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-shared-result-builder",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Tool Result Contract (details field)",
+          "scenario": "A shared ToolResult builder collapses ad-hoc details construction across all built-in tools and their timeout/cancel/error branches; a Rust guard test asserts no built-in tool constructs ToolResult with a hand-written details literal outside the builder.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash tool_result_details_use_shared_builders_guard"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/{read,write,edit,bash,grep,find,ls,glob}.rs execute()"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "opi_agent::agent_loop (lifts result into ToolResultMessage + AgentEvent::ToolExecutionEnd)",
+        "crates/opi-coding-agent/src/harness.rs build_tools (registers all 8 tools)"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "0a3add86b5ed4a33b93ce03107be7d027c217064",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-agent/src/tool.rs",
+        "crates/opi-ai/src/message.rs",
+        "crates/opi-coding-agent/src/tool/**",
+        "crates/opi-coding-agent/tests/**",
+        "Cargo.toml",
+        "crates/opi-agent/src/agent_loop.rs",
+        "crates/opi-agent/src/event.rs",
+        "crates/opi-agent/tests/**",
+        "crates/opi-coding-agent/src/adapter_extension.rs",
+        "crates/opi-agent/src/tool/result.rs",
+        "crates/opi-ai/tests/**"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "8816e7ad51db9243320222541ce3304909478adb",
+      "evidence": {
+        "Opi-Task": "11.1",
+        "Opi-DoD-SHA256": "784e40591ccfc6198c52aac6e767eb58f45030822ddf00d45eba522067c672cc",
+        "Opi-Verification": "workspace; fmt + clippy -D warnings (all-targets) + test --workspace --all-targets + test --workspace --doc + doc -D warnings + opi-impl-smoke all green",
+        "Opi-Evaluator": "passed",
+        "Opi-Acceptance": "phase11-uniform-tool-result-contract, phase11-shared-result-builder"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-28T13:44:32.722202+00:00",
+          "attempt": 0,
+          "summary": "Phase B confirmed by user. Task 11.1 -> in_progress. start_commit=0a3add8 (v0.6.2). baseline_dirty_files captures 7 unrelated deleted docs/superpowers/plans/*.md (not 11.1-owned, leave untouched). Spec hashes verified non-drifting.",
+          "gate_results": {}
+        },
+        {
+          "timestamp": "2026-06-28T14:23:17.870453+00:00",
+          "attempt": 0,
+          "summary": "Step 1 (TDD) complete: ToolResult += truncated:bool + diagnostics:Vec<ToolDiagnostic> (Debug,Clone,PartialEq; no serde/diagnostic.rs coupling yet). 55 construction sites updated workspace-wide (8 tools, agent_loop x5, adapter_extension, ~37 test literals). Struct unit test green; cargo build --workspace --all-targets green; opi-agent + opi-coding-agent suites 0 failures. task_owned_paths expanded via C.1a.",
+          "gate_results": {
+            "struct_test": "pass",
+            "build_workspace_all_targets": "pass",
+            "opi_agent_and_coding_agent_tests": "0 failures"
+          }
+        },
+        {
+          "timestamp": "2026-06-28T15:57:28.321239+00:00",
+          "attempt": 0,
+          "summary": "Phase D complete. D.2 evaluator (workflow wf_d9f540c3) returned PASS-WITH-CONCERNS: flagged grep/glob/find/ls details content not using a dedicated metadata builder + guard under-enforcement. Resolved as spec-backed over-read per design doc (path metadata is 'when applicable'; nav tools need only 'workspace relation metadata'; SC1 is a 'consistent contract' of fields; design names no search builder) — user confirmed spec-backed reading. All cross-cutting gates green: fmt, clippy -D warnings (workspace, all-targets), test --workspace --all-targets, test --workspace --doc, doc -D warnings, smoke. C.1a expanded for result.rs + opi-ai/tests/**.",
+          "gate_results": {
+            "d2_verdict": "pass-with-concerns (resolved spec-backed)",
+            "fmt": "pass",
+            "clippy": "pass",
+            "test_workspace_all_targets": "pass",
+            "doctest": "pass",
+            "doc_D_warnings": "pass",
+            "smoke": "pass"
+          }
+        },
+        {
+          "timestamp": "2026-06-28T15:58:53.686105+00:00",
+          "attempt": 0,
+          "summary": "Phase E complete: committed 8816e7a (45 files, +1277/-381, 3 new: result.rs/truncated_propagation.rs/tool_result_no_leak.rs). HEAD^=0a3add8=start_commit. Both acceptance scenarios marked met. D.2 evaluator PASS-WITH-CONCERNS resolved spec-backed (user-confirmed).",
+          "gate_results": {
+            "commit": "8816e7a",
+            "head_parent_matches_start_commit": true,
+            "task_owned_dirty_remaining": "none (7 baseline plan deletions untouched)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.2",
+      "phase": 11,
+      "title": "Filesystem error taxonomy and per-cause diagnostic codes",
+      "crate": "workspace",
+      "parent_spec_row": null,
+      "definition_of_done": "A shared filesystem/tool-error taxonomy enum (variants NotFound, NotAFile, NotADirectory, PermissionDenied, BinaryFile, UnsupportedEncoding, OutsideWorkspace, UnresolvedWorkspaceRoot) maps to distinct CODE_TOOL_* diagnostic codes in crates/opi-agent/src/diagnostic.rs, replacing the single CODE_TOOL_EXECUTION_FAILED collapse for tool-reported causes. resolve_tool_path reports symlink traversal (details.symlink_traversed or equivalent), workspace_relation, and unresolved roots consistently. Non-UTF-8 paths on platforms that expose them produce a clear UnsupportedEncoding diagnostic instead of silent U+FFFD replacement; valid Unicode paths round-trip in user-facing metadata. Windows drive/verbatim-prefix handling is covered by #[cfg(windows)] tests (skipped on Unix). read/ls/find path validation distinguishes NotFound vs NotAFile/NotADirectory vs PermissionDenied in messages and codes; file-content binary/encoding behavior is exercised by 11.3.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "11.1"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Derived from design '## Filesystem Tool Policy' bullets (distinguish not found/not a file/not a directory/permission denied/binary file/unsupported encoding; avoid following symlinks without reporting it; Windows drive prefixes; non-UTF-8) and SC1/SC5.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Filesystem Tool Policy"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Reuses the unified details/path-metadata builder and typed diagnostics carrier from 11.1.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Tool Result Contract"
+        },
+        {
+          "field": "tier",
+          "reason": "Cross-crate: CODE_TOOL_* codes in opi-agent/src/diagnostic.rs + taxonomy in opi-coding-agent/src/tool; workspace tier.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "crate",
+          "reason": "workspace",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No built-in permission popup system.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No remote execution core feature.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No new workflow tools such as todo, plan mode, or sub-agents in core.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No sandbox implementation.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "Phase 11 should not forbid access outside the workspace by default unless an existing policy says so. (## Filesystem Tool Policy)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "The edit tool should prefer clear failure over clever fuzzy behavior unless a future explicit design introduces patch application or fuzzy edits. (## edit)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Removed product read-binary behavior from 11.2 because it belongs to read hardening in 11.3; kept the shared BinaryFile/UnsupportedEncoding taxonomy as substrate.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        }
+      ],
+      "tier": "workspace",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy --workspace --all-targets -- -D warnings",
+          "cargo test --workspace --all-targets",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/tools_read_write_edit_bash.rs",
+          "crates/opi-coding-agent/tests/ls_tool.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-filesystem-error-taxonomy",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Filesystem Tool Policy + #Success Criteria 1,5",
+          "scenario": "Missing paths, file-vs-directory mismatches, permission-denied paths, outside-workspace policy failures, and unresolved workspace roots each produce distinct CODE_TOOL_* diagnostics carried on the result and mirrored into trace. Symlink traversal through resolve_tool_path is reported instead of silently collapsed to outside-workspace.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash filesystem_error_taxonomy_path_failures",
+            "cargo test -p opi-coding-agent --test ls_tool filesystem_error_taxonomy_directory_failures",
+            "git grep -nE 'CODE_TOOL_(PATH_NOT_FOUND|NOT_A_FILE|NOT_A_DIRECTORY|PERMISSION_DENIED|OUTSIDE_WORKSPACE|UNSUPPORTED_ENCODING)' -- crates/opi-agent/src/diagnostic.rs"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/mod.rs resolve_tool_path / validate_workspace_path",
+            "crates/opi-agent/src/agent_loop.rs tool_diagnostic (CODE_TOOL_* emission)"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-windows-drive-prefix-handling",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Filesystem Tool Policy (Windows absolute paths)",
+          "scenario": "On Windows resolve_tool_path handles C:foo, C:\\\\foo, and verbatim \\\\\\\\?\\\\C:\\\\foo prefixes deterministically without leaking the verbatim prefix into the user-facing path string; gated #[cfg(windows)] tests skip on Unix.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash windows_drive_prefix"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/mod.rs resolve_tool_path"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-no-forbid-outside-default",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Filesystem Tool Policy (no forbid by default)",
+          "scenario": "Interactive ReadTool remains AllowOutsideWorkspace (harness.rs run-mode selection); restriction stays in tool selection / mutating opt-in / extension hooks. Guard test pins it.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash read_tool_allow_outside_policy_reads_absolute_outside_path",
+            "git grep -n AllowOutsideWorkspace -- crates/opi-coding-agent/src/harness.rs"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/harness.rs build_tools (ReadTool policy by RunMode)"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-unicode-path-metadata",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Testing Strategy + #Filesystem Tool Policy",
+          "scenario": "Valid Unicode filenames and directories round-trip through path resolution and result metadata without lossy replacement; invalid/non-UTF-8 paths use UnsupportedEncoding only on platforms that expose such paths.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash unicode_path_metadata_round_trips",
+            "cargo test -p opi-coding-agent --test ls_tool unicode_directory_metadata_round_trips"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/mod.rs resolve_tool_path",
+            "crates/opi-coding-agent/src/tool/{read,write,edit,ls}.rs execute"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-coding-agent/src/tool/mod.rs resolve_tool_path / validate_workspace_path",
+        "crates/opi-agent/src/agent_loop.rs tool_diagnostic (CODE_TOOL_* codes)",
+        "crates/opi-agent/src/diagnostic.rs (code definitions)"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "8816e7ad51db9243320222541ce3304909478adb",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-agent/src/diagnostic.rs",
+        "crates/opi-coding-agent/src/tool/**",
+        "crates/opi-coding-agent/tests/**",
+        "Cargo.toml"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "5272f83ddd1a430117145681c909396f8ed5cd49",
+      "evidence": {
+        "Opi-Task": "11.2",
+        "Opi-DoD-SHA256": "010b423af499a8407d9c4df154f4760052b36d7da0caed451d13140cfbaf4ddd",
+        "Opi-Verification": "workspace; fmt + clippy -D warnings (all-targets) + test --workspace --all-targets + test --workspace --doc + doc -D warnings all green",
+        "Opi-Evaluator": "passed (D.2 PASS-WITH-CONCERNS resolved)",
+        "Opi-Acceptance": "phase11-filesystem-error-taxonomy, phase11-windows-drive-prefix-handling, phase11-no-forbid-outside-default, phase11-unicode-path-metadata"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-28T16:49:11.635727+00:00",
+          "attempt": 0,
+          "summary": "Phase B confirmed by user (go on). Task 11.2 -> in_progress. start_commit=8816e7a (11.1 HEAD). baseline_dirty_files captures 7 unrelated deleted docs/superpowers/plans/*.md (not 11.2-owned, leave untouched). Spec hashes verified non-drifting (opi-spec.md + phase11 design unchanged).",
+          "gate_results": {}
+        },
+        {
+          "timestamp": "2026-06-28T17:51:13.905142+00:00",
+          "attempt": 0,
+          "summary": "Phase D complete. All workspace gates green: fmt, clippy -D warnings (all-targets), test --workspace --all-targets, test --workspace --doc, doc -D warnings. D.2 adversarial review (6 dimensions: dod-coverage/correctness/scope-boundaries/scope-gaps/test-quality/wire-redaction) returned 1 FAIL (scope-gaps) + PASS-WITH-CONCERNS. Resolved: find NotFound (BLOCKER - canonicalize_existing_or_nearest swallowed missing scope) + find NotADirectory is_file()->!is_dir(); UnsupportedEncoding variant changed to {omitted_count} and routed through taxonomy (kills dead-variant + U+FFFD latent bug); symlink_traversed case-insensitive compare on Windows (NTFS case-fold false-positive); path/resolved_path/user_path added to CONTENT_SENSITIVE_KEYS (11.8 redaction-safe); read/ls/find PermissionDenied classified + #[cfg(unix)] chmod tests (root-skipped); C:foo/C:\\foo #[cfg(windows)] tests; ls/find top-level unreadable-dir PermissionDenied surfacing. Deferred to 11.7: traversal-level nested-dir PermissionDenied (walker.flatten / recursive read_dir). validate_workspace_path stays pre-existing dead pub API.",
+          "gate_results": {
+            "d2_verdict": "scope-gaps FAIL + 4 PASS-WITH-CONCERNS -> resolved to PASS",
+            "fmt": "pass",
+            "clippy": "pass",
+            "test_workspace_all_targets": "pass",
+            "doctest": "pass",
+            "doc_D_warnings": "pass"
+          }
+        },
+        {
+          "timestamp": "2026-06-28T17:51:13.905142+00:00",
+          "attempt": 0,
+          "summary": "Phase E complete: committed 5272f83 (10 files, +1100/-54). HEAD^=8816e7a=start_commit (11.1). All 4 acceptance scenarios marked met. No C.1a needed (all 10 files within task_owned_paths: diagnostic.rs + tool/** + tests/**).",
+          "gate_results": {
+            "commit": "5272f83",
+            "head_parent_matches_start_commit": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.3",
+      "phase": 11,
+      "title": "read tool hardening",
+      "crate": "opi-coding-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "ReadTool (crates/opi-coding-agent/src/tool/read.rs) enforces stable line-range semantics (1-based user ranges, bounded start/end, clear empty/out-of-range diagnostics), a default line/byte cap with truncation and a truncated marker + omitted-count in details; detects NUL-byte binary files and returns a BinaryFile diagnostic context (not the generic IO error string); rejects invalid UTF-8 file content with a distinct UnsupportedEncoding diagnostic instead of whole-file read_to_string collapse or lossy silent replacement; reports line_count/offset/limit in details; uses taxonomy-keyed stable error messages; returns typed diagnostic/context fields for the agent loop to lift into Phase 7 diagnostics and ToolCallFailed traces in 11.8.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "11.1",
+        "11.2"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Derived from design '## `read`' bullets (line-range; large file truncation; binary file detection; UTF-8 and lossy display; path metadata; stable error messages; JSON/RPC details) and SC1.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#read"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Reuses the truncated field + shared builder (11.1) and the filesystem error taxonomy/diagnostic codes (11.2).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Single crate opi-coding-agent (tool/read.rs + tests).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "crate",
+          "reason": "opi-coding-agent",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No built-in permission popup system.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No IDE project index.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No language server integration.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No automatic formatting on write/edit.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No persistent background bash.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No remote execution core feature.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No new workflow tools such as todo, plan mode, or sub-agents in core.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No sandbox implementation.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "Phase 11 should not forbid access outside the workspace by default unless an existing policy says so. (## Filesystem Tool Policy)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "The edit tool should prefer clear failure over clever fuzzy behavior unless a future explicit design introduces patch application or fuzzy edits. (## edit)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Moved actual trace emission out of read.rs; tools should return structured context while agent_loop performs Phase 7 diagnostic/trace mapping.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Built-in read/write/edit/bash/grep/find/ls/glob work is cli-tool tier, not library tier, per verification-tiers.md cli-tool section.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#cli-tool-tier"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Added the explicit line-range requirement from the phase design and replaced the previous either/or invalid-UTF-8 wording with one deterministic UnsupportedEncoding policy.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#read"
+        }
+      ],
+      "tier": "cli-tool",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": false,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy -p opi-coding-agent --all-targets -- -D warnings",
+          "cargo test -p opi-coding-agent",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc -p opi-coding-agent --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/tools_read_write_edit_bash.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-read-truncation-binary-encoding",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#read + #Success Criteria 1",
+          "scenario": "Reading a selected line range uses stable 1-based range semantics; reading a file exceeding the default cap truncates content and sets both ToolResult.truncated and details.truncated/omitted counts; a NUL-byte file returns a BinaryFile diagnostic context distinct from an IO error; invalid-UTF-8 bytes return UnsupportedEncoding rather than a generic whole-file failure.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash read_tool_line_ranges_are_stable",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash read_tool_truncates_large_file_and_sets_truncated_flag",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash read_tool_detects_binary_file_and_returns_diagnostic_context",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash read_file_rejects_invalid_utf8_with_unsupported_encoding"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/read.rs execute",
+            "crates/opi-coding-agent/src/harness.rs ReadTool registration"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-read-typed-diagnostic-context",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Data Flow + #Success Criteria 6",
+          "scenario": "Binary/encoding/path read failures return typed diagnostic context and stable per-cause codes in ToolResult.diagnostics/details; actual DiagnosticSink and trace linking are owned by 11.8.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash read_tool_returns_typed_diagnostic_context"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/read.rs execute",
+            "opi_agent::agent_loop (11.8 lifts ToolResult diagnostics into Phase 7 traces)"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-coding-agent/src/tool/read.rs execute",
+        "crates/opi-coding-agent/src/harness.rs:1583-1590 (ReadTool registration, policy by RunMode)"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "5272f83ddd1a430117145681c909396f8ed5cd49",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/src/tool/read.rs",
+        "crates/opi-coding-agent/tests/**",
+        "Cargo.toml"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "4bbb4b919471e5542834261313e0a94168435139",
+      "evidence": {
+        "Opi-Task": "11.3",
+        "Opi-DoD-SHA256": "3c2ee9ee8976420139b19a605251a50c75ad77ee3db4095effd42dd13ff1953d",
+        "Opi-Verification": "cli-tool; fmt --all/--check, clippy -p opi-coding-agent and --workspace --all-targets -D warnings, RUSTDOCFLAGS=-D warnings doc -p opi-coding-agent, cargo test -p opi-coding-agent and --workspace --all-targets all green",
+        "Opi-Evaluator": "not-required (adversarial verify workflow: SHIP, no blocker/major; minor hardenings applied)",
+        "Opi-Acceptance": "phase11-read-truncation-binary-encoding, phase11-read-typed-diagnostic-context; 5 acceptance + 1 edge-case execute()-level tests"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-29T03:21:54+00:00",
+          "attempt": 0,
+          "summary": "Phase E complete: committed 4bbb4b9 (read.rs + tools_read_write_edit_bash.rs, +576/-19). HEAD parent 5272f83 = start_commit (11.2 HEAD). Both acceptance scenarios met via execute()-level (production-path) tests. Pre-impl design-stress workflow (5 reviewers) locked D1 accept / D2 revised / D3 accept; post-impl adversarial verify workflow (3 reviewers) returned SHIP with no blocker/major (the lone fix-required was a stale-file misread of the PermissionDenied test). Applied 2 minor hardenings surfaced by verify: offset now floors to 1 (previously reported offset=0 for an offset:0 input) and the limit:0 truncation marker no longer emits a leading blank line; added read_tool_line_range_edge_cases to lock both plus empty-file and offset==total_lines boundaries.",
+          "gate_results": {
+            "commit": "4bbb4b9",
+            "head_parent_matches_start_commit": true,
+            "fmt": "pass",
+            "clippy_crate": "pass",
+            "clippy_workspace": "pass",
+            "test_crate": "pass (50 tests)",
+            "test_workspace_all_targets": "pass",
+            "doc_D_warnings": "pass",
+            "design_stress_workflow": "SHIP (locked D1 accept, D2 revised, D3 accept)",
+            "verify_workflow": "SHIP (no blocker/major)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.4",
+      "phase": 11,
+      "title": "write tool hardening",
+      "crate": "opi-coding-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "WriteTool (crates/opi-coding-agent/src/tool/write.rs) reports create vs overwrite (details.action or existed_before) by probing existence before write; preserves JSON-string content bytes verbatim after UTF-8 decoding, including CRLF and final-newline state (documented and asserted); rejects NUL-containing/binary-like JSON string content before writing with an UnsupportedEncoding diagnostic context; emits bytes-written and (on overwrite) before/after or size-delta audit summary in details; writes to a sibling temp file and renames into place so an interrupted write leaves either full new or prior content (no silent partial writes); surfaces parent-directory errors with directory context; proves the non-interactive mutating safety boundary denies write before execution when --allow-mutating/defaults.allow_mutating_tools is absent; proves write audit metadata crosses at least one public JSON/RPC output boundary rather than existing only in the tool helper test.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "11.1",
+        "11.2"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Derived from design '## `write`' bullets (create vs overwrite; parent directory errors; newline handling; binary content policy; diff or size summary; no silent partial writes; temp-file and rename) and SC3.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#write"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Reuses the shared builder + truncated field (11.1) and the filesystem error taxonomy (11.2).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Single crate opi-coding-agent (tool/write.rs + tests).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "crate",
+          "reason": "opi-coding-agent",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No automatic formatting on write/edit.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No sandbox implementation.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No built-in permission popup system.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No IDE project index.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No language server integration.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No new workflow tools such as todo, plan mode, or sub-agents in core.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Reworded binary/encoding scope because write.content is a JSON string, so arbitrary non-UTF-8 byte input is not representable at this tool boundary.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Built-in read/write/edit/bash/grep/find/ls/glob work is cli-tool tier, not library tier, per verification-tiers.md cli-tool section.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#cli-tool-tier"
+        },
+        {
+          "field": "evaluator_required",
+          "reason": "Write changes mutating-tool safety, destructive-operation auditability, and public output details; risk evaluator is required.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#risk-evaluator-gate"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Closed product-boundary gaps: fixed the ambiguous binary/NUL policy and required RPC/JSON visibility plus non-interactive mutating denial evidence.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        }
+      ],
+      "tier": "cli-tool",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy -p opi-coding-agent --all-targets -- -D warnings",
+          "cargo test -p opi-coding-agent",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc -p opi-coding-agent --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/tools_read_write_edit_bash.rs",
+          "crates/opi-coding-agent/tests/rpc_jsonl.rs",
+          "crates/opi-coding-agent/tests/json_mode.rs",
+          "crates/opi-coding-agent/tests/non_interactive_policy.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-write-create-overwrite-audit",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#write + #Success Criteria 3",
+          "scenario": "Writing to a new path sets details.action='created'; writing again sets action='overwritten' and includes a bytes-written + size-delta/before-after audit summary.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash write_tool_reports_create_then_overwrite",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash write_tool_emits_size_or_diff_audit"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/write.rs execute",
+            "crates/opi-coding-agent/src/harness.rs:1592 WriteTool registration"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-write-atomic-no-partial",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#write (no silent partial writes, temp-file and rename) + #Success Criteria 3",
+          "scenario": "WriteTool writes content to a sibling temp file in the target directory and renames it into place; an interrupted/failed overwrite leaves the prior content unchanged (never a truncated mix), enforced by rename not direct overwrite.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash write_tool_atomic_no_partial_write",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash write_tool_preserves_line_endings"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/write.rs execute"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-write-content-and-parent-policy",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#write",
+          "scenario": "WriteTool documents and tests the JSON-string content boundary, rejects NUL/binary-like content before writing with an UnsupportedEncoding diagnostic (matching the DoD), and surfaces parent-directory conflicts with path context.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash write_tool_content_policy_for_nul_or_binary_like_input",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash write_tool_parent_directory_error_has_context"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/write.rs execute"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-write-audit-visible-output-boundary",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Data Flow + #Tool Result Contract",
+          "scenario": "Write create/overwrite audit details are visible at a public output boundary (RPC or JSON/NDJSON), so destructive-operation auditability is not closed by a tool-only unit test.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test rpc_jsonl write_tool_result_carries_write_audit_details",
+            "cargo test -p opi-coding-agent --test json_mode write_tool_result_carries_write_audit_details"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/write.rs execute",
+            "crates/opi-agent/src/agent_loop.rs ToolExecutionEnd details propagation",
+            "crates/opi-coding-agent/src/runner.rs JSON/NDJSON output"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-write-mutating-policy-boundary",
+          "source": "docs/opi-spec.md#8.4 + verification-tiers.md#cli-tool-tier",
+          "scenario": "In non-interactive mode without --allow-mutating/defaults.allow_mutating_tools, write is denied before execution and is not exposed as an executable mutating tool under the resolved policy.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test non_interactive_policy write_tool_denied_before_execution_without_allow_mutating"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/policy.rs resolve_tool_selection",
+            "crates/opi-coding-agent/src/harness.rs build_tools",
+            "crates/opi-coding-agent/src/runner.rs NonInteractiveHooks before_tool_call mutating deny"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-coding-agent/src/tool/write.rs execute",
+        "crates/opi-coding-agent/src/harness.rs:1592 (WriteTool registration, WorkspaceOnly)"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "4bbb4b919471e5542834261313e0a94168435139",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/src/tool/write.rs",
+        "crates/opi-coding-agent/tests/**",
+        "Cargo.toml"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "3ad20212dc72b1abdbc829c0e9eb953aa6b10bdb",
+      "evidence": {
+        "Opi-Task": "11.4",
+        "Opi-DoD-SHA256": "8b7030532698a4d2e9cda24ea4de3faed03ae1816207a188db8fc9554776f36b",
+        "Opi-Verification": "cli-tool; fmt --all/--check, clippy -p opi-coding-agent and --workspace --all-targets -D warnings, RUSTDOCFLAGS=-D warnings doc -p opi-coding-agent, cargo test -p opi-coding-agent and --workspace --all-targets (0 failures) all green",
+        "Opi-Evaluator": "passed (adversarial verify: 2 reviewers SHIP, no blocker/major)",
+        "Opi-Acceptance": "phase11-write-create-overwrite-audit, phase11-write-atomic-no-partial, phase11-write-content-and-parent-policy, phase11-write-audit-visible-output-boundary, phase11-write-mutating-policy-boundary"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-29T07:26:40.915432+00:00",
+          "attempt": 0,
+          "summary": "Phase B confirmed by user (go on). Task 11.4 -> in_progress. start_commit=4bbb4b9 (11.3 HEAD). baseline_dirty_files captures 7 unrelated deleted docs/superpowers/plans/*.md (not 11.4-owned, leave untouched). Spec hashes verified non-drifting (opi-spec.md + phase11 design unchanged).",
+          "gate_results": {}
+        },
+        {
+          "timestamp": "2026-06-29T08:09:23.801398+00:00",
+          "attempt": 0,
+          "summary": "Phase E complete: committed 3ad2021 (write.rs + 4 test files, +559/-13). HEAD parent 4bbb4b9 = start_commit (11.3 HEAD). All 5 acceptance scenarios met. Design-stress (5 reviewers) locked D1-D5 + revised D2 (temp cleanup on every error path, structural guard), D4 (explicit first_file_ancestor probe, no ErrorKind classification). Post-impl adversarial verify (2 reviewers: correctness + tests/scope/boundary) returned SHIP, no blocker/major. All cli-tool gates green; workspace clippy + --all-targets test also green (0 failures).",
+          "gate_results": {
+            "commit": "3ad2021",
+            "head_parent_matches_start_commit": true,
+            "fmt": "pass",
+            "clippy_crate": "pass",
+            "clippy_workspace": "pass",
+            "test_crate": "pass (exit 0, 0 failures)",
+            "test_workspace_all_targets": "pass (exit 0, 0 failures)",
+            "doc_D_warnings": "pass",
+            "d2_verdict": "SHIP (2 reviewers, no blocker/major)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.5",
+      "phase": 11,
+      "title": "edit tool hardening",
+      "crate": "opi-coding-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "EditTool (crates/opi-coding-agent/src/tool/edit.rs) returns a rich exact-match failure message naming the file and the attempted old_string (or context/byte offset) on not-found; documents and surfaces multiple-match behavior in details (no silent first-occurrence-only replacement); preserves CRLF/LF byte-for-byte and final-newline state (asserted); returns consistent before/after diff-preview metadata for UI/JSON/RPC rendering; verifies the ratatui diff snapshot surface for changed-file rendering without auto-accepting snapshots; rejects or bounds edits on oversized files with a guardrail reason; asserts a no-fuzzy pin (a near-miss old_string still fails) backed by a Rust guard against levenshtein/edit_distance/fuzzy symbols; proves the non-interactive mutating safety boundary denies edit before execution when --allow-mutating/defaults.allow_mutating_tools is absent.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "11.1",
+        "11.2"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Derived from design '## `edit`' bullets (exact-match failure diagnostics; multiple-match behavior; CRLF/LF preservation; final newline preservation; conflict messages; diff preview consistency; large-file guardrails; prefer clear failure over fuzzy) and SC2.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#edit"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Reuses the shared builder + truncated field (11.1) and the filesystem error taxonomy (11.2).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Single crate opi-coding-agent (tool/edit.rs + tests).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "crate",
+          "reason": "opi-coding-agent",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No automatic formatting on write/edit.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No new workflow tools such as todo, plan mode, or sub-agents in core.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No sandbox implementation.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No built-in permission popup system.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "The edit tool should prefer clear failure over clever fuzzy behavior unless a future explicit design introduces patch application or fuzzy edits. (## edit)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Added explicit diff-preview consistency coverage from the Phase 11 edit workstream.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Edit diff preview acceptance includes RPC/agent-loop details propagation tests.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Edit diff preview acceptance may require validating details propagation at the agent loop boundary.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Edit diff preview acceptance names interactive diff rendering as a production call site.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Built-in read/write/edit/bash/grep/find/ls/glob work is cli-tool tier, not library tier, per verification-tiers.md cli-tool section.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#cli-tool-tier"
+        },
+        {
+          "field": "evaluator_required",
+          "reason": "Edit changes mutating-tool safety, diff metadata, and output contracts; risk evaluator is required.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#risk-evaluator-gate"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Removed unanchored opi-agent ownership from 11.5 and added only the diff snapshot paths required by the snapshot acceptance scenario.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        },
+        {
+          "field": "verification.snapshot_tests",
+          "reason": "Phase 11 Testing Strategy requires snapshot coverage for diff/TUI rendering touched by edit diff-preview work.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Testing Strategy"
+        }
+      ],
+      "tier": "cli-tool",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy -p opi-coding-agent --all-targets -- -D warnings",
+          "cargo test -p opi-coding-agent",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc -p opi-coding-agent --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/tools_read_write_edit_bash.rs",
+          "crates/opi-coding-agent/tests/rpc_jsonl.rs",
+          "crates/opi-coding-agent/tests/non_interactive_policy.rs"
+        ],
+        "snapshot_tests": [
+          "cargo test -p opi-tui --test diff_view_snapshots phase11_edit_diff_preview_metadata_snapshot"
+        ],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-edit-crlf-final-newline",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#edit (CRLF/LF preservation, final newline) + #Success Criteria 2",
+          "scenario": "Editing a CRLF-terminated file preserves CRLF byte-for-byte in matched and unmatched regions; an LF file stays LF; a file with no trailing newline stays without one and vice versa.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash edit_crlf_preservation",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash edit_final_newline_preservation"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/edit.rs execute",
+            "crates/opi-coding-agent/src/interactive.rs:195-207 diff rendering"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-edit-conflict-and-no-fuzzy",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#edit (exact-match failure, multiple-match, no fuzzy) + #Success Criteria 2",
+          "scenario": "A failed exact-match returns is_error with a message naming the file and attempted old_string/context; multiple occurrences are surfaced in details (not silent); a near-miss old_string still fails (no fuzzy); a grep guard blocks levenshtein/edit_distance/fuzzy symbols in edit.rs.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash edit_not_found_diagnostic_richness",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash edit_multiple_match_behavior",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash edit_no_fuzzy_near_miss_fails",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash edit_no_fuzzy_symbols_guard"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/edit.rs execute"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-edit-diff-preview-consistency",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#edit + #Tool Result Contract",
+          "scenario": "A successful edit returns stable before/after or diff-preview metadata that the interactive diff renderer and JSON/RPC output can consume consistently without re-reading unrelated file state; the changed-file diff snapshot surface is explicitly reviewed.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash edit_diff_preview_metadata_consistent",
+            "cargo test -p opi-coding-agent --test rpc_jsonl edit_tool_result_carries_diff_preview_details",
+            "cargo test -p opi-tui --test diff_view_snapshots phase11_edit_diff_preview_metadata_snapshot"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/edit.rs execute",
+            "crates/opi-coding-agent/src/interactive.rs diff rendering",
+            "crates/opi-agent/src/agent_loop.rs ToolExecutionEnd details propagation",
+            "crates/opi-tui diff view rendering"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-edit-mutating-policy-boundary",
+          "source": "docs/opi-spec.md#8.4 + verification-tiers.md#cli-tool-tier",
+          "scenario": "In non-interactive mode without --allow-mutating/defaults.allow_mutating_tools, edit is denied before execution and is not exposed as an executable mutating tool under the resolved policy.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test non_interactive_policy edit_tool_denied_before_execution_without_allow_mutating"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/policy.rs resolve_tool_selection",
+            "crates/opi-coding-agent/src/harness.rs build_tools",
+            "crates/opi-coding-agent/src/runner.rs NonInteractiveHooks before_tool_call mutating deny"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-coding-agent/src/tool/edit.rs execute",
+        "crates/opi-coding-agent/src/harness.rs:1596 (EditTool registration)",
+        "crates/opi-coding-agent/src/interactive.rs:195-207 (diff rendering)"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "3ad20212dc72b1abdbc829c0e9eb953aa6b10bdb",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/src/tool/edit.rs",
+        "crates/opi-coding-agent/src/interactive.rs",
+        "crates/opi-coding-agent/tests/**",
+        "crates/opi-tui/tests/diff_view_snapshots.rs",
+        "crates/opi-tui/tests/snapshots/diff_view_snapshots__*.snap",
+        "Cargo.toml"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "4e7e4c926bf1b95f7b49dafb11c7efea6cfd324e",
+      "evidence": {
+        "Opi-Task": "11.5",
+        "Opi-DoD-SHA256": "c898583ce9551605aa8e872df38fcea80d34ec29b014892071638199370b2820",
+        "Opi-Verification": "cli-tool; fmt --all/--check, clippy -p opi-coding-agent and -p opi-tui and --workspace --all-targets -D warnings, RUSTDOCFLAGS=-D warnings doc, cargo test -p opi-coding-agent (0 failures) + opi-tui snapshot suite, workspace doctest all green",
+        "Opi-Evaluator": "passed (5-reviewer adversarial verify workflow: all SHIP, 0 blocker/major)",
+        "Opi-Acceptance": "phase11-edit-crlf-final-newline, phase11-edit-conflict-and-no-fuzzy, phase11-edit-diff-preview-consistency, phase11-edit-mutating-policy-boundary"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-29T08:31:24.222999+00:00",
+          "attempt": 0,
+          "summary": "Phase B confirmed by user (go on). Task 11.5 -> in_progress. start_commit=3ad2021 (11.4 HEAD). baseline_dirty_files captures 7 unrelated deleted docs/superpowers/plans/*.md (not 11.5-owned, leave untouched). Spec hashes verified non-drifting (opi-spec.md + phase11 design unchanged).",
+          "gate_results": {}
+        },
+        {
+          "timestamp": "2026-06-29T09:31:17.130224+00:00",
+          "attempt": 0,
+          "summary": "Phase E complete: committed 4e7e4c9 (edit.rs + 4 test files + 1 net-new snapshot, +973/-26). HEAD parent 3ad2021 = start_commit (11.4 HEAD). All 4 acceptance scenarios met. Design-stress workflow (4 reviewers, REVISE) drove the key revisions: atomic temp+rename ADOPTED (write.rs standard), empty/no-op old_string rejected pre-IO, metadata-first oversized guard, is_dir->NotAFile probe, before/after 64KiB truncation, capped sample_offsets, char-safe snippet, BOM/CRLF-boundary tests, as_str() type pin, concretely-named denial test. Invariant resolution: edit-semantic errors carry cause in diagnostics[].context with details=None (honoring the 11.1/11.2 substrate invariant pinned by edit_tool_no_diff_on_error), not in details. Post-impl adversarial verify workflow (5 reviewers) all SHIP, 0 blocker/major; added 2 boundary pins (exactly-1MiB accepted, truncated-flags absent for small files). All cli-tool + workspace gates green.",
+          "gate_results": {
+            "commit": "4e7e4c9",
+            "head_parent_matches_start_commit": true,
+            "fmt": "pass",
+            "clippy_coding_agent": "pass",
+            "clippy_tui": "pass",
+            "clippy_workspace": "pass",
+            "test_coding_agent": "pass (0 failures)",
+            "test_tui_snapshots": "pass (11)",
+            "doctest": "pass",
+            "doc_D_warnings": "pass",
+            "d2_verdict": "SHIP (5 reviewers, 0 blocker/major)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.6",
+      "phase": 11,
+      "title": "bash tool hardening",
+      "crate": "opi-coding-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "BashTool (crates/opi-coding-agent/src/tool/bash.rs) caps stdout/stderr at a documented limit, sets ToolResult.truncated and details.truncated, and exposes a full-output reference; fixes the cancel path (bash.rs:174-178) so cancellation reports cancelled=true and timed_out=false, while timeout reports timed_out=true and cancelled=false; success, timeout, cancellation, and nonzero-exit results all use the stable operation metadata keys command, cwd, workspace_root, shell, exit_code (nullable when cancelled before process exit), timed_out, cancelled, truncated, and full_output reference when applicable; reports environment handling policy in details without dumping inherited environment values, and a test asserts a sentinel secret in the parent env is not leaked by diagnostics/details unless the command itself deliberately prints it; pins exit-code, cwd capture, and platform-gated Windows cmd / Unix sh shell selection; asserts mutating + Sequential classification; proves the non-interactive mutating safety boundary denies bash before execution when --allow-mutating/defaults.allow_mutating_tools is absent; a Rust guard blocks any background-shell/pty/session-pool type.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "11.1"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Derived from design '## `bash`' bullets (timeout/cancellation; stdout/stderr truncation; full-output path; cwd/env reporting; exit code; shell selection per platform; no secret leakage; mutating classification; sequential mode) and SC4/SC7.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#bash"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Reuses the shared builder + truncated field (11.1); does not require the fs taxonomy.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Single crate opi-coding-agent (tool/bash.rs + tests).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "crate",
+          "reason": "opi-coding-agent",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No built-in permission popup system.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No persistent background bash.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No remote execution core feature.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No new workflow tools such as todo, plan mode, or sub-agents in core.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No sandbox implementation.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "Phase 11 must not add persistent background shells. (## bash)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Narrowed secret-leak requirement to diagnostics/details. A shell tool cannot prevent a user command from deliberately printing an environment variable.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Built-in read/write/edit/bash/grep/find/ls/glob work is cli-tool tier, not library tier, per verification-tiers.md cli-tool section.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#cli-tool-tier"
+        },
+        {
+          "field": "evaluator_required",
+          "reason": "Bash changes cancellation, timeout, shell execution, secret-redaction, mutating-tool safety, and sequential scheduling contracts; risk evaluator is required.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#risk-evaluator-gate"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Aligned bash success/timeout/cancel details to one stable key set and split shell-selection assertions into cfg-gated Windows/Unix tests.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "crates/opi-coding-agent/src/tool/mod.rs: 11.6 re-exports bash::MAX_BASH_OUTPUT_BYTES alongside BashTool (pub use bash::{BashTool, MAX_BASH_OUTPUT_BYTES}) so the truncation tests can import the cap constant and track it (Lens 4: tests compute oversized input as CAP+N rather than a hardcoded byte count). One-line re-export addition; no other mod.rs change.",
+          "source": "Phase C (C.1a ownership expansion) 2026-06-29; phase11-11.6-bash-design-stress"
+        }
+      ],
+      "tier": "cli-tool",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy -p opi-coding-agent --all-targets -- -D warnings",
+          "cargo test -p opi-coding-agent",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc -p opi-coding-agent --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/tools_read_write_edit_bash.rs",
+          "crates/opi-coding-agent/tests/non_interactive_policy.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-bash-truncation-and-cancel-fix",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#bash (truncation, cancellation) + #Success Criteria 4",
+          "scenario": "Bash output beyond a documented cap is truncated with details.truncated + a full-output reference while still returning exit_code/cwd/workspace_root/shell; a CancellationToken cancel reports cancelled=true and timed_out=false, while a timeout reports timed_out=true and cancelled=false using the same stable operation metadata key set.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_tool_output_truncation",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_tool_timeout_reports_timed_out_not_cancelled",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_tool_cancellation_reports_cancelled_not_timed_out",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_cancel_timeout_details_contract"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/bash.rs execute",
+            "crates/opi-coding-agent/src/harness.rs:1599 BashTool registration"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-bash-no-secret-leak-and-shell",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#bash (env reporting, no secret leakage, shell selection, exit code) + #Success Criteria 4,7",
+          "scenario": "details report environment handling policy without dumping inherited env values; a sentinel secret in the parent env is absent from diagnostics/details unless the command deliberately prints it; on Windows the command runs under cmd /C and under Unix sh -c through cfg-gated assertions; a nonzero exit sets exit_code and is_error; bash stays mutating+Sequential; a Rust guard blocks background-shell/pty/session-pool symbols.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_tool_no_secret_leakage_in_diagnostics_and_env_reporting",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_tool_exit_code_and_cwd_capture",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_tool_unix_shell_selection",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_tool_windows_shell_selection",
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash bash_tool_no_background_shell_symbols_guard"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/bash.rs execute",
+            "crates/opi-coding-agent/src/policy.rs is_mutating_tool",
+            "crates/opi-coding-agent/src/runner.rs NonInteractiveHooks before_tool_call mutating deny"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-bash-mutating-policy-boundary",
+          "source": "docs/opi-spec.md#8.4 + verification-tiers.md#cli-tool-tier",
+          "scenario": "In non-interactive mode without --allow-mutating/defaults.allow_mutating_tools, bash is denied before execution and is not exposed as an executable mutating tool under the resolved policy.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test non_interactive_policy bash_tool_denied_before_execution_without_allow_mutating"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/policy.rs resolve_tool_selection",
+            "crates/opi-coding-agent/src/harness.rs build_tools",
+            "crates/opi-coding-agent/src/runner.rs NonInteractiveHooks before_tool_call mutating deny"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-coding-agent/src/tool/bash.rs execute",
+        "crates/opi-coding-agent/src/harness.rs:1599 (BashTool registration)",
+        "crates/opi-coding-agent/src/policy.rs:7-9 (is_mutating_tool)"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "4e7e4c926bf1b95f7b49dafb11c7efea6cfd324e",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/src/tool/bash.rs",
+        "crates/opi-coding-agent/tests/**",
+        "Cargo.toml",
+        "crates/opi-coding-agent/src/tool/mod.rs"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "f06e76b9ee0f7229eef15a0789233c4f8d426e79",
+      "evidence": {
+        "Opi-Task": "11.6",
+        "Opi-DoD-SHA256": "1196d3ca3c6433077bc432a60ac46812465f978b55870f0ab96d307924a965d3",
+        "Opi-Verification": "cli-tool; fmt --check --all, clippy -p opi-coding-agent and --workspace --all-targets -D warnings, RUSTDOCFLAGS=-D warnings doc -p opi-coding-agent, cargo test -p opi-coding-agent and --workspace --all-targets (0 failures), workspace doctest all green",
+        "Opi-Evaluator": "passed (D.2 4-reviewer adversarial verify: 3 SHIP + 1 FIX; FIX blocker StreamCapture exact-fit-then-overflow byte-drop resolved via ensure_spill-seeds-preview + 2 regression unit tests)",
+        "Opi-Acceptance": "phase11-bash-truncation-and-cancel-fix, phase11-bash-no-secret-leak-and-shell, phase11-bash-mutating-policy-boundary"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-29T12:21:12.829457+00:00",
+          "attempt": 0,
+          "summary": "Phase B confirmed by user (go). Task 11.6 -> in_progress. start_commit=4e7e4c9 (11.5 HEAD). baseline_dirty_files captures 7 unrelated deleted docs/superpowers/plans/*.md (not 11.6-owned, leave untouched). Spec hashes verified non-drifting (opi-spec.md + phase11 design unchanged).",
+          "gate_results": {}
+        },
+        {
+          "timestamp": "2026-06-29T14:02:46.643814+00:00",
+          "attempt": 0,
+          "summary": "Phase E complete: committed f06e76b (bash.rs + mod.rs + 3 test files, +1070/-80). HEAD parent 4e7e4c9 = start_commit (11.5 HEAD). All 3 acceptance scenarios met. Design-stress workflow (4 reviewers, all REVISE) locked: Option A concurrent drain (tokio::join!, no Arc/Mutex) with COMPLETE full_output via lazy OS-temp spill; structured env token {inheritance,values_included:false} injected in bash.rs; rename existing bash denial test (no duplicate); rpc_jsonl cross-boundary truncation parity test; no-tokio::spawn source guard. D.2 adversarial verify (4 reviewers) returned 3 SHIP + 1 FIX: the FIX was a BLOCKER (StreamCapture ELSE branch dropped the first cap bytes when preview froze at exactly cap via a fitting chunk then a later chunk overflowed — spill not seeded). Resolved by moving preview-seeding into ensure_spill (single seeding point) + 2 regression unit tests (exact-fit-then-overflow, many-small-exact-fit-then-overflow) covering the previously-uncovered chunk sequence. Applied minor hardenings surfaced by verify: timeout/cancel full_output=None assertions, merged-stream compile-time precondition (const assert), write_merged_full_output explicit drop(file). All cli-tool + workspace gates green.",
+          "gate_results": {
+            "commit": "f06e76b",
+            "head_parent_matches_start_commit": true,
+            "fmt": "pass",
+            "clippy_crate": "pass",
+            "clippy_workspace": "pass",
+            "test_crate": "pass (0 failures)",
+            "test_workspace_all_targets": "pass (0 failures)",
+            "doctest": "pass",
+            "doc_D_warnings": "pass",
+            "d2_verdict": "3 SHIP + 1 FIX (blocker resolved + regression-tested)",
+            "task_owned_dirty_remaining": "none (7 baseline plan deletions untouched)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.7",
+      "phase": 11,
+      "title": "Read-only navigation tools (grep/find/ls/glob) consistency",
+      "crate": "opi-coding-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "grep/find/ls/glob share one ignore::WalkBuilder configuration (ls stops hand-rolling its Gitignore and honors nested .gitignore files like the other three); all four emit results in lexicographic relative-path order, including valid Unicode filenames; grep/find/glob gain a documented result cap with truncation/omitted-count; a zero-match query returns a clear non-empty no-matches message (not the empty string); hidden-file defaults, regex/glob parse errors, and symlink behavior are reported or consistent across all four; the CancellationToken is honored mid-walk (the _signal parameter is polled, not ignored); performance guardrails bound file size / result count. glob remains an opi convenience (not pi-parity in docs).",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "11.1",
+        "11.2"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Derived from design '## Read-Only Navigation Tools' bullets (ignore-file; hidden; sorting; result limits; symlink; parse errors; empty-result messages; workspace relation; performance guardrails) and SC5.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Read-Only Navigation Tools"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Reuses the shared builder + truncated field + workspace_relation (11.1) and the error taxonomy (11.2).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Single crate opi-coding-agent (tool/{grep,find,ls,glob,mod}.rs + tests).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "crate",
+          "reason": "opi-coding-agent",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No built-in permission popup system.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No IDE project index.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No language server integration.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No new workflow tools such as todo, plan mode, or sub-agents in core.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No sandbox implementation.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "Phase 11 should not forbid access outside the workspace by default unless an existing policy says so. (## Filesystem Tool Policy)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "glob remains an opi convenience. (## Relationship to pi)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Added valid Unicode filename coverage from the Phase 11 testing strategy.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Built-in read/write/edit/bash/grep/find/ls/glob work is cli-tool tier, not library tier, per verification-tiers.md cli-tool section.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#cli-tool-tier"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Added hidden-file defaults and regex/glob parse-error coverage from the Read-Only Navigation Tools section; split an invalid multi-target cargo command into explicit commands.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Read-Only Navigation Tools"
+        }
+      ],
+      "tier": "cli-tool",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": false,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy -p opi-coding-agent --all-targets -- -D warnings",
+          "cargo test -p opi-coding-agent",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc -p opi-coding-agent --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/tools_glob_grep.rs",
+          "crates/opi-coding-agent/tests/find_tool.rs",
+          "crates/opi-coding-agent/tests/ls_tool.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-nav-consistency",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Read-Only Navigation Tools + #Success Criteria 5",
+          "scenario": "All four nav tools honor the same ignore config (incl. nested .gitignore), emit lexicographic order including valid Unicode filenames, cap large result sets with truncation, return a non-empty no-matches message on zero results, report hidden/default and parse-error behavior consistently, and report/keep consistent symlink behavior; ls no longer diverges via hand-rolled Gitignore.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_glob_grep nested_ignore_consistent_across_nav_tools",
+            "cargo test -p opi-coding-agent --test find_tool nested_ignore_consistent_across_nav_tools",
+            "cargo test -p opi-coding-agent --test ls_tool nested_ignore_consistent_across_nav_tools",
+            "cargo test -p opi-coding-agent --test tools_glob_grep nav_tools_emit_sorted_results",
+            "cargo test -p opi-coding-agent --test tools_glob_grep nav_tools_cap_large_result_sets",
+            "cargo test -p opi-coding-agent --test tools_glob_grep nav_tools_empty_result_message",
+            "cargo test -p opi-coding-agent --test tools_glob_grep nav_tools_parse_errors_are_structured",
+            "cargo test -p opi-coding-agent --test ls_tool nav_tools_symlink_behavior_reported",
+            "cargo test -p opi-coding-agent --test tools_glob_grep nav_tools_symlink_behavior_reported",
+            "cargo test -p opi-coding-agent --test tools_glob_grep nav_tools_unicode_paths_sorted"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/harness.rs Grep/Find/Ls/Glob registration",
+            "crates/opi-agent/src/agent_loop.rs Tool::execute dispatch"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-nav-cancellation-perf",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Read-Only Navigation Tools (performance guardrails) + #Testing Strategy (large search cancellation)",
+          "scenario": "Firing the CancellationToken aborts a large-tree walk in bounded time (the _signal parameter is polled, not ignored); file-size / result-count guardrails bound output.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_glob_grep nav_tools_honour_cancellation_token"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/tool/{grep,find,glob,ls}.rs (CancellationToken handling)"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-coding-agent/src/harness.rs:1603-1615 (Grep/Find/Ls/Glob registration)",
+        "crates/opi-agent/src/agent_loop.rs Tool::execute dispatch"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "f06e76b9ee0f7229eef15a0789233c4f8d426e79",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/src/tool/grep.rs",
+        "crates/opi-coding-agent/src/tool/find.rs",
+        "crates/opi-coding-agent/src/tool/ls.rs",
+        "crates/opi-coding-agent/src/tool/glob.rs",
+        "crates/opi-coding-agent/src/tool/mod.rs",
+        "crates/opi-coding-agent/tests/**",
+        "Cargo.toml"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "58a7b63e6334e107f9bb56ddd211d1076ce8af71",
+      "evidence": {
+        "Opi-Task": "11.7",
+        "Opi-DoD-SHA256": "b70e009d9724858e3f879d2919757e790961e155f4afd416ad0b9ef75669e685",
+        "Opi-Verification": "cli-tool; fmt --check, clippy -p opi-coding-agent and --workspace --all-targets -D warnings, RUSTDOCFLAGS=-D warnings doc -p opi-coding-agent, cargo test -p opi-coding-agent and --workspace --all-targets (0 failures), workspace doctest all green",
+        "Opi-Evaluator": "not-required (design-stress workflow 3 ACCEPT / 2 REVISE locked D1-D6; adversarial verify 2 SHIP + 1 FIX resolved: find zero-match message pinned + grep cancellation test added)",
+        "Opi-Acceptance": "phase11-nav-consistency, phase11-nav-cancellation-perf"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-29T17:32:29.700306+00:00",
+          "attempt": 0,
+          "summary": "Phase B confirmed by user (go). Task 11.7 -> in_progress. start_commit=f06e76b (11.6 HEAD). baseline_dirty_files captures 7 unrelated deleted docs/superpowers/plans/*.md (not 11.7-owned, leave untouched). Spec hashes verified non-drifting (opi-spec.md + phase11 design unchanged).",
+          "gate_results": {}
+        },
+        {
+          "timestamp": "2026-06-30T00:54:23.383574+00:00",
+          "attempt": 0,
+          "summary": "Phase D complete. All cli-tool + workspace gates green: fmt --check, clippy -p opi-coding-agent and --workspace --all-targets -D warnings, RUSTDOCFLAGS=-D warnings doc -p opi-coding-agent, test -p opi-coding-agent (57 nav tests across tools_glob_grep/find_tool/ls_tool) and --workspace --all-targets (0 failures), workspace doctest. Design-stress workflow (5 reviewers) returned 3 ACCEPT + 2 REVISE (no D1-D6 overturned); REVISEs locked: ls also polls _signal; strengthen ls_tool_respects_max_depth (max_depth+1 boundary 0/1/2/3); deterministic pre-cancel cancellation test (no timer); nested_ignore uses NESTED-only .gitignore fixture; grep sorts by (relative,line_no) and stats before read; cap pins exactly-cap and cap+1; ls keeps DEFAULT_MAX_ENTRIES separate; ls uses file_type().is_dir() + keeps PermissionDenied probe + non-UTF8 counting + details.path=user arg. Adversarial verify (3 reviewers) returned 2 SHIP + 1 FIX: find had no test locking its non-empty zero-match message (false-green). Resolved by strengthening+renaming find_tool_no_match_returns_empty -> find_tool_no_match_returns_message; also closed the grep-cancellation coverage gap with grep_tool_honours_cancellation_token. All edits confined to owned paths (tool/{grep,find,glob,ls,mod}.rs + 3 test files); nav details stay serde_json::json! (guard green); no opi-agent edits, no new CODE_TOOL_* codes. C.1a: none needed.",
+          "gate_results": {
+            "fmt": "pass",
+            "clippy_crate": "pass",
+            "clippy_workspace": "pass",
+            "doc_D_warnings": "pass",
+            "test_crate": "pass",
+            "test_workspace_all_targets": "pass (0 failures)",
+            "doctest": "pass",
+            "design_stress": "3 ACCEPT / 2 REVISE (locked D1-D6)",
+            "d2_verdict": "2 SHIP + 1 FIX (resolved: find zero-match + grep cancel gap)"
+          }
+        },
+        {
+          "timestamp": "2026-06-30T00:54:23.383574+00:00",
+          "attempt": 0,
+          "summary": "Phase E complete: committed 58a7b63 (8 files, +1014/-177). HEAD parent f06e76b = start_commit (11.6 HEAD). Both acceptance scenarios marked met (phase11-nav-consistency, phase11-nav-cancellation-perf). 7 baseline plan-doc deletions untouched/unstaged.",
+          "gate_results": {
+            "commit": "58a7b63",
+            "head_parent_matches_start_commit": true,
+            "task_owned_dirty_remaining": "none (7 baseline plan deletions untouched)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.8",
+      "phase": 11,
+      "title": "Agent diagnostics/trace integration, JSON/RPC shape, and Phase 8 termination",
+      "crate": "workspace",
+      "parent_spec_row": null,
+      "definition_of_done": "ToolResult carries a typed diagnostics field whose tool-owned structured failure context (path, command, exit_code, truncated/cancelled/timed_out) is lifted by agent_loop into Diagnostic details and DiagnosticLinked trace records (not just tool_name). JSON/NDJSON and RPC output paths preserve ToolResult details, diagnostics, is_error, and truncated shape for tool success, failure, and edit diff-preview results. The MaxTurnsExceeded termination guard emits a CODE_AGENT_MAX_TURNS_EXCEEDED warning diagnostic + trace and returns AgentError::MaxTurnsExceeded (currently dead classification code at diagnostic.rs:467-474). Tool scheduling/ExecutionMode regression guard pins all eight built-in tools modes in one test and verifies Phase 8 sequential-batch behavior. Tool visibility and execution policy stay aligned: non-interactive mode without --allow-mutating/defaults.allow_mutating_tools does not advertise write/edit/bash as executable built-ins and still denies attempted mutating tool execution before the tool body runs.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "11.1",
+        "11.2",
+        "11.5"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Derived from design '## Data Flow', '## Error Handling' (do not return successful-looking content for failed operations), SC6 (Phase 7 traces), SC7 (Phase 8 scheduling). is_error wire-leak and MaxTurnsExceeded dead-code are init-discovered residuals.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Data Flow"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Reuses the typed diagnostics carrier (11.1) and per-cause CODE_TOOL_* codes (11.2).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Cross-crate: opi-agent (agent_loop/tool/diagnostic/trace) + opi-ai provider converters (anthropic/openai_chat/openai_responses/gemini); workspace tier.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "crate",
+          "reason": "workspace",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No built-in permission popup system.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No persistent background bash.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No new workflow tools such as todo, plan mode, or sub-agents in core.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No sandbox implementation.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "is_error propagation must stay a wire-format correctness fix, not introduce Phase 12 provider-breadth (OAuth, image generation, catalog) or a permission-gate surface.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Phase 12 Handoff"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Clarified provider scope: some providers have no native is_error field, so the task must preserve failed-result semantics through each adapter-compatible wire shape rather than assert a nonexistent common field.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Provider wire acceptance requires opi-ai provider request-body regression tests.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Provider wire acceptance includes Bedrock status regression alongside Anthropic/OpenAI/Gemini adapters.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "Scheduling regression verification pins built-in tool execution modes in opi-coding-agent tests.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "title",
+          "reason": "Split provider wire-format work out of former monolithic 11.8; this task now owns opi-agent/runtime/JSON-RPC/visibility contracts only.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        },
+        {
+          "field": "depends_on",
+          "reason": "11.8 consumes edit diff-preview details from 11.5 for JSON/RPC shape and trace propagation, so 11.5 is now an explicit dependency.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        },
+        {
+          "field": "commit_type",
+          "reason": "After splitting provider bugfix work, the remaining agent diagnostics/JSON-RPC integration is additive runtime contract work.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        },
+        {
+          "field": "task_owned_paths",
+          "reason": "crates/opi-coding-agent/src/tool/bash.rs: Phase 11.8 S1 blocker resolution — bash.rs puts command/exit_code/cancelled/timed_out/truncated into ToolResult.details but never pushes a ToolDiagnostic, so the agent_loop D1 lift (final_result.diagnostics only) leaves bash failures with no per-cause diagnostic/trace. bash must push a ToolDiagnostic on is_error branches so the uniform lift surfaces its operation context (design-stress dod-coverage blocker, resolved a-prime).",
+          "source": "Phase C (C.1a ownership expansion) 2026-06-30; phase11-11.8-design-stress blocker"
+        }
+      ],
+      "tier": "workspace",
+      "commit_type": "feat",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy --workspace --all-targets -- -D warnings",
+          "cargo test --workspace --all-targets",
+          "RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-agent/tests/trace_envelope.rs",
+          "crates/opi-agent/tests/agent_loop_semantics.rs",
+          "crates/opi-agent/tests/diagnostics_runtime.rs",
+          "crates/opi-coding-agent/tests/rpc_jsonl.rs",
+          "crates/opi-coding-agent/tests/json_mode.rs",
+          "crates/opi-coding-agent/tests/tool_selection.rs",
+          "crates/opi-coding-agent/tests/non_interactive_policy.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-tool-diagnostic-carries-details",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Data Flow + #Success Criteria 6",
+          "scenario": "A tool failure diagnostic and DiagnosticLinked trace record carry the tool-owned structured context (tool_name plus path for read/write/edit, command/exit_code/truncated/cancelled/timed_out for bash), not tool_name alone; the per-cause CODE_TOOL_* code from 11.2 surfaces.",
+          "verification": [
+            "cargo test -p opi-agent --test trace_envelope phase7_tool_error_result_emits_failed_trace_and_diagnostic",
+            "cargo test -p opi-coding-agent --test rpc_jsonl tool_failure_trace_carries_tool_details"
+          ],
+          "production_call_sites": [
+            "crates/opi-agent/src/agent_loop.rs:621-759 execute_tool + tool_diagnostic:880-883"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-maxturns-termination",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Success Criteria 7 (Phase 8 termination contract)",
+          "scenario": "When max_turns is exhausted with tools still pending, the loop emits a CODE_AGENT_MAX_TURNS_EXCEEDED warning diagnostic + trace and returns AgentError::MaxTurnsExceeded, rather than silently returning Ok(messages).",
+          "verification": [
+            "cargo test -p opi-agent --test diagnostics_runtime max_turns_exhaustion_emits_warning_diagnostic_and_error"
+          ],
+          "production_call_sites": [
+            "crates/opi-agent/src/agent_loop.rs:63,513-514 (currently falls through to Ok)",
+            "crates/opi-agent/src/diagnostic.rs:467-474 (classification)"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-scheduling-regression",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Success Criteria 7",
+          "scenario": "A single test pins ExecutionMode for all eight built-in tools (write/edit/bash Sequential; read/grep/find/ls/glob Parallel) so batch_is_sequential ordering guarantees hold.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tools_read_write_edit_bash all_tools_execution_mode_contract",
+            "cargo test -p opi-agent --test agent_loop_semantics phase8_tool_scheduling_contract"
+          ],
+          "production_call_sites": [
+            "crates/opi-agent/src/agent_loop.rs:171-311 batch_is_sequential / join_all"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-json-rpc-tool-result-shape",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Testing Strategy (JSON/RPC) + #Tool Result Contract",
+          "scenario": "JSON/NDJSON and RPC outputs expose tool result details, diagnostics, is_error, and truncated consistently for success, failure, cancellation, and edit diff-preview paths.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test rpc_jsonl tool_result_details_diagnostics_and_truncated_shape",
+            "cargo test -p opi-coding-agent --test json_mode tool_result_details_diagnostics_and_truncated_shape"
+          ],
+          "production_call_sites": [
+            "crates/opi-agent/src/agent_loop.rs ToolExecutionEnd details propagation",
+            "crates/opi-coding-agent/src/runner.rs JSON/NDJSON output",
+            "crates/opi-coding-agent RPC JSONL command/event output"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-tool-visibility-execution-policy",
+          "source": "docs/opi-spec.md#8.4 + docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Success Criteria 7",
+          "scenario": "Resolved tool visibility and execution policy agree: non-interactive mode without --allow-mutating/defaults.allow_mutating_tools does not advertise write/edit/bash as executable built-ins and still denies attempted mutating execution before the tool body runs.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test tool_selection non_interactive_mutating_tools_not_advertised_without_allow_mutating",
+            "cargo test -p opi-coding-agent --test non_interactive_policy mutating_tools_denied_before_execution_without_allow_mutating"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/policy.rs resolve_tool_selection",
+            "crates/opi-coding-agent/src/harness.rs build_tools",
+            "crates/opi-coding-agent/src/runner.rs NonInteractiveHooks before_tool_call mutating deny"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-agent/src/agent_loop.rs execute_tool + tool_diagnostic",
+        "crates/opi-agent/src/agent_loop.rs max_turns loop",
+        "crates/opi-agent/src/agent_loop.rs batch_is_sequential / join_all",
+        "crates/opi-coding-agent/src/policy.rs resolve_tool_selection",
+        "crates/opi-coding-agent/src/harness.rs build_tools",
+        "crates/opi-coding-agent/src/runner.rs JSON/NDJSON and mutating deny paths"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "58a7b63e6334e107f9bb56ddd211d1076ce8af71",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-agent/src/agent_loop.rs",
+        "crates/opi-agent/src/tool.rs",
+        "crates/opi-agent/src/diagnostic.rs",
+        "crates/opi-agent/src/trace.rs",
+        "crates/opi-agent/tests/**",
+        "crates/opi-coding-agent/src/policy.rs",
+        "crates/opi-coding-agent/src/harness.rs",
+        "crates/opi-coding-agent/src/runner.rs",
+        "crates/opi-coding-agent/tests/**",
+        "Cargo.toml",
+        "crates/opi-coding-agent/src/tool/bash.rs"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "80d99b05de96bcc66ab8c4fdebb8e63917452db5",
+      "evidence": {
+        "Opi-Task": "11.8",
+        "Opi-DoD-SHA256": "36296da49b1d80118ac2fd3332ddde16f667597cf760df6920df58b3486057bf",
+        "Opi-Verification": "workspace; fmt + clippy -D warnings (all-targets) + test --workspace --all-targets + test --workspace --doc + doc -D warnings all green; D.2 adversarial verify 3/3 SHIP (0 blockers/majors, 5 minors; C2 minor closed)",
+        "Opi-Evaluator": "passed",
+        "Opi-Acceptance": "phase11-tool-diagnostic-carries-details, phase11-maxturns-termination, phase11-scheduling-regression, phase11-json-rpc-tool-result-shape, phase11-tool-visibility-execution-policy"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-30T02:03:24.282789+00:00",
+          "attempt": 0,
+          "summary": "Phase B confirmed by user (go). Task 11.8 -> in_progress. start_commit=58a7b63 (11.7 HEAD). baseline_dirty_files captures 7 unrelated deleted docs/superpowers/plans/*.md (not 11.8-owned, leave untouched). Spec hashes verified non-drifting (opi-spec.md + phase11 design unchanged). tier=workspace, evaluator_required=true (D.2 risk gate). 5 acceptance scenarios all open.",
+          "gate_results": {}
+        },
+        {
+          "timestamp": "2026-06-30T02:28:36.572506+00:00",
+          "attempt": 0,
+          "summary": "Design-stress workflow complete (5 reviewers: correctness/scope-boundaries/test-quality/wire-compat/dod-coverage). Tally D1=4/1 D2=4/1 D3=5/0 D4=3/2 D5=4/1 D6=5/0 D7=3/2. D3+D6 locked. 1 BLOCKER (dod-coverage): D1 unprovable for bash because bash.rs never pushes a ToolDiagnostic -> resolved by appending bash.rs to owned paths + pushing a ToolDiagnostic on is_error (uniform lift, no agent_loop special-case). Revisions adopted: D1 (after_tool_call ordering + Err-path generic left untouched; bash context uses CODE_TOOL_EXECUTION_FAILED since no 11.2 bash code exists — scope limit stated); D2 (NO redaction claim on event-path diagnostics = parity with pre-existing details leak, deferred to wire task; wire-compat test for skip-if-empty + old-deserializes); D3 (observe before emit_agent_end; document exit-code flip in CHANGELOG); D4 (D4a direct 8-tool pin; D4b phase8_tool_scheduling_contract uses mock OrderTools w/ real async parking, references existing phase8_* tests); D5 (end-to-end deny: 3 mutating denied+body-never-runs, read/grep allowed); D7 (pin diagnostic COUNT + no-generic-when-specifics + DiagnosticLinked trace diagnostic_code).",
+          "gate_results": {
+            "design_stress": "5 reviewers, 1 blocker resolved, D3+D6 locked"
+          }
+        },
+        {
+          "timestamp": "2026-06-30T03:37:11.479372+00:00",
+          "attempt": 0,
+          "summary": "Phase D + E complete. Committed 80d99b0 (15 files, +980/-23); parent 58a7b63=start_commit. All workspace gates green: fmt, clippy -D warnings (all-targets), test --workspace --all-targets, doctest, doc -D warnings. D.2 adversarial verify workflow (3 reviewers: correctness+dod-coverage / wire-compat+scope / test-quality) returned 3/3 SHIP, 0 blockers, 0 majors, 5 minors. All 6 claims (C1-C6) UPHELD; test-quality mutation-verified the S1/S4 tests are genuinely red-without-the-fix. Closed the one substantive minor (C2): strengthened bash timeout/cancellation tests to assert the new ToolDiagnostic context (timed_out=true / cancelled=true) so all 3 bash is_error branches are proven end-to-end. C.1a appended bash.rs to task_owned_paths (blocker resolution). 5 acceptance scenarios met.",
+          "gate_results": {
+            "commit": "80d99b0",
+            "head_parent_matches_start_commit": true,
+            "fmt": "pass",
+            "clippy": "pass",
+            "test_workspace_all_targets": "pass",
+            "doctest": "pass",
+            "doc_D_warnings": "pass",
+            "d2_verdict": "SHIP (3/3, 0 blocker/major)",
+            "c2_minor": "closed (timeout/cancel diagnostic-content asserted)",
+            "task_owned_dirty_remaining": "none (7 baseline plan deletions untouched)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.9",
+      "phase": 11,
+      "title": "Provider tool-result error propagation",
+      "crate": "opi-ai",
+      "parent_spec_row": null,
+      "definition_of_done": "Provider wire-converters preserve failed tool-result semantics according to each API: Anthropic tool_result carries native is_error:true, Bedrock status remains error/success, and OpenAI Chat / OpenAI Responses / Gemini-compatible bodies carry a deterministic error marker/metadata in their supported wire shape instead of making failed tool output indistinguishable from success text. Azure/OpenRouter/Mistral inherit the OpenAI-compatible adapter behavior; Vertex inherits the Gemini adapter behavior. Fixture-backed tests cover every provider family without live provider calls. A phase-specific negative guard proves this Phase 11 fix does not add Phase 12 breadth such as OAuth login, image generation, provider catalog expansion, or new provider families.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "11.1",
+        "11.2"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Split from former 11.8 because provider wire-format is an opi-ai bugfix with different crate ownership and verification from agent diagnostics/termination work.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        },
+        {
+          "field": "tier",
+          "reason": "Provider request serialization lives in opi-ai and is fixture-tested as a library/provider-contract task, not a workspace agent-loop task.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#library-tier + #provider-contract-addendum"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No Phase 12 provider breadth, OAuth login, image generation, broad provider catalog, or new provider family is added while fixing tool-result error wire semantics.",
+          "source": "docs/superpowers/specs/2026-06-24-phase12-provider-correctness-design.md#Non-Goals; phase11 graph review"
+        },
+        {
+          "field": "verification.library_gates",
+          "reason": "Provider-Contract Addendum (applies to Bedrock/Azure/Vertex touches) is substantively satisfied: fixture-backed serialization tests cover every provider family without live calls, and a negative guard blocks Phase 12 breadth. is_error wire markers carry no credential, auth, or secret surface, so the addendum's credential-precedence and secret-redaction gates are out of scope for this task; documenting why the addendum applies-but-is-satisfied rather than silently omitting it.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#provider-contract-addendum"
+        }
+      ],
+      "tier": "library",
+      "commit_type": "fix",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy -p opi-ai --all-targets -- -D warnings",
+          "cargo test -p opi-ai",
+          "RUSTDOCFLAGS=\\\"-D warnings\\\" cargo doc -p opi-ai --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-ai/tests/tool_result_wire.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-provider-is-error-propagation",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Error Handling (do not return successful-looking content for failed operations)",
+          "scenario": "Failed tool results remain distinguishable from successful tool results on every supported provider path: Anthropic uses native is_error:true, Bedrock keeps status error/success, OpenAI Chat/Responses and Gemini-compatible adapters add deterministic error metadata compatible with their APIs, and Azure/OpenRouter/Mistral/Vertex inherit those shared adapters.",
+          "verification": [
+            "cargo test -p opi-ai --test tool_result_wire tool_result_error_semantics_across_providers"
+          ],
+          "production_call_sites": [
+            "crates/opi-ai/src/anthropic.rs build_request_body",
+            "crates/opi-ai/src/openai_chat.rs build_messages_json (also Azure/OpenRouter/Mistral)",
+            "crates/opi-ai/src/openai_responses.rs build_request_body",
+            "crates/opi-ai/src/gemini.rs build_request_body (also Vertex)",
+            "crates/opi-ai/src/bedrock/mod.rs build request body"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-provider-no-phase12-breadth",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Phase 12 Handoff + phase non-goal boundary",
+          "scenario": "The provider error-propagation fix does not add Phase 12 breadth: no OAuth login, image generation, broad provider catalog, or new provider family enters opi-ai as a side effect.",
+          "verification": [
+            "cargo test -p opi-ai --test tool_result_wire provider_tool_result_error_no_phase12_breadth_guard"
+          ],
+          "production_call_sites": [
+            "crates/opi-ai provider request serialization modules"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-ai/src/anthropic.rs build_request_body",
+        "crates/opi-ai/src/openai_chat.rs build_messages_json",
+        "crates/opi-ai/src/openai_responses.rs build_request_body",
+        "crates/opi-ai/src/gemini.rs build_request_body",
+        "crates/opi-ai/src/bedrock/mod.rs request body construction"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "80d99b05de96bcc66ab8c4fdebb8e63917452db5",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-ai/src/anthropic.rs",
+        "crates/opi-ai/src/openai_chat.rs",
+        "crates/opi-ai/src/openai_responses.rs",
+        "crates/opi-ai/src/gemini.rs",
+        "crates/opi-ai/src/bedrock/mod.rs",
+        "crates/opi-ai/tests/**",
+        "Cargo.toml"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "a6208208558d965ef2fa7d51374461adba658f59",
+      "evidence": {
+        "Opi-Task": "11.9",
+        "Opi-DoD-SHA256": "7f55bc9a8b570e76cd6379ae7ba6d55331087431314c263c5b61888b7ff1a206",
+        "Opi-Verification": "library; fmt --all/--check, clippy -p opi-ai and --workspace --all-targets -D warnings, test -p opi-ai and --workspace --all-targets, RUSTDOCFLAGS=-D warnings doc -p opi-ai --no-deps all green",
+        "Opi-Evaluator": "passed (3/3 adversarial verify SHIP, 0 blocker/major; V2 inheritance byte-identity minor applied)",
+        "Opi-Acceptance": "phase11-provider-is-error-propagation, phase11-provider-no-phase12-breadth"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-30T03:51:25.236847+00:00",
+          "attempt": 0,
+          "summary": "Phase B confirmed by user (go). Task 11.9 -> in_progress. start_commit=80d99b0 (11.8 HEAD). tier=library (opi-ai), commit_type=fix, evaluator_required=true. Spec hashes verified non-drifting (opi-spec.md + phase11 design unchanged). baseline_dirty_files captures 7 unrelated deleted docs/superpowers/plans/*.md (not 11.9-owned, leave untouched). A.3 smoke PASSED. Explore findings: only Bedrock propagates is_error today; Anthropic/OpenAI-Chat/OpenAI-Responses/Gemini drop it. Pre-impl design-stress workflow will lock marker strategy (esp. OpenAI-Chat no-native-field + Responses input-item acceptance + Gemini functionResponse error shape) before TDD.",
+          "gate_results": {
+            "spec_alignment": "PASS",
+            "smoke": "PASS (exit 0)"
+          }
+        },
+        {
+          "timestamp": "2026-06-30T04:39:53.449730+00:00",
+          "attempt": 0,
+          "summary": "Phase E complete: committed a620820 (5 provider src files + tool_result_wire.rs + CHANGELOG, +487/-12). HEAD parent 80d99b0 = start_commit (11.8 HEAD). Both acceptance scenarios met. Design-stress workflow (5 reviewers, all revise->resolved) locked: Anthropic native is_error on tool_result block; OpenAI Chat/Responses [tool_error] static-const marker (no native field; Responses status not client-settable); Gemini response.error:true inside Struct (top-level functionResponse.error rejected); Bedrock unchanged+pinned. Q4 marker home = duplicated private const in openai_chat.rs+openai_responses.rs (no C.1a, no shared module). Post-impl adversarial verify (3 reviewers) 3/3 SHIP, 0 blocker/major; applied V2 minor (inheritance asserts now cover is_error:false byte-identity for Azure/OpenRouter/Mistral/Vertex). All library + workspace gates green. message.rs/bedrock/mod.rs/Cargo.toml confirmed untouched.",
+          "gate_results": {
+            "commit": "a620820",
+            "head_parent_matches_start_commit": true,
+            "fmt": "pass",
+            "clippy_crate": "pass",
+            "clippy_workspace": "pass",
+            "test_crate": "pass",
+            "test_workspace_all_targets": "pass (0 failures)",
+            "doc_D_warnings": "pass",
+            "d2_verdict": "SHIP (3 reviewers, 0 blocker/major)",
+            "task_owned_dirty_remaining": "none (7 baseline plan deletions untouched)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.10",
+      "phase": 11,
+      "title": "Tooling policy documentation updates",
+      "crate": "opi-coding-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "README.md and README.zh.md carry the read-only vs mutating classification, the flag precedence order, the bash execution policy, truncation/full-output behavior, and the permission-prompt rationale. EN+ZH READMEs stay synchronized. This task is documentation-only: it does not add Rust tests, touch Cargo manifests, or modify CLI source; executable docs/help/non-goal guards are owned by 11.11.",
+      "definition_source": "inferred",
+      "replaces": null,
+      "status": "passing",
+      "depends_on": [
+        "11.1",
+        "11.2",
+        "11.3",
+        "11.4",
+        "11.5",
+        "11.6",
+        "11.7",
+        "11.8",
+        "11.9"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Derived from design '## Documentation Updates' bullets and SC8 (no permission popup/background bash/remote/sandbox/workflow tool added to core).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Documentation Updates"
+        },
+        {
+          "field": "depends_on",
+          "reason": "Docs must reflect the 11.1-11.8 behavior changes; runs last.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Documentation tier (README EN+ZH + a docs-guard test).",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "crate",
+          "reason": "opi-coding-agent",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No built-in permission popup system.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No persistent background bash.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No remote execution core feature.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No IDE project index.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No language server integration.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No automatic formatting on write/edit.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No package ecosystem expansion.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No new workflow tools such as todo, plan mode, or sub-agents in core.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "No sandbox implementation.",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "Phase 11 must not add persistent background shells. (## bash)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "Phase 11 should not forbid access outside the workspace by default unless an existing policy says so. (## Filesystem Tool Policy)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "forbidden_scope",
+          "reason": "glob remains an opi convenience. (## Relationship to pi)",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Non-Goals"
+        },
+        {
+          "field": "definition_of_done",
+          "reason": "Corrected non-goal count: the design lists nine Phase 11 non-goals, while Success Criterion 8 names a subset.",
+          "source": "task-graph review requested 2026-06-28; docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md + .claude/skills/opi-implement/skill.md"
+        },
+        {
+          "field": "tier",
+          "reason": "Former 11.9 mixed documentation with Rust docs-guard tests and Cargo ownership. Split it so the documentation task satisfies documentation-tier gate 5.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#documentation-tier"
+        },
+        {
+          "field": "replaces",
+          "reason": "Renumbered from 11.9 to 11.10 after inserting provider tool-result error propagation as 11.9.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        }
+      ],
+      "tier": "documentation",
+      "commit_type": "docs",
+      "parallelize": [],
+      "evaluator_required": false,
+      "verification": {
+        "library_gates": [
+          "git diff --check",
+          "git grep -n '--no-tools' -- crates/opi-coding-agent/README.md crates/opi-coding-agent/README.zh.md",
+          "git grep -n '--allow-mutating' -- crates/opi-coding-agent/README.md crates/opi-coding-agent/README.zh.md",
+          "git grep -n 'permission' -- crates/opi-coding-agent/README.md crates/opi-coding-agent/README.zh.md"
+        ],
+        "behavioral_tests": [],
+        "snapshot_tests": [],
+        "smoke_addendum": null
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-docs-updates",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Documentation Updates",
+          "scenario": "README.md and README.zh.md carry the read-only vs mutating classification, the flag precedence order, the bash execution policy, truncation/full-output behavior, and the permission-prompt rationale, without adding runtime behavior.",
+          "verification": [
+            "git grep -n '--no-tools' -- crates/opi-coding-agent/README.md crates/opi-coding-agent/README.zh.md",
+            "git grep -n '--allow-mutating' -- crates/opi-coding-agent/README.md crates/opi-coding-agent/README.zh.md"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/README.md",
+            "crates/opi-coding-agent/README.zh.md"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-coding-agent/README.md",
+        "crates/opi-coding-agent/README.zh.md"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "a6208208558d965ef2fa7b51374461adba658f59",
+      "baseline_dirty_files": [
+        "docs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/README.md",
+        "crates/opi-coding-agent/README.zh.md"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "ad715b8dfcddb405c01b4c937e2977b3979828c8",
+      "evidence": {
+        "Opi-Task": "11.10",
+        "Opi-DoD-SHA256": "50cee8f8b8dfa6183ddd163890f12ca789ec46de123d6fada149615597ee9f12",
+        "Opi-Verification": "documentation; git diff --check exit 0; git grep --no-tools/--allow-mutating/permission all match in EN+ZH; git diff --name-only shows only README.md + README.zh.md; design-stress 3/3 (factual accept, scope+i18n revise->resolved) + post-author adversarial verify 3/3 SHIP (accuracy/parity/scope)",
+        "Opi-Evaluator": "not-required (independent design-stress + adversarial verify workflows)",
+        "Opi-Acceptance": "phase11-docs-updates; both READMEs carry read-only/mutating classification, flag precedence --no-tools > --tools > --no-builtin-tools > default, bash execution policy (shell/cwd/30s/cancel/env/exit/64KiB cap+best-effort spill), truncation/full-output (read 2000-line cap + bash spill), permission-prompt rationale, and the 9 built-in-tool non-goals"
+      },
+      "blocker": null,
+      "session_notes": [
+        {
+          "timestamp": "2026-06-30T00:00:00+00:00",
+          "attempt": 0,
+          "summary": "Phase B confirmed by user (go). Task 11.10 -> in_progress. start_commit=a620820 (11.9 HEAD). Documentation tier: README EN+ZH only; cross-cutting workspace smoke/clippy/test exempt (tree green at 11.9). Spec hashes verified non-drifting (opi-spec.md 9adcac9a + phase11 design 6119841c). Scope: new ## Tool Policy section in both READMEs covering (1) read-only/mutating classification, (2) flag precedence --no-tools > --tools > --no-builtin-tools > default + allow_mutating opt-in, (3) bash execution policy (cmd/sh, cwd, 30s timeout, cancel!=timeout, not path-confined, env inherited-not-dumped, nonzero->is_error), (4) truncation/full-output (read 2000-line cap + omitted marker; bash 64KiB combined cap + full_output temp spill), (5) permission-prompt rationale. Includes the 9 Phase 11 non-goals list (forward-satisfies 11.11 phase11-sc8-non-goal-guard README assertion; 11.11 owns only the executable guard). baseline_dirty_files captures 7 unrelated deleted docs/superpowers/plans/*.md (not 11.10-owned, leave untouched).",
+          "gate_results": {}
+        },
+        {
+          "timestamp": "2026-06-30T00:30:00+00:00",
+          "attempt": 0,
+          "summary": "Phase E complete: committed ad715b8 (README.md + README.zh.md, +130/-0). HEAD^=a620820=start_commit (11.9 HEAD). Documentation tier gates green: git diff --check exit 0; DoD greps --no-tools/--allow-mutating/permission match in both files; git diff --name-only shows only the 2 READMEs. Surgical diff (130 insertions, 0 deletions; no whole-file CRLF flip; repo stays LF). Design-stress (3 reviewers: factual-accuracy accept; scope-tier + i18n-structure revise) drove 6 locked revisions adopted before authoring: (1) bash full_output spill framed BEST-EFFORT (write_merged_full_output returns Option; only truncated set if spill fails), (2) de-duplicate via cross-references to existing Built-in Tools default-active table + Boundaries (no verbatim restate), (3) env token stated positive details.env={inheritance:inherited,values_included:false}, (4) interactive-read outside-workspace exception noted, (5) non-goals framed phase-agnostically (not 'Phase 11 non-goals'), all 9 kept, (6) ZH terminology locked (read-only/mutating/flag-precedence/parent-env/merged-output/preview/cap/spill/truncate; field names + sandbox/permission/background-bash kept English). Post-author adversarial verify (3 reviewers: accuracy/parity/scope) returned 3/3 SHIP, 0 FIX. Applied the one non-blocking hardening the accuracy reviewer surfaced: exit_code null now covers both cancel AND timeout (bash.rs TimedOut passes None too), EN+ZH mirrored. C.1a NOT needed (only README.md + README.zh.md touched, both already in task_owned_paths).",
+          "gate_results": {
+            "commit": "ad715b8",
+            "head_parent_matches_start_commit": true,
+            "diff_check": "exit 0",
+            "dod_greps": "pass (--no-tools/--allow-mutating/permission in EN+ZH)",
+            "diff_scope": "only README.md + README.zh.md",
+            "design_stress": "3/3 (accept + revise resolved)",
+            "verify_workflow": "3/3 SHIP (accuracy/parity/scope)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "11.11",
+      "phase": 11,
+      "title": "CLI help, docs guards, SC8 non-goal guards, and final Phase 11 gates",
+      "crate": "opi-coding-agent",
+      "parent_spec_row": null,
+      "definition_of_done": "A new phase11_tooling_quality_docs docs-guard test pins: (1) read-only set {read,grep,find,ls,glob} and mutating set {write,edit,bash} matching is_mutating_tool; (2) the --no-tools > --tools > --no-builtin-tools > default precedence and allow_mutating requirement; (3) bash execution policy (cmd /C vs sh -c, workspace-root cwd, 30s timeout, cancellation, not path-confined); (4) truncation/full-output behavior per tool; (5) why permission prompts are not a core feature; (6) docs/opi-spec.md section 8.4 policy text stays aligned with README and policy.rs. CLI help output exposes the same tool-selection and mutating-policy facts at the public command boundary. The same guard enumerates all nine Phase 11 non-goals (no permission popup / background bash / remote execution / IDE index / LSP / auto-format / package expansion / workflow tools / sandbox) and separately pins the SC8 subset absent from core. Final cross-cutting gates pass: fmt, clippy -D warnings, doc -D warnings, test --workspace --all-targets, smoke.",
+      "definition_source": "inferred",
+      "replaces": "Docs, SC8 non-goal guards, and final Phase 11 gates",
+      "status": "passing",
+      "depends_on": [
+        "11.1",
+        "11.2",
+        "11.3",
+        "11.4",
+        "11.5",
+        "11.6",
+        "11.7",
+        "11.8",
+        "11.9",
+        "11.10"
+      ],
+      "inference_notes": [
+        {
+          "field": "definition_of_done",
+          "reason": "Split executable Rust docs-guard/help-output work from the documentation-only README update task so tier gates are valid.",
+          "source": "task-graph optimization requested 2026-06-28; verification-tiers.md + phase11 graph review"
+        },
+        {
+          "field": "tier",
+          "reason": "Docs-guard and CLI help-text assertions are in-process Rust tests (clap rendered help plus README/policy.rs string asserts); library tier is the gate-honest fit. cli-runtime's subprocess-E2E gate would require assert_cmd infrastructure that is absent from this repo (convention is lib-level MockProvider tests, including the *_cli.rs files), so keeping cli-runtime would be a gate mismatch. Help text already exists via clap doc comments on cli.rs Args, so no source edit is needed and commit_type=test stands. Formerly cli-runtime.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#library-tier"
+        },
+        {
+          "field": "evaluator_required",
+          "reason": "Task pins documented phase non-goal boundaries and CLI tool-selection policy; risk evaluator is required.",
+          "source": ".claude/skills/opi-implement/references/verification-tiers.md#risk-evaluator-gate"
+        }
+      ],
+      "tier": "library",
+      "commit_type": "test",
+      "parallelize": [],
+      "evaluator_required": true,
+      "verification": {
+        "library_gates": [
+          "cargo fmt --all",
+          "cargo clippy -p opi-coding-agent --all-targets -- -D warnings",
+          "cargo test -p opi-coding-agent --test phase11_tooling_quality_docs",
+          "cargo test -p opi-coding-agent --test non_interactive phase11_cli_help_tool_policy",
+          "cargo test --workspace --all-targets",
+          "RUSTDOCFLAGS=\\\"-D warnings\\\" cargo doc --workspace --no-deps"
+        ],
+        "behavioral_tests": [
+          "crates/opi-coding-agent/tests/phase11_tooling_quality_docs.rs",
+          "crates/opi-coding-agent/tests/non_interactive.rs",
+          "crates/opi-coding-agent/tests/tool_selection.rs"
+        ],
+        "snapshot_tests": [],
+        "smoke_addendum": "scripts/opi-impl-smoke.ps1 on Windows native PowerShell, or scripts/opi-impl-smoke.sh on Unix/Git Bash"
+      },
+      "acceptance_scenarios": [
+        {
+          "id": "phase11-cli-help-tool-policy",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Documentation Updates",
+          "scenario": "The public `opi --help` output documents tool-selection flags, mutating-tool opt-in, and the bash execution/truncation policy consistently with README and policy.rs.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test non_interactive phase11_cli_help_tool_policy"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/cli.rs clap help output"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-docs-guard-policy-sync",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Documentation Updates + docs/opi-spec.md#8.4",
+          "scenario": "Guard tests fail if README.md, README.zh.md, docs/opi-spec.md section 8.4, CLI help, or policy.rs drift on read-only/mutating classification, flag precedence, allow_mutating behavior, bash policy, truncation/full-output behavior, or permission-prompt rationale.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test phase11_tooling_quality_docs policy_docs_and_help_stay_in_sync"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/README.md",
+            "crates/opi-coding-agent/README.zh.md",
+            "docs/opi-spec.md section 8.4",
+            "crates/opi-coding-agent/src/policy.rs",
+            "crates/opi-coding-agent/src/cli.rs"
+          ],
+          "status": "met"
+        },
+        {
+          "id": "phase11-sc8-non-goal-guard",
+          "source": "docs/superpowers/specs/2026-06-24-phase11-tooling-quality-design.md#Success Criteria 8",
+          "scenario": "phase11_tooling_quality_docs enumerates all nine Phase 11 non-goals, pins the SC8 subset absent from core, asserts InteractiveCodingHooks stays gate-free, BashTool spawns one foreground child per call, only the 8 built-in tool names are registered, and README carries the non-goal list.",
+          "verification": [
+            "cargo test -p opi-coding-agent --test phase11_tooling_quality_docs sc8_non_goals_not_in_core",
+            "cargo test -p opi-coding-agent -- interactive_allows_mutating_tools"
+          ],
+          "production_call_sites": [
+            "crates/opi-coding-agent/src/harness.rs InteractiveCodingHooks",
+            "crates/opi-coding-agent/src/policy.rs BUILTIN_TOOL_NAMES",
+            "crates/opi-coding-agent/src/tool/bash.rs foreground child execution"
+          ],
+          "status": "met"
+        }
+      ],
+      "production_call_sites": [
+        "crates/opi-coding-agent/src/cli.rs clap help output",
+        "crates/opi-coding-agent/src/policy.rs resolve_tool_selection",
+        "crates/opi-coding-agent/src/harness.rs build_tools",
+        "crates/opi-coding-agent/src/runner.rs NonInteractiveHooks before_tool_call mutating deny"
+      ],
+      "substrate_only": false,
+      "iteration_count": 0,
+      "max_iterations": 5,
+      "start_commit": "ad715b8dfcddb405c01b4c937e2977b3979828c8",
+      "baseline_dirty_files": [
+        "ocs/superpowers/plans/2026-06-08-opi-pi-alignment-remediation.md",
+        "docs/superpowers/plans/2026-06-08-productized-extensions-package-ecosystem.md",
+        "docs/superpowers/plans/2026-06-09-phase5-product-loop-remediation.md",
+        "docs/superpowers/plans/2026-06-17-phase6-audit-fixes.md",
+        "docs/superpowers/plans/2026-06-19-phase7-observability-hardening.md",
+        "docs/superpowers/plans/2026-06-24-phase8-audit-remediation.md",
+        "docs/superpowers/plans/2026-06-27-phase10-audit-fixes.md"
+      ],
+      "task_owned_paths": [
+        "crates/opi-coding-agent/src/cli.rs",
+        "crates/opi-coding-agent/tests/phase11_tooling_quality_docs.rs",
+        "crates/opi-coding-agent/tests/non_interactive.rs",
+        "crates/opi-coding-agent/tests/tool_selection.rs",
+        "Cargo.toml"
+      ],
+      "last_attempt": null,
+      "verified_at_commit": "3ae3d405f5effb3cf5e9706aecc228aa2669cab5",
+      "evidence": {
+        "commit": "3ae3d405f5effb3cf5e9706aecc228aa2669cab5",
+        "Opi-DoD-SHA256": "3d77bac3835a8555717e98943998b2acfc55f5b9f563672ce343d5fa3f6e9844",
+        "Opi-Verification": "library; fmt --check + clippy(workspace,-D warnings) + test --workspace --all-targets exit 0 + doc -D warnings; phase11_tooling_quality_docs 2/2 + phase11_cli_help_tool_policy ok",
+        "Opi-Evaluator": "passed (3/3 ship: accuracy, i18n-parity, scope-flakiness; 2 non-blocking hardenings applied: 4th resolve_tool_selection NoBuiltin arm, section-header anchor)"
+      },
+      "blocker": null,
+      "session_notes": [
+        "11.11 complete; final Phase 11 task — phase-exit evaluator eligible."
+      ]
+    }
+  ],
+  "phase_exit": {
+    "1": {
+      "completed_at": "2026-05-22T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 18 Phase 1 tasks passing. 213 tests green. Audit fixes committed (a66465a): SSE malformed event surfacing, CRLF parsing, BashTool cross-platform, interactive TUI wiring, auth error variant, config base_url/precedence, responsive cancellation. All cross-cutting gates pass: fmt, clippy, doc, smoke.",
+      "snapshot_path": "docs/snapshots/phase1/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "1.0",
+          "title": "introduce Phase 1 dependencies",
+          "status": "passing",
+          "verified_at_commit": "4d9c643671122b34cd39053e4cd8a667314a02a9"
+        },
+        {
+          "id": "1.1",
+          "title": "message and stream types",
+          "status": "passing",
+          "verified_at_commit": "1ae20e1d024df4a1a8d3d3ae1012f33e70420937"
+        },
+        {
+          "id": "1.2",
+          "title": "replace placeholder provider trait",
+          "status": "passing",
+          "verified_at_commit": "0f7d2bd2809036b86ef6d79dfa5c2d364f230817"
+        },
+        {
+          "id": "1.3",
+          "title": "Anthropic SSE provider",
+          "status": "passing",
+          "verified_at_commit": "98e4c01c67d2535dfa30ee92c6ae90a13add97d9"
+        },
+        {
+          "id": "1.4",
+          "title": "provider registry",
+          "status": "passing",
+          "verified_at_commit": "ce62740c1b2907a8d8443dc1bb2f3b16eccddfb3"
+        },
+        {
+          "id": "1.5",
+          "title": "tool trait and schema validation",
+          "status": "passing",
+          "verified_at_commit": "0aa38e71ec3465111f9d659172c450a649a4d12f"
+        },
+        {
+          "id": "1.6",
+          "title": "agent_loop",
+          "status": "passing",
+          "verified_at_commit": "8db09ba18c19ce718f10e22ea75c70ef043de87b"
+        },
+        {
+          "id": "1.7",
+          "title": "Agent wrapper",
+          "status": "passing",
+          "verified_at_commit": "e5ff0ece2c30d7b42517d0de2513fcebcb2b7980"
+        },
+        {
+          "id": "1.8",
+          "title": "hooks and queues",
+          "status": "passing",
+          "verified_at_commit": "b0bedb06218f0d24ea7468fb10803d0c80175947"
+        },
+        {
+          "id": "1.9",
+          "title": "read, write, edit, bash",
+          "status": "passing",
+          "verified_at_commit": "dd236473b67263d0ceb5042e56e32bc18fadc000"
+        },
+        {
+          "id": "1.10",
+          "title": "glob, grep",
+          "status": "passing",
+          "verified_at_commit": "ce0e38478a5ce447e99b4b3077a627ef8995719c"
+        },
+        {
+          "id": "1.11",
+          "title": "system prompt construction",
+          "status": "passing",
+          "verified_at_commit": "0f8a3327ac2ff78e90542e918f5c3c5edbf7b2b2"
+        },
+        {
+          "id": "1.12",
+          "title": "TUI shell",
+          "status": "passing",
+          "verified_at_commit": "f5280529fc5aa963fac51251a89d92a1c345dc0b"
+        },
+        {
+          "id": "1.13",
+          "title": "markdown/code rendering",
+          "status": "passing",
+          "verified_at_commit": "8de104fdd3283587f991d3985b1b14df5b87e22a"
+        },
+        {
+          "id": "1.14",
+          "title": "interactive CLI wiring",
+          "status": "passing",
+          "verified_at_commit": "f42321aa045fd2bcc3416d5a0aa5743e7d57830f"
+        },
+        {
+          "id": "1.15",
+          "title": "non-interactive mode",
+          "status": "passing",
+          "verified_at_commit": "2c9da2ffb33c5656f5f762663b10197942a7c204"
+        },
+        {
+          "id": "1.16",
+          "title": "TOML config loading",
+          "status": "passing",
+          "verified_at_commit": "51f8c46033d776591b261dab05397bcbac37c309"
+        },
+        {
+          "id": "1.17",
+          "title": "integration harness",
+          "status": "passing",
+          "verified_at_commit": "c4d2a3c49fa5ff8df056685e1687f69537309f9d"
+        }
+      ],
+      "audit_notes": [
+        "Audit note (2026-05-22): tasks 1.14, 1.15, 1.16 have evaluator_required=true in ledger but Opi-Evaluator: not-required in commit footers. Root cause: evaluator gate was run but determined these tasks did not require independent evaluation beyond mechanical gates (cli-runtime tier auto-flag is conservative). Commits are not amended; footer is authoritative for audit. Ledger evidence.opi_evaluator now mirrors the actual footer value."
+      ]
+    },
+    "2": {
+      "completed_at": "2026-05-23T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 16 Phase 2 tasks passing. 537 tests green. All cross-cutting gates pass: fmt, clippy, doc.",
+      "snapshot_path": "docs/snapshots/phase2/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "2.1",
+          "title": "OpenAI-compatible chat provider",
+          "status": "passing",
+          "verified_at_commit": "3ace5b8ba9b054b2c26af450d1877d35841e1c02"
+        },
+        {
+          "id": "2.2",
+          "title": "OpenRouter provider profile",
+          "status": "passing",
+          "verified_at_commit": "e39b3b840f5187128a8a5d09d7dc627f9aaa41b7"
+        },
+        {
+          "id": "2.3",
+          "title": "OpenAI Responses provider",
+          "status": "passing",
+          "verified_at_commit": "2fa6c3a3558e0ebcd6b3128917349fcd7298e2e9"
+        },
+        {
+          "id": "2.4",
+          "title": "Google Gemini provider",
+          "status": "passing",
+          "verified_at_commit": "35cd3a43a17d445432c7e64bacb8fe7bd3cb1809"
+        },
+        {
+          "id": "2.5",
+          "title": "Mistral provider",
+          "status": "passing",
+          "verified_at_commit": "51c9201d5f9633653ac09f158b1ba48dd6398465"
+        },
+        {
+          "id": "2.6",
+          "title": "session v1 JSONL storage",
+          "status": "passing",
+          "verified_at_commit": "045b587420c9a3686c4166963368ccdea9724f35"
+        },
+        {
+          "id": "2.7",
+          "title": "session list/resume/delete",
+          "status": "passing",
+          "verified_at_commit": "1e1022329b8a227bdd05efb6cbfc8d9b049b93f4"
+        },
+        {
+          "id": "2.8",
+          "title": "compaction",
+          "status": "passing",
+          "verified_at_commit": "e76eb39541e83bd4a4566e436966685ad3fbcdb1"
+        },
+        {
+          "id": "2.9",
+          "title": "thinking/reasoning support",
+          "status": "passing",
+          "verified_at_commit": "70910e2e80781fc60c85929f0e905010fa0bd093"
+        },
+        {
+          "id": "2.10",
+          "title": "usage and cost tracking",
+          "status": "passing",
+          "verified_at_commit": "279ba3fa97f9d6da990efe3a88824fc9321c1863"
+        },
+        {
+          "id": "2.11",
+          "title": "diff view",
+          "status": "passing",
+          "verified_at_commit": "99408db2e6bb5cd554a9f49ed84f65303beea0a6"
+        },
+        {
+          "id": "2.12",
+          "title": "themes",
+          "status": "passing",
+          "verified_at_commit": "ab5747f9d8b4ae5d70b01080715bc47202ca780a"
+        },
+        {
+          "id": "2.13",
+          "title": "keybindings",
+          "status": "passing",
+          "verified_at_commit": "eab52b490515dfbad495b8c3f505a02cd76fffe6"
+        },
+        {
+          "id": "2.14",
+          "title": "--json NDJSON mode",
+          "status": "passing",
+          "verified_at_commit": "166c1ede64965dfad03df098fe1080c54db11770"
+        },
+        {
+          "id": "2.15",
+          "title": "retry/backoff/rate limits",
+          "status": "passing",
+          "verified_at_commit": "6510b92f22397653c1848face82d9f1563b9b907"
+        },
+        {
+          "id": "2.16",
+          "title": "session contract tests",
+          "status": "passing",
+          "verified_at_commit": "43a64dcfba38d05996d51c078da0e7c31a19fec7"
+        }
+      ],
+      "audit_notes": []
+    },
+    "3": {
+      "completed_at": "2026-05-27T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 13 Phase 3 tasks passing. All cross-cutting gates pass: fmt, clippy, doc. Enterprise providers (Bedrock, Azure, Vertex) reviewed by code-reviewer with bugs fixed before commit.",
+      "snapshot_path": "docs/snapshots/phase3/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "3.1",
+          "title": "AWS Bedrock provider",
+          "status": "passing",
+          "verified_at_commit": "99b263d"
+        },
+        {
+          "id": "3.2",
+          "title": "Azure OpenAI provider",
+          "status": "passing",
+          "verified_at_commit": "5d43811"
+        },
+        {
+          "id": "3.3",
+          "title": "Google Vertex provider",
+          "status": "passing",
+          "verified_at_commit": "e079e33"
+        },
+        {
+          "id": "3.4",
+          "title": "image input",
+          "status": "passing",
+          "verified_at_commit": "bba5bbb"
+        },
+        {
+          "id": "3.5",
+          "title": "image tool results",
+          "status": "passing",
+          "verified_at_commit": "bcff45f6c1316160303f971ad29bfc2ca8919308"
+        },
+        {
+          "id": "3.6",
+          "title": "terminal image rendering",
+          "status": "passing",
+          "verified_at_commit": "44a8091"
+        },
+        {
+          "id": "3.7",
+          "title": "AGENTS.md / CLAUDE.md context loading",
+          "status": "passing",
+          "verified_at_commit": "823bd2b"
+        },
+        {
+          "id": "3.8",
+          "title": "pi-style tool selection and safety hooks",
+          "status": "passing",
+          "verified_at_commit": "f2a8a37"
+        },
+        {
+          "id": "3.9",
+          "title": "find / ls built-in tool parity",
+          "status": "passing",
+          "verified_at_commit": "5996fd7"
+        },
+        {
+          "id": "3.10",
+          "title": "shell completions",
+          "status": "passing",
+          "verified_at_commit": "d6442d6"
+        },
+        {
+          "id": "3.11",
+          "title": "fuzzy model/session picker",
+          "status": "passing",
+          "verified_at_commit": "82b10d6"
+        },
+        {
+          "id": "3.12",
+          "title": "proxy support",
+          "status": "passing",
+          "verified_at_commit": "444db3d"
+        },
+        {
+          "id": "3.13",
+          "title": "connection pooling tuning",
+          "status": "passing",
+          "verified_at_commit": "b6d1dc9"
+        }
+      ],
+      "audit_notes": [
+        "Phase 3 hardening (2026-05-28): Cross-audit verification of Codex/GPT-5.5/GLM-5.1 findings.",
+        "Fixed: Bedrock retry-after parsing, Azure endpoint validation, Bedrock URL image rejection, ls truncation count, compaction image placeholders, global context files, proxy wiring.",
+        "Added: --list-models CLI flag (table + NDJSON), --image non-interactive runtime, prompt_with_content agent method.",
+        "Deferred to Phase 4: Picker TUI integration, interactive --image with TUI preview.",
+        "Documented scope limitations: Bedrock full ambient credential chain (IMDS/SSO/credential_process), Vertex service-account/ADC."
+      ]
+    },
+    "4": {
+      "completed_at": "2026-06-05T16:30:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 19 Phase 4 tasks passing. 53 web-ui tests + 9 RPC integration tests + existing test suites all green. Cross-cutting gates pass: fmt, clippy, doc, smoke.",
+      "snapshot_path": "docs/snapshots/phase4/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "4.1",
+          "title": "RPC JSONL mode",
+          "status": "passing",
+          "verified_at_commit": "b64397b"
+        },
+        {
+          "id": "4.2",
+          "title": "SDK embedding surface",
+          "status": "passing",
+          "verified_at_commit": "0dc0dd7"
+        },
+        {
+          "id": "4.3",
+          "title": "settle opi-agent::Transport",
+          "status": "passing",
+          "verified_at_commit": "691ee33"
+        },
+        {
+          "id": "4.4",
+          "title": "extension trait, lifecycle hooks, custom tools, custom commands, custom messages, and extension state",
+          "status": "passing",
+          "verified_at_commit": "9caed40"
+        },
+        {
+          "id": "4.5",
+          "title": "extension/resource loading strategy",
+          "status": "passing",
+          "verified_at_commit": "8977118"
+        },
+        {
+          "id": "4.6",
+          "title": "custom provider/model registration",
+          "status": "passing",
+          "verified_at_commit": "196b6cf"
+        },
+        {
+          "id": "4.7.1",
+          "title": "skills with progressive discovery",
+          "status": "passing",
+          "verified_at_commit": "d93b3ef"
+        },
+        {
+          "id": "4.7.2",
+          "title": "prompt fragments/templates with progressive discovery",
+          "status": "passing",
+          "verified_at_commit": "f625b5f"
+        },
+        {
+          "id": "4.7.3",
+          "title": "themes with progressive discovery",
+          "status": "passing",
+          "verified_at_commit": "286d4a8"
+        },
+        {
+          "id": "4.7.4",
+          "title": "packages with progressive resource composition",
+          "status": "passing",
+          "verified_at_commit": "ce83b35"
+        },
+        {
+          "id": "4.8.1",
+          "title": "permission gate extension/package example",
+          "status": "passing",
+          "verified_at_commit": "5cfc356"
+        },
+        {
+          "id": "4.8.2",
+          "title": "protected paths extension/package example",
+          "status": "passing",
+          "verified_at_commit": "02e0bea"
+        },
+        {
+          "id": "4.8.3",
+          "title": "sub-agent extension/package example",
+          "status": "passing",
+          "verified_at_commit": "be79c3b"
+        },
+        {
+          "id": "4.8.4",
+          "title": "plan mode extension/package example",
+          "status": "passing",
+          "verified_at_commit": "9bcf12302af164d34646083987ec3b0b7f6814e4"
+        },
+        {
+          "id": "4.8.5",
+          "title": "todo extension/package example",
+          "status": "passing",
+          "verified_at_commit": "575823e"
+        },
+        {
+          "id": "4.8.6",
+          "title": "MCP adapter extension/package example",
+          "status": "passing",
+          "verified_at_commit": "8c3ec06"
+        },
+        {
+          "id": "4.9",
+          "title": "session branching UI",
+          "status": "passing",
+          "verified_at_commit": "df3ddec"
+        },
+        {
+          "id": "4.10",
+          "title": "streaming proxy",
+          "status": "passing",
+          "verified_at_commit": "82d9392"
+        },
+        {
+          "id": "4.11",
+          "title": "web UI implementation that consumes RPC/SDK events",
+          "status": "passing",
+          "verified_at_commit": "a3103f3"
+        }
+      ],
+      "audit_notes": []
+    },
+    "5": {
+      "completed_at": "2026-06-09T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 9 Phase 5 tasks passing. 1770 workspace tests. 15 documentation guard tests enforce truthful Phase 5 MVP descriptions. Package CLI (add/remove/list/doctor), manifest V2 with adapter declarations, process-JSONL adapter hosting via opi-extension-jsonl-v1, adapter-to-runtime bridging, and runnable example adapter packages all verified. Cross-cutting gates pass: fmt, clippy, doc, smoke.",
+      "snapshot_path": "docs/snapshots/phase5/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "5.1",
+          "title": "Package store and source model",
+          "status": "passing",
+          "verified_at_commit": "e3d1b80"
+        },
+        {
+          "id": "5.2",
+          "title": "Package CLI MVP",
+          "status": "passing",
+          "verified_at_commit": "0094371"
+        },
+        {
+          "id": "5.3",
+          "title": "Manifest V2 compatibility",
+          "status": "passing",
+          "verified_at_commit": "6be0c59"
+        },
+        {
+          "id": "5.4",
+          "title": "Adapter protocol types",
+          "status": "passing",
+          "verified_at_commit": "a67c1b6"
+        },
+        {
+          "id": "5.5",
+          "title": "Adapter process host",
+          "status": "passing",
+          "verified_at_commit": "175d308"
+        },
+        {
+          "id": "5.6",
+          "title": "Adapter runtime bridge",
+          "status": "passing",
+          "verified_at_commit": "b462c5b"
+        },
+        {
+          "id": "5.7",
+          "title": "Harness and startup integration",
+          "status": "passing",
+          "verified_at_commit": "3379d87"
+        },
+        {
+          "id": "5.8",
+          "title": "Runnable example adapter packages",
+          "status": "passing",
+          "verified_at_commit": "3fb47a6cf9cf7ebb7bad46053384539958795ef4"
+        },
+        {
+          "id": "5.9",
+          "title": "Documentation, alignment, and guards",
+          "status": "passing",
+          "verified_at_commit": "260b982"
+        }
+      ]
+    },
+    "6": {
+      "completed_at": "2026-06-16T16:32:06Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 6 Phase 6 tasks passing. Independent phase-exit evaluator (did not read the ledger) traced the design's 10 Success Criteria to code/tests: all met. (1) docs identify workspace as 0.5.1 with historical rows preserved; (2) EN/ZH docs synchronized; (3) Phase 6 baseline audit reconciles Phase 5 findings; (4) package startup success + degraded-path tests; (5) adapter protocol lifecycle/failure/cancellation/state/shutdown tests; (6) session/RPC extension-state persistence + startup-diagnostics tests; (7) documentation guards prevent overclaiming; (8) Future Ecosystem backlog exists and is non-committal; (9) no npm/marketplace/OAuth-parity/pi-web-ui-parity/permission-enforcement/TS-extension-compat/new-shared-types-crate added (all 13 non-goals confirmed-absent); (10) final gates pass (fmt, clippy -D warnings, doc -D warnings, test --workspace --all-targets 0 failures, smoke). Cross-cutting gates: fmt, clippy, doc, smoke all green.",
+      "snapshot_path": "docs/snapshots/phase6/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "6.1",
+          "title": "Documentation truth and version synchronization",
+          "status": "passing",
+          "verified_at_commit": "693c2e7fe5d0469cf76861c2712addde31a7693b"
+        },
+        {
+          "id": "6.2",
+          "title": "Phase 6 baseline audit and future ecosystem backlog",
+          "status": "passing",
+          "verified_at_commit": "1d386c51bf6084652b4f268725225bfd8d8a3dbe"
+        },
+        {
+          "id": "6.3",
+          "title": "Adapter protocol contract hardening",
+          "status": "passing",
+          "verified_at_commit": "571f89ece07f1ac66933f125edc52650c1c13132"
+        },
+        {
+          "id": "6.4",
+          "title": "Package runtime path and degraded diagnostics hardening",
+          "status": "passing",
+          "verified_at_commit": "8bb0a0a4ef4ee65e67f8786734769850fbc325e5"
+        },
+        {
+          "id": "6.5",
+          "title": "Session and RPC adapter boundary hardening",
+          "status": "passing",
+          "verified_at_commit": "e5118fd2fed0e1e0868dcd7567b248cb7c382167"
+        },
+        {
+          "id": "6.6",
+          "title": "Alignment guards and final Phase 6 gates",
+          "status": "passing",
+          "verified_at_commit": "d78c28fc1a627c658437ff299d675191005919dc"
+        }
+      ],
+      "audit_notes": []
+    },
+    "7": {
+      "completed_at": "2026-06-19T07:35:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 6 Phase 7 tasks passing (7.1 @ 4812c94, 7.2 @ d10ba5d, 7.3 @ fcbcd4c, 7.4 @ e272881, 7.5 @ b32c289, 7.6 @ 42969ad). Independent phase-exit evaluator (did not read the ledger) traced the design's 8 Success Criteria + 9 Non-Goals from docs/superpowers/specs/2026-06-15-phase7-reliability-observability-design.md to code/tests: all met, zero not-met, zero deferred-by-updated-design. SC1 judged satisfied by the additive structured-boundaries scoping (7.5 aggregate rollups kept as 0.x wire per spec 'JSON and RPC Exposure'). Cross-cutting gates: fmt clean, clippy -D warnings clean, doc -D warnings clean, full workspace test 0 failures (134 binaries), smoke 64 passed. Residuals (non-blocking, future phases): (1) SC5 harness startup surfaces adapter degradation as metadata strings, not typed Diagnostic+observe(); (2) aggregate rollups remain pre-0.x wire shapes pending Phase 8 stabilization; (3) schema versions stay unstable-0.x (TRACE_SCHEMA_VERSION=1, SDK_SCHEMA_VERSION=2) pending Phase 8 runtime-contract stabilization.",
+      "snapshot_path": "docs/snapshots/phase7/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "7.1",
+          "title": "Shared diagnostic model and redaction core",
+          "status": "passing",
+          "verified_at_commit": "4812c94dc2c3b69072520dee543141e5505c53fc"
+        },
+        {
+          "id": "7.2",
+          "title": "Provider/runtime diagnostic classification",
+          "status": "passing",
+          "verified_at_commit": "d10ba5d232edc8610f5657e02b15b831ea4d0c5b"
+        },
+        {
+          "id": "7.3",
+          "title": "Local trace envelope and trace sink",
+          "status": "passing",
+          "verified_at_commit": "fcbcd4cea8148d9ce0f037ca1cf98d5a7f917362"
+        },
+        {
+          "id": "7.4",
+          "title": "Top-level opi doctor command",
+          "status": "passing",
+          "verified_at_commit": "e2728814ba6248e806ccda8353eab94f747c7e0f"
+        },
+        {
+          "id": "7.5",
+          "title": "JSON/RPC diagnostics and trace exposure",
+          "status": "passing",
+          "verified_at_commit": "b32c289b2d1851ecdff11030d5c9e25418aaad1d"
+        },
+        {
+          "id": "7.6",
+          "title": "Documentation, redaction guards, and final Phase 7 gates",
+          "status": "passing",
+          "verified_at_commit": "42969ad877b3368b3d7f751c9c818c9a2d222788"
+        }
+      ]
+    },
+    "8": {
+      "completed_at": "2026-06-23T00:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 7 Phase 8 tasks passing (8.1 @ 8816d32, 8.2 @ 07ffca5, 8.3 @ 169b7ce, 8.4 @ 93cab3f, 8.5 @ b0a6a8c, 8.6 @ dfcba73, 8.7 @ 1f270b8). Independent phase-exit evaluator (did not read the ledger) traced the design's Goals (6), Non-Goals (8), and all 8 Success Criteria plus the Error Handling taxonomy, Testing Strategy, and Phase 9 Handoff note to code/tests/docs: 25/25 criteria met, 0 deferred, 0 not-met. Runtime event order, hook semantics, tool scheduling/termination, cancellation, SDK/RPC command-state, diagnostics/trace wire, and the public API surface classification (supported 0.x / unstable internal / candidate removal) are documented and contract-tested. No stable 1.0 API, TypeScript extension API, package ecosystem expansion, new adapter kind, web UI, provider OAuth, in-core workflow runtime, MCP runtime, shared opi-types crate, or whole-loop rewrite was added. Cross-cutting gates: fmt, clippy -D warnings, doc -D warnings, test --workspace --all-targets (2005 passed, 0 failed), smoke all green.",
+      "snapshot_path": "docs/snapshots/phase8\\opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "8.1",
+          "title": "Runtime event order and queue-polling contract",
+          "status": "passing",
+          "verified_at_commit": "8816d32b34240ea1c9706c0515e50feaaca0f64f"
+        },
+        {
+          "id": "8.2",
+          "title": "Hook order and failure semantics contract",
+          "status": "passing",
+          "verified_at_commit": "07ffca5528c15e98e0949b43a0347bbd6ebf17f6"
+        },
+        {
+          "id": "8.3",
+          "title": "Tool scheduling and termination contract",
+          "status": "passing",
+          "verified_at_commit": "169b7cee96872ed35deb21df0eee41722f268004"
+        },
+        {
+          "id": "8.4",
+          "title": "Cancellation and finalized-state contract",
+          "status": "passing",
+          "verified_at_commit": "93cab3f87307910d4f17b95160654270446d05b8"
+        },
+        {
+          "id": "8.5",
+          "title": "SDK and RPC command-state contract",
+          "status": "passing",
+          "verified_at_commit": "b0a6a8c1449ec51d913d3945a8b57b9e16397e91"
+        },
+        {
+          "id": "8.6",
+          "title": "Runtime diagnostics and trace wire stabilization",
+          "status": "passing",
+          "verified_at_commit": "dfcba73f3e0c1a55200c645092ade361cfd933fe"
+        },
+        {
+          "id": "8.7",
+          "title": "API surface classification, docs, non-goal guards, and final Phase 8 gates",
+          "status": "passing",
+          "verified_at_commit": "1f270b8e3ace885bf38a1135d5e2b5e8789d552f"
+        }
+      ],
+      "audit_notes": [
+        "Task 8.7 (final Phase 8 task): the independent D.2 evaluator initially returned PASS-WITH-CONCERNS with 3 confirmed medium guard-quality blockers in the new runtime_contract_docs.rs (tier not bound to surface; lib.rs cross-check bare-substring collision with AgentError/ToolDef; broad Chinese negation tokens 濠电姷鏁告慨鐑藉极閸涘﹥鍙忛柣鎴ｆ閺嬩線鏌熼梻瀵割槮缁惧墽绮换娑㈠箣閻愬灚鍣х紓浣稿閸嬨倝寮诲☉銏犖ㄦい鏃傚帶椤晝绱撴担鎻掍壕闂佸壊鍋嗛崰鎾跺姬閳ь剟姊婚崒姘卞缂佸甯￠弫宥夊籍閸喓鍘?婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾惧鏌ｉ幇顒佹儓闁搞劌鍊块弻娑㈩敃閿濆棛顦ョ紓浣哄С閸楁娊寮诲☉妯锋斀闁告洦鍋勬慨銏ゆ⒑濞茶骞楅柟鐟版喘瀵鏁愭径濠庢綂闂侀潧绻嗛弲婵嬪礉閹间焦鈷掑ù锝嗘灮妤犲繘鏌涙繝鍐╃闁糕晝鍋ら獮瀣晜閽樺姹楅梻浣告啞閻熴儵藝娴兼潙绠栨繛鍡樺灩绾捐棄霉閿濆棗绲诲ù?婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾惧鏌ｉ幇顒佹儓闁搞劌鍊块弻娑㈩敃閿濆棛顦ョ紓浣哄С閸楁娊寮诲☉妯锋斀闁告洦鍋勬慨銏ゆ⒑濞茶骞楅柟鐟版喘楠炲啫螖閸涱噮妫冨┑鐐村灦閻熴儵寮抽崼婵愭富闁靛牆楠告禍婵囩箾閼碱剙鏋涚€殿喛顕ч鍏煎緞婵犱胶鐐婇梻浣告啞濞诧箓宕滃▎蹇婃瀺闁挎繂娲ㄧ壕钘壝归敐鍡楃祷濞?co-occurrence leaks). All 3 were fixed before commit (per-line surface->tier binding map; exact `pub use` re-export line pins; removed the broad tokens and rephrased ZH docs to narrow 婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾惧鏌ｉ幇顒佹儓闁搞劌鍊块弻娑㈩敃閿濆棛顦ョ紓浣哄С閸楁娊寮诲☉妯锋斀闁告洦鍋勬慨銏ゆ⒑濞茶骞楅柟鐟版喘楠炲啫螖閸涱噮妫冨┑鐐村灦閻熴儵寮抽崼婵愭富?婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾惧鏌ｉ幇顒佹儓闁搞劌鍊块弻娑㈩敃閿濆棛顦ョ紓浣哄С閸楁娊寮诲☉妯锋斀闁告洦鍋勬慨銏ゆ⒑濞茶骞楅柟鐟版喘瀵鎮㈤搹鍦紲闂侀潧绻掓慨鐢告倶瀹ュ鈷戦柛婵嗗婵ジ鏌涢幘璺烘灈鐎殿喖顭烽幃銏ゅ礂閻撳簼缃曢梻浣稿閸嬪棝宕伴幘璇茬闁跨喓濮甸埛?婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾惧鏌ｉ幇顒佹儓闁搞劌鍊块弻娑㈩敃閿濆棛顦ョ紓浣哄С閸楁娊寮诲☉妯锋斀闁告洦鍋勬慨銏ゆ⒑濞茶骞楅柟鎼佺畺閸┾偓妞ゆ帒鍠氬鎰箾閸欏澧悡銈夋煥閺囩偛浜扮紓?tokens with the substring-co-occurrence limitation documented) and independently re-verified RESOLVED via mutation testing.",
+        "Residual (non-blocking, documented): the no_positive_claim substring helper shares a per-line co-occurrence limitation with the Phase 6/7 guards (a deceptive line placing a negation word next to a positive claim can leak). Fully closing it requires structural clause parsing across all three phase guards and is out of Phase 8 scope; the Phase 8 helper was kept at the narrow Phase 7 baseline with the limitation documented in its doc-comment."
+      ]
+    },
+    "9": {
+      "completed_at": "2026-06-25T06:05:28Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "Independent phase-exit evaluator (did not read the ledger) rebuilt SC1-9 and the 11 non-goals from docs/superpowers/specs/2026-06-24-phase9-pi-0-80-2-baseline-realignment-design.md and traced each to current docs/tests: 9/9 met, 0 deferred, 0 not-met. All 11 non-goals confirmed not implemented. git diff 6c43ba6..HEAD shows only the docs-guard test file changed across the whole phase (no src/manifest/scripts/opi-types). 6 new Phase 9 guard tests pass (mutation-verified non-vacuous); Phase 5-8 regression guards intact. Verdict ARCHIVE-READY.",
+      "snapshot_path": "docs/snapshots/phase9/opi-impl-state.json",
+      "criteria_trace": [
+        {
+          "source": "docs/superpowers/specs/2026-06-24-phase9-pi-0-80-2-baseline-realignment-design.md#Phase 9 Success Criteria 1",
+          "criterion": "docs/pi-alignment-matrix.md includes architecture analysis, evidence anchors, and the three-layer alignment dashboard.",
+          "status": "met",
+          "evidence": "docs/pi-alignment-matrix.md Document Control L15-24, Pi Architecture L53-119 (4 packages), Evidence Index L140-159 (.repo/pi-0.80.2 anchors), Alignment Dashboard L171-177 (core/product/ecosystem); guard phase9_alignment_matrix_evidence_baseline passes"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 2",
+          "criterion": "docs/opi-spec*.md and docs/pi-alignment-matrix*.md no longer describe .repo/pi-0.75.3 as the current studied upstream baseline.",
+          "status": "met",
+          "evidence": "grep of 4 normative docs: every pi-0.75.3 occurrence is historical (matrix.md:124,144; matrix.zh.md:61,81); Document Control rows name .repo/pi-0.80.2; guard phase9_current_baseline_is_pi_0_80_2 passes"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 3",
+          "criterion": "English and Chinese normative docs are synchronized.",
+          "status": "met",
+          "evidence": "guard phase9_localized_docs_stay_in_sync verifies EN/ZH pairs (Phase 9 headings, dashboard layers, opi-agent Partial, upstream path, npm/gallery + web/share non-goal framing)"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 4",
+          "criterion": "Phase 9-14 roadmap is documented consistently.",
+          "status": "met",
+          "evidence": "guard phase9_roadmap_numbering_consistent verifies 6 EN+6 ZH spec headings + matrix rows |9|-|14| in both languages; 5 phase10-14 design docs present under docs/superpowers/specs/"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 5",
+          "criterion": "opi-agent package alignment reflects the generic harness gap honestly.",
+          "status": "met",
+          "evidence": "docs/pi-alignment-matrix.md:184 marks opi-agent Partial until the generic AgentHarness gap closes"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 6",
+          "criterion": "Models/Auth and AgentHarness are named as Phase 10 deepening targets.",
+          "status": "met",
+          "evidence": "matrix.md:250 Phase 10 row + spec.md:1392-1393 Phase 10 workstream table name Models/Auth (opi-ai) and generic AgentHarness (opi-agent); ZH counterparts verified"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 7",
+          "criterion": "Future ecosystem candidates are documented with entry conditions.",
+          "status": "met",
+          "evidence": "guard phase9_future_ecosystem_candidates_have_entry_conditions verifies spec Future Ecosystem Candidates section + Entry condition column + 7 candidates + non-committal framing"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 8",
+          "criterion": "Documentation guards reject overclaims for OAuth parity, custom UI parity, npm/gallery, image generation, web/share, and pi session compatibility.",
+          "status": "met",
+          "evidence": "guard phase9_forbidden_current_scope_claims_rejected (parity/compat needles) + existing Phase 5/6 guards (npm, marketplace, update/enable/disable, TS extension API, pi session v3); cargo test phase9 -> 6 passed 0 failed"
+        },
+        {
+          "source": "...#Phase 9 Success Criteria 9",
+          "criterion": "No runtime behavior changes occur.",
+          "status": "met",
+          "evidence": "git diff --name-only 6c43ba6..HEAD = only crates/opi-coding-agent/tests/productized_packages_docs.rs (test file, allowed); no crates/*/src, no Cargo.toml/Cargo.lock, no scripts/; crates/opi-types absent"
+        }
+      ],
+      "task_summary": [
+        {
+          "id": "9.1",
+          "title": "Alignment matrix pi 0.80.2 evidence baseline",
+          "status": "passing",
+          "verified_at_commit": "0285972b90ea47d287b8b658481c729f171059de"
+        },
+        {
+          "id": "9.2",
+          "title": "Normative spec baseline and roadmap synchronization",
+          "status": "passing",
+          "verified_at_commit": "26904f229ba3d4d18c0139a6e7cc1b89dc51469d"
+        },
+        {
+          "id": "9.3",
+          "title": "Phase 10-14 supplemental design recast",
+          "status": "passing",
+          "verified_at_commit": "3578b9966c6bb5ec323d3775a6c46b1567914a60"
+        },
+        {
+          "id": "9.4",
+          "title": "Documentation guards and final Phase 9 gates",
+          "status": "passing",
+          "verified_at_commit": "bec6ad7d048e1e8b72f76d5a9bc92a7baba17885"
+        }
+      ]
+    },
+    "10": {
+      "completed_at": "2026-06-26T12:00:00Z",
+      "exit_criteria_met": true,
+      "evaluator_summary": "All 7 Phase 10 tasks passing (10.1-10.7 @ 4a9916b..d16c364). F.1a phase-exit trace from independent source inspection (workflow wbx4z69j3, 8 SC inspectors + direct SC8 source scan): SC1 met (provider_collection.rs ProviderCollection/AuthDescriptor, 9 tests); SC2 met (provider_factory.rs routes through ProviderCollection, provider_policy_is_centralized 33-token pin); SC3 met (harness.rs Phase/HarnessSnapshot/SavePoint/PendingWriteQueue, 2 contract tests); SC4 met (CodingHarness product-wrapper rustdoc + 2 boundary tests); SC5 met (SessionRepo/SessionFacade + D1-D4 decisions, 7 session_facade tests); SC6 met (opi-spec Runtime hook boundaries 6-surface model + AgentHooks narrow trait + 2 guards); SC7 met (8 named regression suites); SC8 met (all 11 non-goals source-verified not-implemented + guard corpus). All 4 workstream goals met (10.1/10.2/10.3/10.4). No not-met; no deferred-by-updated-design.",
+      "snapshot_path": "docs/snapshots/phase10/opi-impl-state.json",
+      "task_summary": [
+        {
+          "id": "10.1",
+          "title": "Provider collection/auth seam",
+          "status": "passing",
+          "verified_at_commit": "4a9916b250a948a1c8815bdd0a1904363fd1bede"
+        },
+        {
+          "id": "10.2",
+          "title": "Coding-agent provider factory routing",
+          "status": "passing",
+          "verified_at_commit": "c069853415c5586623c5ed07eb657882ebc4d588"
+        },
+        {
+          "id": "10.3",
+          "title": "Generic AgentHarness core seam",
+          "status": "passing",
+          "verified_at_commit": "a644adc7e0dad48129667728214a43e593c33cb6"
+        },
+        {
+          "id": "10.4",
+          "title": "CodingHarness wrapper integration",
+          "status": "passing",
+          "verified_at_commit": "d4fbdb73e4b34a6e7547932a35c2d92c20c5353d"
+        },
+        {
+          "id": "10.5",
+          "title": "Session repo/facade boundaries",
+          "status": "passing",
+          "verified_at_commit": "8c946a286fe30c7979c34ec6cbe19d56c1f38364"
+        },
+        {
+          "id": "10.6",
+          "title": "Runtime hook boundary hardening",
+          "status": "passing",
+          "verified_at_commit": "4015ffeeb87d9c4de0b289996cd3c6c45e0785e2"
+        },
+        {
+          "id": "10.7",
+          "title": "Docs guards and final Phase 10 gates",
+          "status": "passing",
+          "verified_at_commit": "d16c364367370a2bf53e77fd207a96d79ece1036"
+        }
+      ],
+      "audit_notes": [
+        "Residual (non-blocking, original design intent, not deferred-by-updated-design): SC2 runtime dispatch path (assemble_harness_collection -> ProviderCollection::from_registry) does not auth-gate the active provider; only --list-models attaches AuthDescriptors. Documented intent (provider_factory.rs:11-25); becomes load-bearing if Phase 11/12 needs runtime auth enforcement.",
+        "Residual (non-blocking): SC3 begin_turn/begin_compaction are state-machine guards only; the agent loop is not yet routed through AgentHarness (deferred to task 10.4+/Phase 11 per harness.rs:30-36). Branch-summary durable entry representation deferred (task 10.5 D2, harness.rs:706-709).",
+        "Residual (non-blocking): SC5 Phase 13 richer entry variants (branch_summary durable, extension-message context injection, unfinished-operation replay) deferred per D2/D3/D4 (harness.rs:705-719); additive-v1 non_exhaustive SessionEntry + forward-compatible reader is the boundary contract. Consistent with SC5 wording.",
+        "Residual (non-blocking): SC8 OAuth grep hits are all doc-comment deferrals or upstream bearer-token passthrough (provider_collection.rs:25-29 'Future OAuth not implemented'; vertex.rs:6 / config.rs:161 Vertex OAuth2 bearer token user-supplied via VERTEX_ACCESS_TOKEN; streaming_proxy.rs:337 GitHub token-type passthrough; bedrock/credentials.rs:143 'no SSO browser/device flow'). No opi OAuth login / subscription auth / image generation / browser-web / npm-marketplace / pi-TS-compat / pi-session-compat / opi-types-crate / whole-loop-rewrite implemented.",
+        "Dual hash convention applied at 10.6 + 10.7 (spec edits): phase4 snapshot CRLF-normalized (phase4_ledger pins it); live ledger raw sha256sum. phase6 snapshot carries spec_files_sha256 but NO test consumes it (memory 'phase6 empty' was stale; corrected post-task)."
+      ]
+    }
+  }
+}
