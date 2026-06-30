@@ -942,16 +942,32 @@ fn serialize_messages(messages: &[crate::message::Message]) -> serde_json::Value
                     serde_json::json!({"role": "assistant", "content": content})
                 }
                 crate::message::Message::ToolResult(t) => {
+                    let text = t
+                        .content
+                        .iter()
+                        .map(|c| match c {
+                            crate::message::OutputContent::Text { text } => text.clone(),
+                            crate::message::OutputContent::Image { media_type, .. } => {
+                                format!("[image: {}]", media_type.as_str())
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    let mut block = serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": t.tool_call_id,
+                        "content": text,
+                    });
+                    // Phase 11.9: the Anthropic Messages API documents `is_error` on
+                    // the tool_result content block as the failure signal. Emit it
+                    // only on failure so the is_error:false body stays byte-identical
+                    // to the pre-fix shape.
+                    if t.is_error {
+                        block["is_error"] = serde_json::Value::Bool(true);
+                    }
                     serde_json::json!({
                         "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": t.tool_call_id,
-                            "content": t.content.iter().map(|c| match c {
-                                crate::message::OutputContent::Text { text } => text.clone(),
-                                crate::message::OutputContent::Image { media_type, .. } => format!("[image: {}]", media_type.as_str()),
-                            }).collect::<Vec<_>>().join(""),
-                        }],
+                        "content": [block],
                     })
                 }
             })

@@ -589,15 +589,24 @@ impl GeminiProvider {
                             }
                         })
                         .collect();
+                    let mut response = serde_json::json!({
+                        "content": response_text,
+                    });
+                    // Phase 11.9: the Gemini REST API documents an `error` key INSIDE
+                    // functionResponse.response as the failure signal ("if the
+                    // function call failed to execute, the response can have an
+                    // 'error' key"). Emit it only on failure so the success body
+                    // stays byte-identical. Vertex inherits this via the shared adapter.
+                    if t.is_error {
+                        response["error"] = serde_json::Value::Bool(true);
+                    }
                     contents.push(serde_json::json!({
                         "role": "user",
                         "parts": [{
                             "functionResponse": {
                                 "name": t.tool_name,
                                 "id": t.tool_call_id,
-                                "response": {
-                                    "content": response_text,
-                                },
+                                "response": response,
                             }
                         }],
                     }));

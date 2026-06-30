@@ -17,6 +17,13 @@ use crate::message::{AssistantContent, AssistantMessage, OutputContent, ToolCall
 use crate::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
 use crate::stream::{AssistantStreamEvent, StopReason, Usage};
 
+/// Deterministic failure marker prefixed to a `function_call_output.output`
+/// string when a tool result is an error. The Responses API does not accept a
+/// client-set status on input items, so this text marker is the only
+/// wire-distinguishable failure signal. Duplicated verbatim in `openai_chat.rs`;
+/// `tool_result_wire.rs` pins the two byte-identical so future drift is caught.
+const TOOL_ERROR_MARKER: &str = "[tool_error] ";
+
 // ---------------------------------------------------------------------------
 // SSE frame parser (Responses API uses standard SSE with event: lines)
 // ---------------------------------------------------------------------------
@@ -755,10 +762,20 @@ impl OpenAiResponsesProvider {
                             }
                         })
                         .collect();
+                    // Phase 11.9: the Responses API does not accept a client-set
+                    // status on input function_call_output items (status is
+                    // server-managed on output items only), so prefix the same
+                    // deterministic failure marker as Chat Completions; leave the
+                    // success body byte-identical.
+                    let output = if t.is_error {
+                        format!("{TOOL_ERROR_MARKER}{content_text}")
+                    } else {
+                        content_text
+                    };
                     input.push(serde_json::json!({
                         "type": "function_call_output",
                         "call_id": t.tool_call_id,
-                        "output": content_text,
+                        "output": output,
                     }));
                 }
             }

@@ -1048,6 +1048,15 @@ fn serialize_messages(
                         }
                     })
                     .collect();
+                // Phase 11.9: the Chat Completions API has no native error field on a
+                // role:"tool" message, so prefix the deterministic failure marker when
+                // the tool result is an error; leave the success body byte-identical.
+                // Azure/OpenRouter/Mistral inherit this via the shared adapter.
+                let content_text = if t.is_error {
+                    format!("{TOOL_ERROR_MARKER}{content_text}")
+                } else {
+                    content_text
+                };
                 let mut tool_msg = serde_json::json!({
                     "role": "tool",
                     "tool_call_id": t.tool_call_id,
@@ -1063,6 +1072,14 @@ fn serialize_messages(
 
     serde_json::Value::Array(result)
 }
+
+/// Deterministic failure marker prefixed to a `role:"tool"` content string when a
+/// tool result is an error. The OpenAI Chat Completions API has no native error
+/// field on tool messages, so this text marker is the only wire-distinguishable
+/// failure signal; Azure/OpenRouter/Mistral inherit it via this shared adapter.
+/// Duplicated verbatim in `openai_responses.rs`; `tool_result_wire.rs` pins the
+/// two byte-identical so future drift is caught.
+const TOOL_ERROR_MARKER: &str = "[tool_error] ";
 
 impl Provider for OpenAiChatProvider {
     fn stream(&self, request: Request) -> EventStream {
