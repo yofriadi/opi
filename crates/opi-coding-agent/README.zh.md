@@ -130,6 +130,68 @@ Provider 凭据环境变量名、base URL、模型列表和代理都可以在配
 非交互/RPC 模式下，显式 allowlist 如果包含 `write`、`edit` 或 `bash`，必须同时设置
 `--allow-mutating` 或 `defaults.allow_mutating_tools = true`。
 
+## 工具策略
+
+八个内置工具分为只读和修改性两组。修改性工具仅在已解析策略允许时运
+行；其余约束通过工具选择落实，而非操作系统级 sandbox 或交互式权限提示。
+
+### 只读与修改性
+
+| 工具 | 类别 |
+|------|------|
+| `read`、`grep`、`find`、`ls`、`glob` | 只读 |
+| `write`、`edit`、`bash` | 修改性 |
+
+`write` 与 `edit` 限制在工作区根目录；非交互式 `read` 同样受限，但交互式
+`read` 可读取绝对路径与工作区外的路径。`bash` 不受路径限制。各模式默认启用
+哪一组工具，以及非交互/RPC 模式下修改性工具对 `--allow-mutating` 的要求，见
+上方[内置工具](#内置工具)。
+
+### 参数优先级
+
+工具参数按确定性优先级解析：
+
+`--no-tools` > `--tools <list>` > `--no-builtin-tools` > 默认
+
+`--no-tools` 禁用全部工具；`--tools` 仅保留指定的内置工具；`--no-builtin-tools`
+关闭内置工具但保留 extension/custom 工具可用；否则使用模式默认值。
+
+### bash 执行
+
+| 方面 | 行为 |
+|------|------|
+| Shell | Windows 使用 `cmd /C`，Unix 使用 `sh -c`。 |
+| 工作目录 | 工作区根目录。 |
+| 超时 | 默认 30 秒；`timeout_secs` 可覆盖。 |
+| 取消 | 取消令牌报告 `cancelled=true` / `timed_out=false`；超时报告 `timed_out=true` / `cancelled=false`。 |
+| 路径限制 | 无 —— `bash` 不限制在工作区内。 |
+| 环境 | 继承自父进程，但绝不写入 details：`details.env = { "inheritance": "inherited", "values_included": false }`。只有当命令本身打印某个值时，该值才会暴露。 |
+| 退出码 | 记录在 details 中；非零退出码置 `is_error`。进程在退出前被取消或超时时 `exit_code` 为 null。 |
+| 输出 | 合并后的 stdout 与 stderr 上限 64 KiB。见[输出截断](#输出截断)。 |
+
+### 输出截断
+
+| 工具 | 上限 | 截断行为 |
+|------|------|----------|
+| `read` | 默认 2000 行 | 置 `truncated`，追加 `... N lines omitted` 标记，并记录 `details.truncated` / `omitted` / `line_count`。显式 `limit` 原样返回（不再施加默认上限）；`limit: 0` 不返回任何行并置 `truncated`。 |
+| `bash` | 合并 stdout+stderr 64 KiB | 当总输出超过上限时，预览为合并后 stdout-then-stderr 的前 64 KiB，置 `truncated` 与 `details.truncated`，并尽力把完整合并输出落盘到临时文件，路径报告在 `details.full_output`。若无法创建该文件，则仅置 `truncated`。 |
+
+### 非目标
+
+以下各项刻意不在内置工具范围内（更广的产品边界见[边界](#边界)）：
+
+- 内置权限弹窗或交互式批准提示
+- 持久后台 bash 或 shell 会话
+- 远程执行
+- IDE 项目索引
+- 语言服务器集成
+- `write` / `edit` 时自动格式化
+- package 生态扩展
+- todo、plan mode 或 sub-agents 等工作流工具
+- sandbox 实现
+
+修改性工具安全是工具选择校验，不是权限或 sandbox 子系统。
+
 ## 运行模式
 
 ### 交互式

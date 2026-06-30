@@ -134,6 +134,74 @@ Default active tools:
 In non-interactive/RPC mode, explicit allowlists containing `write`, `edit`, or
 `bash` require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
 
+## Tool Policy
+
+The eight built-in tools split into a read-only set and a mutating set. Mutating
+tools run only where the resolved policy allows them; the rest is enforced
+through tool selection, not through an OS sandbox or interactive permission
+prompts.
+
+### Read-only vs mutating
+
+| Tool | Class |
+|------|-------|
+| `read`, `grep`, `find`, `ls`, `glob` | read-only |
+| `write`, `edit`, `bash` | mutating |
+
+`write` and `edit` are confined to the workspace root; non-interactive `read` is
+too, but interactive `read` may follow absolute and outside-workspace paths.
+`bash` is not path-confined. Default tool sets per mode, and the
+`--allow-mutating` requirement for non-interactive/RPC mutating tools, are
+listed under [Built-in Tools](#built-in-tools) above.
+
+### Flag precedence
+
+Tool flags resolve with deterministic precedence:
+
+`--no-tools` > `--tools <list>` > `--no-builtin-tools` > default
+
+`--no-tools` disables every tool; `--tools` keeps only the named built-ins;
+`--no-builtin-tools` drops built-ins while leaving extension/custom tools
+available; otherwise the mode default applies.
+
+### bash execution
+
+| Aspect | Behavior |
+|--------|----------|
+| Shell | `cmd /C` on Windows, `sh -c` on Unix. |
+| Working directory | Workspace root. |
+| Timeout | 30 seconds by default; `timeout_secs` overrides. |
+| Cancellation | A cancellation token reports `cancelled=true` / `timed_out=false`; a timeout reports `timed_out=true` / `cancelled=false`. |
+| Path confinement | None — `bash` is not restricted to the workspace. |
+| Environment | Inherited from the parent process, but never copied into details: `details.env = { "inheritance": "inherited", "values_included": false }`. A value is exposed only if the command itself prints it. |
+| Exit code | Reported in details; a nonzero exit sets `is_error`. `exit_code` is null when the process is cancelled or times out before exiting. |
+| Output | Combined stdout and stderr are capped at 64 KiB. See [Output truncation](#output-truncation). |
+
+### Output truncation
+
+| Tool | Cap | Truncation behavior |
+|------|-----|---------------------|
+| `read` | 2000 lines by default | Sets `truncated`, appends an `... N lines omitted` marker, and records `details.truncated` / `omitted` / `line_count`. An explicit `limit` is returned in full (no default cap is reapplied); `limit: 0` returns no lines and flags `truncated`. |
+| `bash` | 64 KiB combined stdout+stderr | When total output exceeds the cap, the preview is the first 64 KiB of merged stdout-then-stderr, `truncated` and `details.truncated` are set, and opi best-effort spills the complete merged output to a temp file reported in `details.full_output`. If the spill file cannot be created, only `truncated` is set. |
+
+### Non-goals
+
+The following are intentionally out of scope for the built-in tools (broader
+product boundaries are listed under [Boundaries](#boundaries)):
+
+- built-in permission popup or interactive approval prompt
+- persistent background bash or shell sessions
+- remote execution
+- IDE project index
+- language-server integration
+- automatic formatting on `write` / `edit`
+- package ecosystem expansion
+- workflow tools such as todo, plan mode, or sub-agents
+- sandbox implementation
+
+Mutating-tool safety is a tool-selection check, not a permission or sandbox
+subsystem.
+
 ## Modes
 
 ### Interactive
