@@ -10,7 +10,7 @@
 
 ## Status
 
-The workspace package version in `Cargo.toml` is `0.6.2`. `opi` is usable as a
+The workspace package version in `Cargo.toml` is `0.6.3`. `opi` is usable as a
 terminal coding agent and as a set of Rust crates for embedding agent runtime
 pieces. The repository may also contain unreleased changes on top of that
 version; check [CHANGELOG.md](CHANGELOG.md) for the current delta.
@@ -19,9 +19,9 @@ version; check [CHANGELOG.md](CHANGELOG.md) for the current delta.
 does not read pi config by default, and uses its own TOML config and JSONL
 session format.
 
-The `0.6.2` release includes the Phase 10 provider collection/auth,
-generic-harness, session-facade, and runtime-hook boundary seams. The current
-tree also carries unreleased Phase 11 tooling-quality changes on top of `0.6.2`
+The `0.6.3` release includes the Phase 10 provider collection/auth,
+generic-harness, session-facade, and runtime-hook boundary seams, plus the
+Phase 11 tooling-quality work
 (see [CHANGELOG.md](CHANGELOG.md)): built-in tool results now carry consistent
 metadata, truncation flags, and structured diagnostics; public event/session
 surfaces redact sensitive tool details; provider adapters preserve failed
