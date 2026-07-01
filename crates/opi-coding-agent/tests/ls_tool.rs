@@ -609,7 +609,7 @@ async fn unicode_directory_metadata_round_trips() {
 #[cfg(unix)]
 #[tokio::test]
 async fn ls_tool_permission_denied_target_is_classified() {
-    extern "C" {
+    unsafe extern "C" {
         fn getuid() -> u32;
     }
     if unsafe { getuid() } == 0 {

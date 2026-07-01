@@ -1489,7 +1489,7 @@ async fn windows_drive_prefix() {
 #[cfg(unix)]
 #[tokio::test]
 async fn read_tool_permission_denied_is_classified() {
-    extern "C" {
+    unsafe extern "C" {
         fn getuid() -> u32;
     }
     if unsafe { getuid() } == 0 {

@@ -400,7 +400,7 @@ async fn find_tool_file_scope_is_not_a_directory() {
 #[cfg(unix)]
 #[tokio::test]
 async fn find_tool_permission_denied_scope_is_classified() {
-    extern "C" {
+    unsafe extern "C" {
         fn getuid() -> u32;
     }
     if unsafe { getuid() } == 0 {
