@@ -423,7 +423,7 @@ impl fmt::Display for FsToolError {
 
 const REDACTED: &str = "[REDACTED]";
 
-/// Field names whose full values are redacted in summary mode because they
+/// Field names whose full values are redacted in every mode because they
 /// carry prompts, tool output, environment blocks, commands, or working
 /// directories.
 const CONTENT_SENSITIVE_KEYS: &[&str] = &[
@@ -472,15 +472,26 @@ static ABSOLUTE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Redact a structured JSON value for the given mode.
 ///
 /// Both modes scrub known secrets via [`SecretRedactor`] (API keys, bearer
-/// tokens, and sensitive field names). [`RedactionMode::Summary`] additionally
-/// redacts content-sensitive fields and any string value that looks like an
-/// absolute path.
+/// tokens, and sensitive field names) and structural content-sensitive fields
+/// such as commands, working directories, prompts, and tool output.
+/// [`RedactionMode::Summary`] additionally redacts any string value that looks
+/// like an absolute path.
 pub fn redact(value: &serde_json::Value, mode: RedactionMode) -> serde_json::Value {
     let scrubbed = SecretRedactor::default().redact(value);
+    let structurally_scrubbed = redact_structural_sensitive_fields(&scrubbed);
     match mode {
-        RedactionMode::Summary => redact_summary(&scrubbed),
-        RedactionMode::Verbose => scrubbed,
+        RedactionMode::Summary => redact_summary_paths(&structurally_scrubbed),
+        RedactionMode::Verbose => structurally_scrubbed,
     }
+}
+
+/// Redact a value for public event/session boundaries.
+///
+/// This is stricter than provider conversion and matches summary diagnostics:
+/// tool arguments, paths, commands, env metadata, stdout/stderr-like fields, and
+/// recognizable secret values are scrubbed before JSON/RPC/session exposure.
+pub fn redact_public_value(value: &serde_json::Value) -> serde_json::Value {
+    redact(value, RedactionMode::Summary)
 }
 
 /// Redact a single string using the same policy as structured details.
@@ -491,7 +502,7 @@ pub fn redact_text(text: &str, mode: RedactionMode) -> String {
     }
 }
 
-fn redact_summary(value: &serde_json::Value) -> serde_json::Value {
+fn redact_structural_sensitive_fields(value: &serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => {
             let mut out = serde_json::Map::with_capacity(map.len());
@@ -499,14 +510,31 @@ fn redact_summary(value: &serde_json::Value) -> serde_json::Value {
                 let redacted = if is_content_sensitive_key(key) {
                     serde_json::Value::String(REDACTED.to_owned())
                 } else {
-                    redact_summary(value)
+                    redact_structural_sensitive_fields(value)
                 };
                 out.insert(key.clone(), redacted);
             }
             serde_json::Value::Object(out)
         }
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(redact_structural_sensitive_fields)
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn redact_summary_paths(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), redact_summary_paths(value)))
+                .collect(),
+        ),
         serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.iter().map(redact_summary).collect())
+            serde_json::Value::Array(items.iter().map(redact_summary_paths).collect())
         }
         serde_json::Value::String(s) => {
             if ABSOLUTE_PATH_RE.is_match(s) {

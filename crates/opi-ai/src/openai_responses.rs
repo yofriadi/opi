@@ -13,16 +13,11 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::http::HttpClient;
-use crate::message::{AssistantContent, AssistantMessage, OutputContent, ToolCall};
+use crate::message::{
+    AssistantContent, AssistantMessage, OutputContent, TOOL_ERROR_MARKER, ToolCall,
+};
 use crate::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
 use crate::stream::{AssistantStreamEvent, StopReason, Usage};
-
-/// Deterministic failure marker prefixed to a `function_call_output.output`
-/// string when a tool result is an error. The Responses API does not accept a
-/// client-set status on input items, so this text marker is the only
-/// wire-distinguishable failure signal. Duplicated verbatim in `openai_chat.rs`;
-/// `tool_result_wire.rs` pins the two byte-identical so future drift is caught.
-const TOOL_ERROR_MARKER: &str = "[tool_error] ";
 
 // ---------------------------------------------------------------------------
 // SSE frame parser (Responses API uses standard SSE with event: lines)

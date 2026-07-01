@@ -6,7 +6,7 @@
 use std::fs;
 
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
-use opi_coding_agent::tool::{FindTool, MAX_NAV_RESULTS};
+use opi_coding_agent::tool::{FindTool, MAX_NAV_RESULTS, MAX_NAV_VISITED_ENTRIES};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -501,6 +501,70 @@ async fn nav_tools_emit_sorted_results() {
     }
 }
 
+#[tokio::test]
+async fn find_bounds_collection_before_walking_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_NAV_RESULTS + 20) {
+        fs::write(dir.path().join(format!("f_{i:04}.txt")), "x").unwrap();
+    }
+
+    let find = FindTool::new(dir.path().to_path_buf())
+        .execute(
+            "find-bound-1",
+            json!({ "pattern": "f_*.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!find.is_error, "{}", tool_result_text(&find));
+    assert!(find.truncated);
+    let details = find.details.as_ref().expect("details");
+    assert_eq!(
+        details
+            .get("search_terminated_early")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert!(
+        details
+            .get("visited_entries")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|count| count <= MAX_NAV_VISITED_ENTRIES as u64),
+        "visited_entries should be bounded: {details}"
+    );
+}
+
+#[tokio::test]
+async fn find_early_termination_without_matches_is_not_reported_as_no_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_NAV_VISITED_ENTRIES + 1) {
+        fs::write(dir.path().join(format!("f_{i:05}.txt")), "x").unwrap();
+    }
+
+    let find = FindTool::new(dir.path().to_path_buf())
+        .execute(
+            "find-early-no-match",
+            json!({ "pattern": "*.rs" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!find.is_error, "{}", tool_result_text(&find));
+    assert!(find.truncated);
+    let text = tool_result_text(&find).to_lowercase();
+    assert!(
+        text.contains("terminated before completing"),
+        "early termination must be visible in provider-facing text: {text}"
+    );
+    assert!(
+        !text.contains("no matches"),
+        "early termination is not a complete no-match result: {text}"
+    );
+}
 /// find honors the CancellationToken mid-walk (pre-cancelled -> zero matches).
 #[tokio::test]
 async fn nav_tools_honour_cancellation_token() {

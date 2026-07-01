@@ -423,6 +423,7 @@ pub struct ToolResultMessage {
     pub content: Vec<OutputContent>,
     pub details: Option<serde_json::Value>,
     pub is_error: bool,
+    pub truncated: bool,
     pub timestamp_ms: i64,
 }
 ```
@@ -496,11 +497,21 @@ pub enum AgentEvent {
     MessageEnd { message: AgentMessage },
     ToolExecutionStart { tool_call_id: String, tool_name: String, args: serde_json::Value },
     ToolExecutionUpdate { tool_call_id: String, tool_name: String, args: serde_json::Value, partial_result: serde_json::Value },
-    ToolExecutionEnd { tool_call_id: String, tool_name: String, result: serde_json::Value, is_error: bool },
+    ToolExecutionEnd {
+        tool_call_id: String,
+        tool_name: String,
+        result: serde_json::Value,
+        details: Option<serde_json::Value>,
+        is_error: bool,
+        truncated: bool,
+        diagnostics: Vec<ToolDiagnostic>,
+    },
 }
 ```
 
 `MessageUpdate` is assistant-only. `AgentEnd` means no more loop events will be emitted, but awaited subscribers MAY still be settling.
+
+Public agent events and persisted session messages MUST redact command/path/env/stdout/stderr-like fields in tool args, details, partial results, and diagnostics before exposure. Public assistant message snapshots and stream events also redact tool-call arguments and tool-call deltas, because those values are model-supplied tool args at the same boundary. Provider adapters consume tool result `content` plus provider-specific `is_error` handling; `details`, `diagnostics`, and `truncated` are local event/session metadata and are not sent as provider tool-result payloads.
 
 ### 7.5 Session Events
 
@@ -646,17 +657,27 @@ pub enum ExecutionMode {
     Parallel,
 }
 
+pub struct ToolDiagnostic {
+    pub code: String,
+    pub message: String,
+    pub context: serde_json::Value,
+}
+
 pub struct ToolResult {
     pub content: Vec<opi_ai::OutputContent>,
     pub details: Option<serde_json::Value>,
     pub is_error: bool,
     pub terminate: bool,
+    pub truncated: bool,
+    pub diagnostics: Vec<ToolDiagnostic>,
 }
 ```
 
 Built-in tools SHOULD define typed Rust argument structs deriving `Deserialize` and `schemars::JsonSchema`. `ToolDef` exposes the generated JSON Schema to providers, while dynamic input from the model is validated with `jsonschema` before deserialization. `serde_json::Value` is acceptable at protocol boundaries and for diagnostics, but tool business logic should not remain Value-driven.
 
 Argument validation happens after `ToolExecutionStart` and before `before_tool_call`. Validation failure becomes an error tool result.
+
+`ToolResult.details` is success/audit metadata. Most built-in failure results SHOULD keep `details: None`; structured failure metadata lives in `diagnostics[].context` and is redacted at public event/session boundaries. Operation-style failures MAY keep stable operation metadata in `details`; bash operation failures use this exception for fields such as `command`, `exit_code`, `cancelled`, `timed_out`, and `truncated`, while public diagnostic context omits the raw command. Large or partial results set `truncated` consistently on `ToolResult`, `ToolResultMessage`, and `ToolExecutionEnd`.
 
 Execution rules:
 
@@ -741,7 +762,7 @@ The binary owns CLI parsing, config loading, provider registry construction, bui
 | `find` | parallel | 3 | pi-compatible file discovery alias with gitignore-aware behavior |
 | `ls` | parallel | 3 | pi-compatible directory listing with bounded output |
 
-Interactive mode SHOULD default to the pi coding tool set: `read`, `write`, `edit`, and `bash`. Non-interactive mode SHOULD default to a conservative read-only tool set: `read`, `grep`, `find`, and `ls`; `glob` MAY remain available as an additional read-only search convenience, but the core non-interactive workflow should be expressible without it. Non-interactive mutating tools require explicit opt-in through `--allow-mutating` or `defaults.allow_mutating_tools = true`, which is especially important for unattended automation and edge devices where the process may run close to deployment, storage, or device-control scripts.
+Interactive mode SHOULD default to the pi coding tool set: `read`, `write`, `edit`, and `bash`. Non-interactive mode SHOULD default to a conservative read-only tool set: `read`, `grep`, `find`, `ls`, and `glob`. `glob` remains an additional read-only search convenience, but the core non-interactive workflow should be expressible without it. Non-interactive mutating tools require explicit opt-in through `--allow-mutating` or `defaults.allow_mutating_tools = true`, which is especially important for unattended automation and edge devices where the process may run close to deployment, storage, or device-control scripts.
 
 Tool visibility and tool execution policy MUST agree. Opi should not advertise `write`, `edit`, or `bash` to the model in non-interactive mode unless those tools can execute under the resolved policy.
 
@@ -1453,12 +1474,14 @@ session file compatibility, a shared `opi-types` crate, or a whole-loop rewrite.
 
 ### Phase 11 - Tooling Quality
 
-Status: planned; recast from the previous Phase 9.
+Status: completed in Unreleased workspace changes.
 
 Phase 11 hardens built-in tools after Phase 10 clarifies harness/tool
-scheduling boundaries. It focuses on path normalization, encoding, truncation,
-diagnostics, cancellation, error results, and consistent mutating-tool policy.
-It must not add persistent background shells or broad permission-popup systems.
+scheduling boundaries. It delivered the tool-result contract, filesystem error
+taxonomy, read/write/edit/bash hardening, navigation-tool bounded work and skip
+diagnostics, diagnostics/trace lifting and redaction, provider `is_error`
+propagation, and documentation/help guard tests. It deliberately did not add
+persistent background shells or broad permission-popup systems.
 
 ### Phase 12 - Provider Correctness
 

@@ -116,8 +116,10 @@ Provider 凭据环境变量名、base URL、模型列表和代理都可以在配
 | `find` | `pattern`，可选 `path` | 遵守 gitignore 的文件发现，可限制到子目录；并行。 |
 | `grep` | `pattern` | 遵守 gitignore 的正则搜索；并行。 |
 | `write` | `path`、`content` | 创建父目录；串行；修改性。 |
-| `edit` | `path`、`old_string`、`new_string` | 替换第一个精确匹配，并记录 before/after details；串行；修改性。 |
+| `edit` | `path`、`old_string`、`new_string` | 替换唯一精确匹配，并记录 before/after details；串行；修改性。 |
 | `bash` | `command`，可选 `timeout_secs` | 在 workspace 根目录运行；Windows 使用 `cmd /C`，Unix 使用 `sh -c`；串行；修改性。 |
+
+`glob` 是 opi 的便利工具；pi-compatible workflow 不应依赖它作为唯一发现路径。
 
 默认启用工具：
 
@@ -173,7 +175,7 @@ Provider 凭据环境变量名、base URL、模型列表和代理都可以在配
 
 | 工具 | 上限 | 截断行为 |
 |------|------|----------|
-| `read` | 默认 2000 行 | 置 `truncated`，追加 `... N lines omitted` 标记，并记录 `details.truncated` / `omitted` / `line_count`。显式 `limit` 原样返回（不再施加默认上限）；`limit: 0` 不返回任何行并置 `truncated`。 |
+| `read` | 默认 2000 行 | 置 `truncated`，追加 `... N lines omitted` 标记，并记录 `details.truncated` / `omitted` / `line_count`。显式 `limit` 不受默认行数上限约束，但仍受 64 KiB 字节上限约束；`limit: 0` 不返回任何行并置 `truncated`。 |
 | `bash` | 合并 stdout+stderr 64 KiB | 当总输出超过上限时，预览为合并后 stdout-then-stderr 的前 64 KiB，置 `truncated` 与 `details.truncated`，并尽力把完整合并输出落盘到临时文件，路径报告在 `details.full_output`。若无法创建该文件，则仅置 `truncated`。 |
 
 ### 非目标

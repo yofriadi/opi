@@ -294,9 +294,10 @@ impl Tool for EditTool {
             //    is atomic on the same filesystem and replaces the target, so
             //    an interrupted edit leaves either the full new content or the
             //    prior content (never a partial/truncated mix). Every error
-            //    path best-effort removes the temp file. Matches the 11.4 write
-            //    tool standard; edit overwrites an existing file just as write
-            //    does, so the same partial-write hazard applies.
+            //    path best-effort removes the temp file, with a Drop guard as a
+            //    cancellation backstop. Matches the 11.4 write tool standard;
+            //    edit overwrites an existing file just as write does, so the
+            //    same partial-write hazard applies.
             let parent_dir = file_path.parent().unwrap_or(file_path.as_path());
             let file_name = file_path
                 .file_name()
@@ -308,19 +309,21 @@ impl Tool for EditTool {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
             let temp_path = parent_dir.join(format!(".{file_name}.opi-edit-tmp-{pid}-{nanos}"));
+            let mut temp_guard = super::TempFileGuard::new(temp_path);
 
-            if let Err(e) = tokio::fs::write(&temp_path, new_content.as_bytes()).await {
-                let _ = tokio::fs::remove_file(&temp_path).await;
+            if let Err(e) = tokio::fs::write(temp_guard.path(), new_content.as_bytes()).await {
+                temp_guard.cleanup().await;
                 return Ok(result::err(vec![OutputContent::Text {
                     text: format!("failed to write {}: {e}", file_path.display()),
                 }]));
             }
-            if let Err(e) = tokio::fs::rename(&temp_path, &file_path).await {
-                let _ = tokio::fs::remove_file(&temp_path).await;
+            if let Err(e) = tokio::fs::rename(temp_guard.path(), &file_path).await {
+                temp_guard.cleanup().await;
                 return Ok(result::err(vec![OutputContent::Text {
                     text: format!("failed to write {}: {e}", file_path.display()),
                 }]));
             }
+            temp_guard.disarm();
 
             // 6. Diff-preview metadata. before/after stay STRING-valued because
             //    interactive.rs reads them as strings to render the ratatui

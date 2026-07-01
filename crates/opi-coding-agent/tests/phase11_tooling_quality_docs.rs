@@ -59,6 +59,8 @@ fn policy_docs_and_help_stay_in_sync() {
     let readme = read_repo_file("crates/opi-coding-agent/README.md");
     let readme_zh = read_repo_file("crates/opi-coding-agent/README.zh.md");
     let spec = read_repo_file("docs/opi-spec.md");
+    let spec_zh = read_repo_file("docs/opi-spec.zh.md");
+    let changelog = read_repo_file("CHANGELOG.md");
 
     // --- (1) Read-only / mutating classification matches policy.rs. -------
     for name in MUTATING_TOOLS {
@@ -240,11 +242,8 @@ fn policy_docs_and_help_stay_in_sync() {
     );
 
     // --- (5) Permission-prompt rationale. --------------------------------
-    // NOTE: the English rationale spans a markdown line break, so it is pinned
-    // as two independent substrings rather than one joined literal.
     assert!(
-        readme.contains("tool-selection check, not a permission or sandbox")
-            && readme.contains("subsystem."),
+        readme.contains("tool-selection check, not a permission or sandbox subsystem"),
         "README must explain mutating-tool safety is tool-selection, not permission/sandbox"
     );
     assert!(
@@ -266,6 +265,52 @@ fn policy_docs_and_help_stay_in_sync() {
             && spec.contains("--no-tools")
             && spec.contains("--no-builtin-tools"),
         "opi-spec section 8.4 must name the tool-selection flags"
+    );
+    assert!(
+        spec.contains(
+            "Non-interactive mode SHOULD default to a conservative read-only tool set: `read`, `grep`, `find`, `ls`, and `glob`."
+        ),
+        "docs/opi-spec.md must include glob in the non-interactive/RPC default set"
+    );
+    assert!(
+        !spec.contains("`glob` MAY remain available"),
+        "docs/opi-spec.md must not weaken the implemented glob default to MAY"
+    );
+    assert!(
+        spec_zh.contains("--allow-mutating"),
+        "docs/opi-spec.zh.md must document --allow-mutating"
+    );
+    assert!(
+        spec_zh.contains("非交互/RPC 默认工具：`read`、`grep`、`find`、`ls` 和 `glob`。"),
+        "docs/opi-spec.zh.md must include glob in the non-interactive/RPC default set"
+    );
+    assert!(
+        !spec.contains("Built-in failure results SHOULD keep `details: None`"),
+        "opi-spec must not claim every built-in failure result omits details"
+    );
+    assert!(
+        spec.contains("Most built-in failure results SHOULD keep `details: None`")
+            && spec.contains("bash operation failures"),
+        "opi-spec must document the bash exception to error-result details"
+    );
+    assert!(
+        !changelog.contains("command/exit_code"),
+        "changelog must not claim public bash diagnostics carry the raw command"
+    );
+    assert!(
+        changelog.contains("exit_code/cancelled/timed_out/truncated")
+            && changelog.contains("raw command omitted"),
+        "changelog must describe bash diagnostic metadata without the raw command"
+    );
+    assert!(
+        spec_zh.contains(
+            "\u{6743}\u{9650}\u{5f39}\u{7a97}\u{4e0d}\u{662f}\u{6838}\u{5fc3}\u{884c}\u{4e3a}"
+        ),
+        "docs/opi-spec.zh.md must state permission popups are not core behavior"
+    );
+    assert!(
+        spec_zh.contains("\u{72b6}\u{6001}\u{ff1a}\u{5df2}\u{5b8c}\u{6210}"),
+        "docs/opi-spec.zh.md must mark Phase 11 completed after docs update"
     );
 
     // --- CLI help carries the same tool-selection flags at the boundary. --

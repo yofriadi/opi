@@ -11,7 +11,7 @@ use opi_agent::session::{
     SessionWriter,
 };
 use opi_agent::session_event::{CompactionReason, CompactionResult};
-use opi_ai::message::Message;
+use opi_ai::message::{AssistantContent, Message, ToolResultMessage};
 use opi_ai::stream::{CumulativeUsage, Usage};
 
 use crate::pricing::lookup_pricing;
@@ -244,12 +244,13 @@ impl SessionCoordinator {
         let mut last_persisted_entry_id = None;
         for msg in new_messages {
             if let AgentMessage::Llm(m) = msg {
+                let persisted_message = message_for_session(m);
                 let entry_id = format!("msg-{}", ENTRY_SEQ.fetch_add(1, Ordering::Relaxed));
                 let entry = SessionEntry::Message(MessageEntry {
                     id: entry_id.clone(),
                     parent_id: parent_id.clone(),
                     timestamp: now_iso(),
-                    message: m.clone(),
+                    message: persisted_message,
                 });
                 self.writer.append(&entry)?;
                 self.entries.push(Entry {
@@ -462,6 +463,41 @@ impl SessionCoordinator {
     pub fn model(&self) -> &str {
         &self.model
     }
+}
+
+fn message_for_session(message: &Message) -> Message {
+    match message {
+        Message::Assistant(assistant) => {
+            let mut persisted = assistant.clone();
+            for content in &mut persisted.content {
+                if let AssistantContent::ToolCall { tool_call } = content {
+                    tool_call.arguments = tool_arguments_for_session(&tool_call.arguments);
+                }
+            }
+            Message::Assistant(persisted)
+        }
+        Message::ToolResult(tool_result) => Message::ToolResult(ToolResultMessage {
+            tool_call_id: tool_result.tool_call_id.clone(),
+            tool_name: tool_result.tool_name.clone(),
+            content: tool_result.content.clone(),
+            details: tool_result
+                .details
+                .as_ref()
+                .map(opi_agent::diagnostic::redact_public_value),
+            is_error: tool_result.is_error,
+            truncated: tool_result.truncated,
+            timestamp_ms: tool_result.timestamp_ms,
+        }),
+        other => other.clone(),
+    }
+}
+
+fn tool_arguments_for_session(arguments: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .map(|value| opi_agent::diagnostic::redact_public_value(&value))
+        .and_then(|value| serde_json::to_string(&value).ok())
+        .unwrap_or_else(|| "\"[REDACTED]\"".to_owned())
 }
 
 fn content_entry_id(entry: &SessionEntry) -> Option<&str> {

@@ -615,11 +615,11 @@ fn rpc_subprocess_empty_lines_ignored() {
     // Read the ready header.
     let _header = proc.read_line();
 
-    // Send empty lines — should be ignored, not cause parse errors.
+    // Send empty lines - should be ignored, not cause parse errors.
     proc.stdin.as_mut().unwrap().write_all(b"\n\n\n").unwrap();
     proc.stdin.as_mut().unwrap().flush().unwrap();
 
-    // Send quit immediately after — should still work.
+    // Send quit immediately after - should still work.
     proc.send(&serde_json::json!({"type": "quit"}));
     let resp = proc.read_line();
     assert_eq!(resp["type"], "response");
@@ -646,7 +646,7 @@ fn rpc_subprocess_eof_exits_cleanly() {
     // Read the ready header.
     let _header = proc.read_line();
 
-    // Drop stdin (EOF) — process should exit cleanly.
+    // Drop stdin (EOF) - process should exit cleanly.
     proc.stdin.take();
     let status = proc.child.wait().unwrap();
     assert_eq!(status.code(), Some(0));
@@ -2444,8 +2444,8 @@ where
 }
 
 /// Phase 11.4: write audit details cross the RPC JSONL output boundary. The
-/// ToolExecutionEnd event carries the tool-owned `details` object (action +
-/// bytes_written) verbatim.
+/// ToolExecutionEnd event carries public-safe tool-owned `details` fields
+/// such as action and bytes_written.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_tool_result_carries_write_audit_details() {
     let provider = MockProvider::new(
@@ -2520,7 +2520,7 @@ async fn write_tool_result_carries_write_audit_details() {
 }
 
 /// Phase 11.5: edit diff-preview details cross the RPC JSONL output boundary.
-/// The ToolExecutionEnd event carries the tool-owned `details` object verbatim,
+/// The ToolExecutionEnd event carries public-safe tool-owned `details` fields,
 /// with before/after as STRING values (the contract interactive.rs depends on)
 /// plus action/occurrences metadata.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2746,20 +2746,107 @@ async fn tool_result_details_diagnostics_and_truncated_shape() {
         end["details"].is_object(),
         "operation details present (command/exit_code/...): {end}"
     );
+    assert_eq!(
+        end["details"]["command"], "[REDACTED]",
+        "bash command should be redacted at the RPC boundary: {end}"
+    );
     assert_eq!(end["truncated"], false, "no truncation: {end}");
     let diags = end["diagnostics"]
         .as_array()
         .expect("diagnostics array present (Phase 11.8 D2)");
     assert!(
-        diags
-            .iter()
-            .any(|d| d["code"] == "tool_execution_failed" && d["context"]["exit_code"] == 1),
-        "bash operation diagnostic (exit_code=1) surfaces over RPC: {diags:?}"
+        diags.iter().any(|d| {
+            d["code"] == "tool_execution_failed"
+                && d["context"]["exit_code"] == 1
+                && d["context"]["command_included"] == false
+                && d["context"].get("command").is_none()
+        }),
+        "bash operation diagnostic (exit_code=1) surfaces without command text over RPC: {diags:?}"
     );
 
     command_tx.send(RpcCommand::quit { id: None }).unwrap();
     let _ = recv_response(&mut output_rx, "quit").await;
     let _ = task.await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rpc_tool_events_redact_bash_command_canary() {
+    let command = if cfg!(windows) {
+        "set OPI_RPC_COMMAND_SECRET_CANARY=1 && exit /B 1"
+    } else {
+        "OPI_RPC_COMMAND_SECRET_CANARY=1 false"
+    };
+    let args = serde_json::to_string(&serde_json::json!({ "command": command })).unwrap();
+    let provider = MockProvider::new(
+        "mock",
+        vec![
+            opi_ai::test_support::tool_call_response("tc-bash", "bash", &args),
+            text_response("done"),
+        ],
+    );
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let runner = RpcRunner::new(
+        Box::new(provider),
+        "mock:mock-model".into(),
+        OpiConfig::default(),
+        workspace.path().to_path_buf(),
+        true,
+        ToolSelection::Allowlist(vec!["bash".into()]),
+        None,
+        Vec::new(),
+    )
+    .expect("rpc runner with bash tool");
+
+    let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut runner = runner;
+        runner.run_with_channels(command_rx, output_tx).await
+    });
+
+    let ready = recv_rpc_line(&mut output_rx).await;
+    assert!(
+        !serde_json::to_string(&ready)
+            .unwrap()
+            .contains("OPI_RPC_COMMAND_SECRET_CANARY")
+    );
+    command_tx
+        .send(RpcCommand::prompt {
+            id: Some("bash-canary".into()),
+            message: "run failing command".into(),
+        })
+        .unwrap();
+    let accepted = recv_response(&mut output_rx, "prompt").await;
+    assert_eq!(accepted["success"], true);
+
+    let mut saw_bash_end = false;
+    for _ in 0..64 {
+        let line = recv_rpc_line(&mut output_rx).await;
+        let rendered = serde_json::to_string(&line).unwrap();
+        assert!(
+            !rendered.contains("OPI_RPC_COMMAND_SECRET_CANARY"),
+            "{rendered}"
+        );
+        if line["type"] == "ToolExecutionEnd" && line["tool_name"] == "bash" {
+            saw_bash_end = true;
+            assert_eq!(line["is_error"], true);
+            assert_eq!(line["truncated"], false);
+            assert!(
+                line["diagnostics"].as_array().is_some_and(|items| items
+                    .iter()
+                    .any(|d| d["code"] == "tool_execution_failed")),
+                "{line}"
+            );
+        }
+        if line["type"] == "AgentEnd" {
+            break;
+        }
+    }
+    assert!(saw_bash_end, "expected bash ToolExecutionEnd");
+
+    command_tx.send(RpcCommand::quit { id: None }).unwrap();
+    let _ = recv_response(&mut output_rx, "quit").await;
+    assert_eq!(task.await.unwrap(), 0);
 }
 
 /// Phase 11.6: bash truncation details + the top-level `truncated` flag cross
@@ -2847,20 +2934,14 @@ async fn bash_tool_result_carries_truncation_details() {
     let full = details["full_output"]
         .as_str()
         .expect("details.full_output reference must cross the RPC boundary");
-    assert!(!full.is_empty(), "full_output path must be non-empty");
-    // The spilled complete output must exist and exceed the cap.
-    let size = std::fs::metadata(full)
-        .map(|m| m.len())
-        .unwrap_or_else(|e| panic!("full_output file must exist: {e}"));
-    assert!(
-        size as usize > cap,
-        "spilled full_output must hold the complete (>cap) output, got {size}"
+    assert_eq!(
+        full, "[REDACTED]",
+        "public RPC events must redact the absolute full_output spill path"
     );
 
     command_tx.send(RpcCommand::quit { id: None }).unwrap();
     let _ = recv_response(&mut output_rx, "quit").await;
     let _ = task.await;
-    let _ = std::fs::remove_file(full);
 }
 
 async fn recv_rpc_line(
@@ -3470,7 +3551,7 @@ async fn phase8_rpc_command_contract_follow_up_queued_while_running() {
 }
 
 /// compact, session_info, and extension_command are each rejected while a run
-/// is in flight — each with its own correlated id and the documented error —
+/// is in flight - each with its own correlated id and the documented error -
 /// and none mutates the running turn (still exactly one provider request).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn phase8_rpc_command_contract_mutating_commands_rejected_while_busy_no_mutation() {
@@ -3913,7 +3994,7 @@ async fn rpc_adapter_backed_commands_dispatch_consistently_through_shared_abstra
 }
 
 // ===========================================================================
-// Phase 7 task 7.5 — RPC exposure: startup diagnostics + run-summary counts,
+// Phase 7 task 7.5 - RPC exposure: startup diagnostics + run-summary counts,
 // and the versioned redacted trace envelope (supported + unsupported paths).
 // ===========================================================================
 
@@ -3926,6 +4007,7 @@ mod phase7 {
 
     use opi_agent::diagnostic::{Diagnostic, SOURCE_PACKAGE, SOURCE_SESSION, Severity, code};
     use opi_agent::extension::ExtensionRegistry;
+    use opi_agent::session::{SessionHeader, SessionWriter};
     use opi_agent::{RecordingTraceSink, TRACE_SCHEMA_VERSION};
     use opi_ai::provider::ProviderError;
     use opi_ai::test_support::{self, MockProvider, MockResponse};
@@ -3936,6 +4018,27 @@ mod phase7 {
     use opi_coding_agent::runtime_packages::RuntimePackageStartup;
 
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn empty_resume_info(workspace: &tempfile::TempDir, session_id: &str) -> ResumeInfo {
+        let session_path = workspace.path().join(format!("{session_id}.jsonl"));
+        let header = SessionHeader::new(
+            session_id.into(),
+            "2026-06-26T00:00:00Z".into(),
+            workspace.path().display().to_string(),
+            None,
+        );
+        {
+            let _writer = SessionWriter::create(&session_path, header)
+                .expect("create temporary session file");
+        }
+        ResumeInfo {
+            path: session_path,
+            session_id: session_id.into(),
+            entries: Vec::new(),
+            original_cwd: workspace.path().to_path_buf(),
+            diagnostics: Vec::new(),
+        }
+    }
 
     /// rpc_ready carries startup diagnostics before any prompt output, and a
     /// run with a retryable error surfaces structured diagnostic counts in a
@@ -4257,6 +4360,7 @@ mod phase7 {
             diagnostics: Vec::new(),
         };
         let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let resume_info = empty_resume_info(&workspace, "compact-manual");
         let mut runner = RpcRunner::new_with_runtime_packages(
             Box::new(provider),
             "mock:mock-model".into(),
@@ -4267,7 +4371,7 @@ mod phase7 {
             None,
             Vec::new(),
             runtime,
-            None,
+            Some(resume_info),
         )
         .expect("rpc runner");
 
@@ -4321,6 +4425,7 @@ mod phase7 {
             diagnostics: Vec::new(),
         };
         let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let resume_info = empty_resume_info(&workspace, "compact-empty");
         let mut runner = RpcRunner::new_with_runtime_packages(
             Box::new(provider),
             "mock:mock-model".into(),
@@ -4331,7 +4436,7 @@ mod phase7 {
             None,
             Vec::new(),
             runtime,
-            None,
+            Some(resume_info),
         )
         .expect("rpc runner");
 
@@ -4500,7 +4605,7 @@ mod phase7 {
     /// SC 1 (RPC structured boundary): a run that produces a runtime diagnostic
     /// surfaces it in the trace envelope as a `diagnostic_linked` record whose
     /// `source` is a shared SOURCE_* vocabulary token and whose
-    /// `diagnostic_code` is a stable snake_case shared code — i.e. the shared
+    /// `diagnostic_code` is a stable snake_case shared code - i.e. the shared
     /// Diagnostic shape crosses the RPC boundary, not an ad-hoc string. The
     /// unsupported-trace path additionally returns a structured `error_code`
     /// rather than a free-text error (asserted by the supported/unsupported
@@ -4672,7 +4777,7 @@ mod phase7 {
     }
 
     // ===========================================================================
-    // Phase 8 task 8.6 — RPC structured error_code on synchronous runtime-contract
+    // Phase 8 task 8.6 - RPC structured error_code on synchronous runtime-contract
     // rejections (G4) + async observability of the structured Diagnostic code
     // crossing the RPC trace boundary, and trace reachable via the PRODUCTION
     // runtime-package constructor with per-run scoping (G5).
@@ -5002,7 +5107,7 @@ mod phase7 {
         assert!(!records.is_empty(), "trace response should carry records");
 
         // All records share a single run_id (the latest run), robust to the
-        // run_seq seed — assert "all records share one run_id" rather than a
+        // run_seq seed - assert "all records share one run_id" rather than a
         // hardcoded value.
         let run_ids: Vec<&serde_json::Value> = records.iter().map(|r| &r["run_id"]).collect();
         let first_run_id = run_ids

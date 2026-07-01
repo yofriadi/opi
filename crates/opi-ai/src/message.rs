@@ -2,6 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Deterministic failure marker prefixed to OpenAI-family tool-result text when
+/// a provider wire format has no native tool-error field.
+pub(crate) const TOOL_ERROR_MARKER: &str = "[tool_error] ";
+
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role")]

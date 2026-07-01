@@ -109,13 +109,25 @@ impl Tool for WriteTool {
             // 2. Probe existence + prior size BEFORE writing so create vs
             //    overwrite is classified and a before/after audit is captured.
             //    (tokio::fs::write truncates then writes, so a post-write stat is
-            //    too late.)
-            let existed_before = file_path.exists();
-            let bytes_before = if existed_before {
-                tokio::fs::metadata(&file_path).await.ok().map(|m| m.len())
-            } else {
-                None
+            //    too late.) Existing directories are rejected before temp-file
+            //    staging so they get the same typed NotAFile diagnostic as read/edit.
+            let existing_meta = match tokio::fs::metadata(&file_path).await {
+                Ok(meta) => Some(meta),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    return Ok(super::fs_error_result(FsToolError::PermissionDenied {
+                        path: file_path.clone(),
+                    }));
+                }
+                Err(_) => None,
             };
+            if existing_meta.as_ref().is_some_and(|meta| meta.is_dir()) {
+                return Ok(super::fs_error_result(FsToolError::NotAFile {
+                    path: file_path.clone(),
+                }));
+            }
+            let existed_before = existing_meta.is_some();
+            let bytes_before = existing_meta.as_ref().map(|m| m.len());
 
             // 3. Ensure the parent directory exists. create_dir_all failure is
             //    classified by an explicit probe rather than a platform-specific
@@ -147,9 +159,10 @@ impl Tool for WriteTool {
             //    on the same filesystem and replaces the existing target, so an
             //    interrupted write leaves either the full new content or the
             //    prior content (never a partial/truncated mix). Every error path
-            //    best-effort removes the temp file so no orphan leaks. (fsync
-            //    before rename is a durability concern, out of Phase 11 scope and
-            //    matching the prior direct-write behavior.)
+            //    best-effort removes the temp file, with a Drop guard as a
+            //    cancellation backstop. (fsync before rename is a durability
+            //    concern, out of Phase 11 scope and matching the prior
+            //    direct-write behavior.)
             let parent_dir = file_path.parent().unwrap_or(file_path.as_path());
             let file_name = file_path
                 .file_name()
@@ -161,19 +174,21 @@ impl Tool for WriteTool {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
             let temp_path = parent_dir.join(format!(".{file_name}.opi-write-tmp-{pid}-{nanos}"));
+            let mut temp_guard = super::TempFileGuard::new(temp_path);
 
-            if let Err(e) = tokio::fs::write(&temp_path, args.content.as_bytes()).await {
-                let _ = tokio::fs::remove_file(&temp_path).await;
+            if let Err(e) = tokio::fs::write(temp_guard.path(), args.content.as_bytes()).await {
+                temp_guard.cleanup().await;
                 return Ok(result::err(vec![OutputContent::Text {
                     text: format!("failed to write {}: {e}", file_path.display()),
                 }]));
             }
-            if let Err(e) = tokio::fs::rename(&temp_path, &file_path).await {
-                let _ = tokio::fs::remove_file(&temp_path).await;
+            if let Err(e) = tokio::fs::rename(temp_guard.path(), &file_path).await {
+                temp_guard.cleanup().await;
                 return Ok(result::err(vec![OutputContent::Text {
                     text: format!("failed to write {}: {e}", file_path.display()),
                 }]));
             }
+            temp_guard.disarm();
 
             // 5. Audit details: action + bytes_written (always); before/after
             //    size audit on overwrite. size_delta is signed (smaller overwrite

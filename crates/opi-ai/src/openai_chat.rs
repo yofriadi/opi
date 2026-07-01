@@ -11,7 +11,9 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::http::HttpClient;
-use crate::message::{AssistantContent, AssistantMessage, OutputContent, ToolCall};
+use crate::message::{
+    AssistantContent, AssistantMessage, OutputContent, TOOL_ERROR_MARKER, ToolCall,
+};
 use crate::provider::{EventStream, ModelInfo, Provider, ProviderError, Request};
 use crate::stream::{AssistantStreamEvent, StopReason, Usage};
 
@@ -1072,14 +1074,6 @@ fn serialize_messages(
 
     serde_json::Value::Array(result)
 }
-
-/// Deterministic failure marker prefixed to a `role:"tool"` content string when a
-/// tool result is an error. The OpenAI Chat Completions API has no native error
-/// field on tool messages, so this text marker is the only wire-distinguishable
-/// failure signal; Azure/OpenRouter/Mistral inherit it via this shared adapter.
-/// Duplicated verbatim in `openai_responses.rs`; `tool_result_wire.rs` pins the
-/// two byte-identical so future drift is caught.
-const TOOL_ERROR_MARKER: &str = "[tool_error] ";
 
 impl Provider for OpenAiChatProvider {
     fn stream(&self, request: Request) -> EventStream {

@@ -45,8 +45,7 @@ use tokio_util::sync::CancellationToken;
 
 /// The deterministic failure marker the no-native-field providers prefix onto the
 /// rendered tool-result text. Pinned in the test so the DoD word "deterministic"
-/// is a byte-for-byte assertion, and so the two OpenAI surfaces (Chat + Responses)
-/// are provably identical.
+/// is a byte-for-byte assertion.
 const EXPECTED_ERROR_MARKER: &str = "[tool_error] ";
 
 fn test_credentials() -> AwsCredentials {
@@ -317,9 +316,8 @@ fn tool_result_error_semantics_across_providers() {
         vertex_inherits_gemini_shape(is_error, payload);
     }
 
-    // Marker-drift pin: the two OpenAI surfaces must emit the identical failure
-    // prefix (the markers are duplicated private consts in two files; this catches
-    // a future edit that desynchronizes them).
+    // Marker-drift pin: the two OpenAI surfaces must emit byte-identical failure
+    // output through the shared marker constant.
     let chat = OpenAiChatProvider::new("k".into(), None);
     let responses = OpenAiResponsesProvider::new("k".into(), None);
     let chat_body = chat.build_request_body(&request_with_tool_result(true, payload));

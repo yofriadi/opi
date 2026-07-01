@@ -11,7 +11,10 @@ use futures_util::stream;
 use opi_agent::diagnostic::{SOURCE_SESSION, code};
 use opi_agent::message::AgentMessage;
 use opi_agent::session::{MessageEntry, SessionEntry, SessionHeader, SessionReader, SessionWriter};
-use opi_ai::message::{AssistantContent, InputContent, Message, UserMessage};
+use opi_ai::message::{
+    AssistantContent, InputContent, Message, OutputContent, ToolCall, ToolResultMessage,
+    UserMessage,
+};
 use opi_ai::provider::{EventStream, Provider, ProviderError, Request};
 use opi_ai::stream::AssistantStreamEvent;
 use opi_ai::test_support::{self, MockProvider};
@@ -137,6 +140,101 @@ fn session_coordinator_persists_messages_on_turn_end() {
         matches!(entries.last(), Some(SessionEntry::Leaf(_))),
         "runtime should update the active branch leaf"
     );
+}
+
+#[test]
+fn session_coordinator_redacts_tool_result_details_but_keeps_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut coord = SessionCoordinator::new(
+        dir.path(),
+        "/test",
+        opi_agent::compaction::CompactionConfig::default(),
+        "anthropic:claude-sonnet-4",
+    )
+    .unwrap();
+
+    let messages = vec![AgentMessage::Llm(Message::ToolResult(ToolResultMessage {
+        tool_call_id: "tc-redact".into(),
+        tool_name: "bash".into(),
+        content: vec![OutputContent::Text {
+            text: "VISIBLE_TOOL_OUTPUT".into(),
+        }],
+        details: Some(serde_json::json!({
+            "command": "echo OPI_SESSION_COMMAND_SECRET_CANARY",
+            "cwd": "C:\\Users\\private\\repo",
+            "exit_code": 1,
+        })),
+        is_error: true,
+        truncated: false,
+        timestamp_ms: 0,
+    }))];
+
+    coord
+        .on_turn_end(&messages, &opi_ai::stream::Usage::default(), 0)
+        .unwrap();
+
+    let (_header, entries) = SessionReader::read_all(coord.session_path()).unwrap();
+    let tool_result = entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::Message(MessageEntry {
+                message: Message::ToolResult(tool_result),
+                ..
+            }) => Some(tool_result),
+            _ => None,
+        })
+        .expect("persisted tool result");
+
+    assert_eq!(
+        tool_result.content,
+        vec![OutputContent::Text {
+            text: "VISIBLE_TOOL_OUTPUT".into()
+        }]
+    );
+    let details = tool_result.details.as_ref().expect("redacted details");
+    assert_eq!(details["command"], "[REDACTED]");
+    assert_eq!(details["cwd"], "[REDACTED]");
+    assert!(
+        !serde_json::to_string(&entries)
+            .unwrap()
+            .contains("OPI_SESSION_COMMAND_SECRET_CANARY")
+    );
+}
+
+#[test]
+fn session_coordinator_redacts_assistant_tool_call_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut coord = SessionCoordinator::new(
+        dir.path(),
+        "/test",
+        opi_agent::compaction::CompactionConfig::default(),
+        "anthropic:claude-sonnet-4",
+    )
+    .unwrap();
+
+    let mut assistant = test_support::base_assistant();
+    assistant.content.push(AssistantContent::ToolCall {
+        tool_call: ToolCall {
+            id: "tc-redact-args".into(),
+            name: "bash".into(),
+            arguments:
+                r#"{"command":"echo OPI_SESSION_TOOL_ARGS_SECRET_CANARY","cwd":"C:\\Users\\private"}"#
+                    .into(),
+        },
+    });
+
+    let messages = vec![AgentMessage::Llm(Message::Assistant(assistant))];
+    coord
+        .on_turn_end(&messages, &opi_ai::stream::Usage::default(), 0)
+        .unwrap();
+
+    let (_header, entries) = SessionReader::read_all(coord.session_path()).unwrap();
+    let rendered = serde_json::to_string(&entries).unwrap();
+    assert!(
+        !rendered.contains("OPI_SESSION_TOOL_ARGS_SECRET_CANARY"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("[REDACTED]"), "{rendered}");
 }
 
 #[test]

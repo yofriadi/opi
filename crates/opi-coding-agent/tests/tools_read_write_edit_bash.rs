@@ -8,7 +8,8 @@ use std::time::Duration;
 use opi_agent::diagnostic::code;
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
 use opi_coding_agent::tool::{
-    BashTool, EditTool, MAX_BASH_OUTPUT_BYTES, PathPolicy, ReadTool, WriteTool,
+    BashTool, EditTool, MAX_BASH_OUTPUT_BYTES, MAX_READ_OUTPUT_BYTES, PathPolicy, ReadTool,
+    WriteTool,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -200,6 +201,75 @@ async fn read_tool_allow_outside_policy_reads_absolute_outside_path() {
     assert_eq!(
         std::fs::canonicalize(resolved).unwrap(),
         std::fs::canonicalize(&outside_file).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn read_tool_reports_line_ending_metadata_for_crlf() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("crlf-read.txt"),
+        b"first\r\nsecond\r\nthird\r\n",
+    )
+    .unwrap();
+
+    let result = ReadTool::new(dir.path().to_path_buf())
+        .execute(
+            "read-crlf",
+            json!({ "path": "crlf-read.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("line_ending").and_then(|v| v.as_str()),
+        Some("crlf")
+    );
+    let text = tool_result_text(&result);
+    assert!(
+        text.contains("first\r\nsecond\r\nthird\r\n"),
+        "read output must preserve CRLF bytes in the returned body: {text:?}"
+    );
+}
+
+#[tokio::test]
+async fn read_tool_caps_single_line_output_by_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = "A".repeat(70 * 1024);
+    std::fs::write(dir.path().join("one-line.txt"), &body).unwrap();
+
+    let result = ReadTool::new(dir.path().to_path_buf())
+        .execute(
+            "read-byte-cap",
+            json!({ "path": "one-line.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    assert!(
+        result.truncated,
+        "single oversized line must be byte-capped"
+    );
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details.get("truncation_reason").and_then(|v| v.as_str()),
+        Some("byte_cap")
+    );
+    let text = tool_result_text(&result);
+    assert!(
+        text.len() < body.len(),
+        "returned text must be smaller than the source body"
+    );
+    assert!(
+        text.contains("output truncated by byte cap"),
+        "byte-cap marker missing: {text:?}"
     );
 }
 
@@ -543,6 +613,36 @@ async fn write_tool_parent_directory_error_has_context() {
     assert!(
         ctx.get("path").is_some(),
         "NotADirectory diagnostic must carry path context"
+    );
+}
+
+#[tokio::test]
+async fn write_tool_existing_directory_returns_not_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("already-dir")).unwrap();
+
+    let result = WriteTool::new(dir.path().to_path_buf())
+        .execute(
+            "write-dir",
+            json!({ "path": "already-dir", "content": "replacement" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "writing to a directory must fail");
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_NOT_A_FILE),
+        "directory target should carry tool_not_a_file: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.details.is_none(),
+        "filesystem failure details should stay in diagnostics"
     );
 }
 
@@ -1991,6 +2091,39 @@ fn diagnostics_text(result: &ToolResult) -> String {
 }
 
 #[tokio::test]
+async fn bash_failure_diagnostics_redact_command_canary() {
+    const CANARY: &str = "OPI_BASH_COMMAND_SECRET_CANARY";
+
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let command = if cfg!(windows) {
+        format!("echo {CANARY} && exit /B 1")
+    } else {
+        format!("echo {CANARY}; exit 1")
+    };
+    let result = tool
+        .execute(
+            "command-canary",
+            json!({ "command": command, "timeout_secs": 30 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "command should fail");
+    assert!(
+        tool_result_text(&result).contains(CANARY),
+        "canary should remain in command output"
+    );
+    let diagnostics = diagnostics_text(&result);
+    assert!(
+        !diagnostics.contains(CANARY),
+        "command canary must not leak into bash-owned diagnostics: {diagnostics}"
+    );
+}
+
+#[tokio::test]
 async fn bash_tool_output_truncation() {
     let dir = tempfile::tempdir().unwrap();
     let tool = BashTool::new(dir.path().to_path_buf());
@@ -2053,6 +2186,34 @@ async fn bash_tool_output_truncation() {
             "truncation details missing stable key: {key}"
         );
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bash_full_output_file_is_private_on_unix() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let tool = BashTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "private-full-output",
+            json!({ "command": bash_oversized_stdout_command(2000), "timeout_secs": 30 }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    let full = result
+        .details
+        .as_ref()
+        .and_then(|details| details.get("full_output"))
+        .and_then(|value| value.as_str())
+        .expect("details.full_output reference must be present when truncated");
+    let mode = std::fs::metadata(full).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "full_output must not be group/world-readable");
 }
 
 #[tokio::test]
@@ -2817,9 +2978,77 @@ fn write_uses_temp_and_rename_guard() {
     );
 }
 
+#[test]
+fn write_and_edit_temp_files_have_drop_cleanup_guard() {
+    let root = phase11_workspace_root();
+    let helper = std::fs::read_to_string(root.join("crates/opi-coding-agent/src/tool/mod.rs"))
+        .expect("read tool/mod.rs");
+    let helper = phase11_strip_comments(&helper);
+    assert!(
+        helper.contains("struct TempFileGuard"),
+        "tool/mod.rs must define a shared temp-file cleanup guard"
+    );
+    assert!(
+        helper.contains("impl Drop for TempFileGuard"),
+        "TempFileGuard must clean up on drop as a future-cancellation backstop"
+    );
+    assert!(
+        helper.contains("std::fs::remove_file"),
+        "TempFileGuard::drop must use sync remove_file because Drop cannot await"
+    );
+
+    for (relative, marker) in [
+        (
+            "crates/opi-coding-agent/src/tool/write.rs",
+            ".opi-write-tmp",
+        ),
+        ("crates/opi-coding-agent/src/tool/edit.rs", ".opi-edit-tmp"),
+    ] {
+        let src = std::fs::read_to_string(root.join(relative))
+            .unwrap_or_else(|e| panic!("read {relative}: {e}"));
+        let s = phase11_strip_comments(&src);
+        assert!(
+            s.contains(marker),
+            "{relative} must retain temp marker {marker}"
+        );
+        assert!(
+            s.contains("TempFileGuard::new"),
+            "{relative} must arm the temp-file cleanup guard before writing"
+        );
+        assert!(
+            s.contains("temp_guard.path()"),
+            "{relative} must route temp write/rename through the guard path"
+        );
+        assert!(
+            s.contains("temp_guard.cleanup().await"),
+            "{relative} must eagerly clean up known error paths"
+        );
+        assert!(
+            s.contains("temp_guard.disarm()"),
+            "{relative} must disarm the guard after successful rename"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Read tool hardening (Phase 11.3)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn read_tool_streams_file_instead_of_buffering_entire_input() {
+    let root = phase11_workspace_root();
+    let src = std::fs::read_to_string(root.join("crates/opi-coding-agent/src/tool/read.rs"))
+        .expect("read read.rs");
+    let s = phase11_strip_comments(&src);
+    assert!(
+        !s.contains("tokio::fs::read(&file_path"),
+        "read.rs must not buffer the entire input file before applying output caps"
+    );
+    assert!(
+        s.contains("tokio::fs::File::open") && s.contains("read(&mut buffer)"),
+        "read.rs must stream file bytes through a bounded read buffer"
+    );
+}
 
 #[tokio::test]
 async fn read_tool_line_ranges_are_stable() {
@@ -3117,6 +3346,39 @@ async fn read_tool_detects_binary_file_and_returns_diagnostic_context() {
     );
     assert!(r.details.is_none(), "error result must not carry details");
     assert!(!r.truncated);
+}
+
+#[tokio::test]
+async fn read_tool_detects_nul_beyond_output_cap_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin_path = dir.path().join("late-nul.bin");
+    let mut bytes = vec![b'a'; MAX_READ_OUTPUT_BYTES + 1];
+    bytes.push(0);
+    std::fs::write(&bin_path, bytes).unwrap();
+    let tool = ReadTool::new(dir.path().to_path_buf());
+
+    let r = tool
+        .execute(
+            "bin-late-nul",
+            json!({ "path": "late-nul.bin" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        r.is_error,
+        "NUL bytes past the output cap must still be reported as binary"
+    );
+    assert!(
+        r.diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_BINARY_FILE),
+        "expected tool_binary_file diagnostic: {:?}",
+        r.diagnostics
+    );
+    assert!(r.details.is_none(), "binary error result must omit details");
 }
 
 #[tokio::test]

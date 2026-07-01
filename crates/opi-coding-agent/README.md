@@ -120,8 +120,10 @@ Tools live under `src/tool/`.
 | `find` | `pattern`, optional `path` | Gitignore-aware file discovery scoped to an optional subdirectory; parallel. |
 | `grep` | `pattern` | Gitignore-aware regex search; parallel. |
 | `write` | `path`, `content` | Creates parent dirs; sequential; mutating. |
-| `edit` | `path`, `old_string`, `new_string` | Replaces the first exact match and records before/after details; sequential; mutating. |
+| `edit` | `path`, `old_string`, `new_string` | Replaces the unique exact match and records before/after details; sequential; mutating. |
 | `bash` | `command`, optional `timeout_secs` | Runs in workspace root via `cmd /C` on Windows or `sh -c` on Unix; sequential; mutating. |
+
+`glob` is an opi convenience tool; pi-compatible workflows should not depend on it being the only discovery path.
 
 Default active tools:
 
@@ -181,7 +183,7 @@ available; otherwise the mode default applies.
 
 | Tool | Cap | Truncation behavior |
 |------|-----|---------------------|
-| `read` | 2000 lines by default | Sets `truncated`, appends an `... N lines omitted` marker, and records `details.truncated` / `omitted` / `line_count`. An explicit `limit` is returned in full (no default cap is reapplied); `limit: 0` returns no lines and flags `truncated`. |
+| `read` | 2000 lines by default | Sets `truncated`, appends an `... N lines omitted` marker, and records `details.truncated` / `omitted` / `line_count`. An explicit `limit` is not capped by the default line cap, but the 64 KiB byte cap still applies; `limit: 0` returns no lines and flags `truncated`. |
 | `bash` | 64 KiB combined stdout+stderr | When total output exceeds the cap, the preview is the first 64 KiB of merged stdout-then-stderr, `truncated` and `details.truncated` are set, and opi best-effort spills the complete merged output to a temp file reported in `details.full_output`. If the spill file cannot be created, only `truncated` is set. |
 
 ### Non-goals
@@ -199,8 +201,7 @@ product boundaries are listed under [Boundaries](#boundaries)):
 - workflow tools such as todo, plan mode, or sub-agents
 - sandbox implementation
 
-Mutating-tool safety is a tool-selection check, not a permission or sandbox
-subsystem.
+Mutating-tool safety is a tool-selection check, not a permission or sandbox subsystem.
 
 ## Modes
 

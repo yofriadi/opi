@@ -425,6 +425,18 @@ fn phase11_cli_help_tool_policy() {
             "opi --help must expose the tool-selection flag {flag}"
         );
     }
+    for phrase in [
+        "cmd /C",
+        "sh -c",
+        "workspace root",
+        "30 seconds",
+        "timeout_secs",
+        "64 KiB",
+        "details.full_output",
+        "permission popup",
+    ] {
+        assert!(help.contains(phrase), "opi --help must mention {phrase}");
+    }
     assert!(
         help.to_lowercase().contains("mutating"),
         "opi --help must document the mutating-tool opt-in"

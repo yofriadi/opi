@@ -128,6 +128,10 @@ impl Tool for LsTool {
 
             let mut entries: Vec<Entry> = Vec::new();
             let mut non_utf8 = 0usize;
+            let mut visited_entries = 0usize;
+            let mut total_entries = 0usize;
+            let mut omitted = 0usize;
+            let mut search_terminated_early = false;
             let mut cancelled = false;
             for entry in walker.flatten() {
                 // Honor the cancellation token mid-walk (sync poll; blocking
@@ -136,6 +140,11 @@ impl Tool for LsTool {
                     cancelled = true;
                     break;
                 }
+                if visited_entries >= super::MAX_NAV_VISITED_ENTRIES {
+                    search_terminated_early = true;
+                    break;
+                }
+                visited_entries += 1;
                 if entry.depth() == 0 {
                     // The target directory itself; skip (we list its contents).
                     continue;
@@ -149,9 +158,14 @@ impl Tool for LsTool {
                     non_utf8 += 1;
                     continue;
                 };
+                total_entries += 1;
+                if entries.len() >= max_entries {
+                    omitted += 1;
+                    continue;
+                }
                 // Use the entry's file_type (does NOT follow symlinks) so a
                 // symlink-to-dir is not marked as a directory and not recursed
-                // — consistent with grep/find/glob (Phase 11.7).
+                // - consistent with grep/find/glob (Phase 11.7).
                 let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
                 entries.push(Entry {
                     relative_path: relative.to_owned(),
@@ -161,14 +175,10 @@ impl Tool for LsTool {
 
             entries.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
 
-            let total_entries = entries.len();
-            let truncated = total_entries > max_entries;
-            let omitted = if truncated {
-                total_entries - max_entries
-            } else {
-                0
-            };
-            entries.truncate(max_entries);
+            if search_terminated_early && entries.len() >= max_entries {
+                omitted = omitted.max(1);
+            }
+            let truncated = omitted > 0 || search_terminated_early;
 
             let mut lines: Vec<String> = entries
                 .iter()
@@ -199,8 +209,11 @@ impl Tool for LsTool {
                 "entry_count": entries.len(),
                 "total_entries": total_entries,
                 "truncated": truncated,
+                "omitted_count": omitted,
                 "workspace_relation": workspace_relation,
                 "cancelled": cancelled,
+                "visited_entries": visited_entries,
+                "search_terminated_early": search_terminated_early,
             });
 
             let mut tool_result = result::ok(vec![OutputContent::Text { text }], details);

@@ -217,8 +217,8 @@ fn phase7_trace_redacts_sensitive_values_in_diagnostic_linked() {
     assert_eq!(details["tool_output"], "[REDACTED]");
     assert_eq!(details["benign"], "kept");
 
-    // Verbose mode: content retained, but secrets (incl. the 7.6 ghp_/userinfo/
-    // authorization additions) still scrubbed.
+    // Verbose mode: structural content fields and secrets are scrubbed;
+    // non-sensitive metadata is retained.
     let sink_v = Arc::new(RecordingTraceSink::new());
     let collector_v =
         TraceCollector::new("run-dl-vrb", RedactionMode::Verbose, sink_v.clone(), None);
@@ -239,7 +239,7 @@ fn phase7_trace_redacts_sensitive_values_in_diagnostic_linked() {
     assert_eq!(details_v["github_pat"], "[REDACTED]");
     assert_eq!(details_v["package_source"], "[REDACTED]");
     assert_eq!(details_v["authorization"], "[REDACTED]");
-    assert_eq!(details_v["prompt"], "hidden system prompt");
+    assert_eq!(details_v["prompt"], "[REDACTED]");
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +278,7 @@ fn summary_mode_redacts_secret_and_prompt() {
 }
 
 #[test]
-fn verbose_mode_keeps_prompt_redacts_secret() {
+fn verbose_mode_redacts_structural_prompt_and_secret() {
     let sink = Arc::new(RecordingTraceSink::new());
     let collector = TraceCollector::new("run-vrb", RedactionMode::Verbose, sink.clone(), None);
     collector.prepare().unwrap();
@@ -295,8 +295,8 @@ fn verbose_mode_keeps_prompt_redacts_secret() {
     let snapshot = sink.snapshot();
     let details = snapshot[0].details.as_ref().expect("details present");
     assert_eq!(
-        details["prompt"], "the user's secret plan",
-        "verbose keeps benign prompt content"
+        details["prompt"], "[REDACTED]",
+        "verbose redacts structural prompt content"
     );
     assert_eq!(
         details["api_key"], "[REDACTED]",
@@ -307,6 +307,22 @@ fn verbose_mode_keeps_prompt_redacts_secret() {
         "verbose keeps absolute-path values (Summary-only redaction)"
     );
     assert_eq!(details["model"], "gpt-4o");
+}
+
+#[test]
+fn phase7_verbose_trace_redacts_structural_tool_context() {
+    let value = serde_json::json!({
+        "command": "echo OPI_VERBOSE_COMMAND_SECRET",
+        "cwd": r"C:\Users\Luiz\secret-worktree",
+        "exit_code": 1,
+        "safe_counter": 7,
+    });
+    let redacted =
+        opi_agent::diagnostic::redact(&value, opi_agent::diagnostic::RedactionMode::Verbose);
+    let text = serde_json::to_string(&redacted).unwrap();
+    assert!(!text.contains("OPI_VERBOSE_COMMAND_SECRET"), "{text}");
+    assert!(!text.contains("secret-worktree"), "{text}");
+    assert_eq!(redacted["safe_counter"], 7);
 }
 
 #[test]
@@ -374,8 +390,8 @@ fn redaction_recurses_into_nested_structures() {
         "nested api_key (verbose)"
     );
     assert_eq!(
-        vrb["outer"]["prompt"], "nested plan",
-        "verbose keeps nested prompt content"
+        vrb["outer"]["prompt"], "[REDACTED]",
+        "verbose redacts nested prompt content"
     );
     assert_eq!(
         vrb["outer"]["workspace"], "/home/alice/project",

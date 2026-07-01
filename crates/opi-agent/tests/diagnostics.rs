@@ -196,11 +196,11 @@ fn summary_redaction_is_recursive() {
 }
 
 // ---------------------------------------------------------------------------
-// Redaction: verbose mode keeps content but still scrubs secrets
+// Redaction: verbose mode keeps metadata but scrubs structural content and secrets
 // ---------------------------------------------------------------------------
 
 #[test]
-fn verbose_redaction_keeps_content_but_still_scrubs_secrets() {
+fn verbose_redaction_keeps_metadata_but_scrubs_structural_content_and_secrets() {
     let details = json!({
         "prompt": "benign prompt text without secrets",
         "tool_output": "ordinary tool output",
@@ -209,11 +209,11 @@ fn verbose_redaction_keeps_content_but_still_scrubs_secrets() {
         "kept": "ok"
     });
     let redacted = redact(&details, RedactionMode::Verbose);
-    // Content is preserved in verbose mode...
-    assert_eq!(redacted["prompt"], "benign prompt text without secrets");
-    assert_eq!(redacted["tool_output"], "ordinary tool output");
+    // Structural content fields are scrubbed in verbose mode.
+    assert_eq!(redacted["prompt"], "[REDACTED]");
+    assert_eq!(redacted["tool_output"], "[REDACTED]");
     assert_eq!(redacted["kept"], "ok");
-    // ...but secrets are still scrubbed.
+    // Secrets are still scrubbed.
     assert_eq!(redacted["api_key"], "[REDACTED]");
     assert_eq!(redacted["token"], "[REDACTED]");
 }
@@ -303,8 +303,8 @@ fn phase7_redacts_sensitive_values() {
     assert_eq!(verbose["github_pat"], "[REDACTED]");
     assert_eq!(verbose["package_source"], "[REDACTED]");
     assert_eq!(verbose["authorization"], "[REDACTED]");
-    // ...while content fields are retained.
-    assert_eq!(verbose["prompt"], "system prompt text");
+    // ...and structural content fields are scrubbed.
+    assert_eq!(verbose["prompt"], "[REDACTED]");
 }
 
 #[test]
@@ -385,9 +385,9 @@ fn phase8_real_format_redaction_contract() {
     // Benign content survives.
     assert_eq!(summary["benign"], "ordinary value");
 
-    // Verbose keeps content but still scrubs the shared secret patterns. The
-    // absolute-path redaction is Summary-only by design, so do not assert path
-    // redaction here.
+    // Verbose keeps non-sensitive metadata but still scrubs shared secret patterns.
+    // Absolute-path value redaction remains Summary-only by design, so do not
+    // assert path redaction here.
     let verbose = redact(&details, RedactionMode::Verbose);
     assert_eq!(verbose["anthropic_api03"], "[REDACTED]");
     assert_eq!(verbose["anthropic_api06"], "[REDACTED]");

@@ -7,7 +7,7 @@ use std::fs;
 
 use opi_agent::diagnostic::code;
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
-use opi_coding_agent::tool::LsTool;
+use opi_coding_agent::tool::{LsTool, MAX_NAV_RESULTS, MAX_NAV_VISITED_ENTRIES};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -248,7 +248,7 @@ async fn ls_tool_respects_max_depth() {
     assert!(!t0.contains("a1.txt"), "depth 0 must not recurse: {t0}");
     assert!(!t0.contains("c1.txt"));
 
-    // max_depth=1: a/, a/a1.txt, a/b/ — but not b1.txt or c1.txt.
+    // max_depth=1: a/, a/a1.txt, a/b/, but not b1.txt or c1.txt.
     let t1 = tool_result_text(
         &tool
             .execute(
@@ -267,7 +267,7 @@ async fn ls_tool_respects_max_depth() {
     );
     assert!(!t1.contains("c1.txt"));
 
-    // max_depth=2: + a/b/b1.txt, a/b/c/ — but not c1.txt.
+    // max_depth=2: + a/b/b1.txt, a/b/c/, but not c1.txt.
     let t2 = tool_result_text(
         &tool
             .execute(
@@ -462,6 +462,69 @@ async fn ls_tool_truncation_shows_correct_omitted_count() {
     assert_eq!(details["truncated"], true);
 }
 
+#[tokio::test]
+async fn ls_reports_omitted_count_when_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_NAV_RESULTS + 3) {
+        fs::write(dir.path().join(format!("f{i:04}.txt")), "x").unwrap();
+    }
+    let tool = LsTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "ls-truncated",
+            json!({ "path": "." }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.truncated);
+    assert_eq!(result.details.as_ref().unwrap()["omitted_count"], json!(3));
+}
+
+#[tokio::test]
+async fn ls_bounds_collection_before_walking_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_NAV_RESULTS + 20) {
+        fs::write(dir.path().join(format!("f_{i:04}.txt")), "x").unwrap();
+    }
+
+    let ls = LsTool::new(dir.path().to_path_buf());
+    let result = ls
+        .execute(
+            "ls-bound-1",
+            json!({ "path": "." }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error, "{}", tool_result_text(&result));
+    assert!(result.truncated);
+    let details = result.details.as_ref().expect("details");
+    assert_eq!(
+        details
+            .get("search_terminated_early")
+            .and_then(|v| v.as_bool()),
+        Some(false)
+    );
+    assert!(
+        details
+            .get("omitted_count")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|count| count >= 20),
+        "completed traversal should count omitted entries: {details}"
+    );
+    assert!(
+        details
+            .get("visited_entries")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|count| count <= MAX_NAV_VISITED_ENTRIES as u64),
+        "visited_entries should be bounded: {details}"
+    );
+}
 // --- Filesystem error taxonomy (Phase 11.2) ---
 
 #[tokio::test]
@@ -515,13 +578,14 @@ async fn filesystem_error_taxonomy_directory_failures() {
 #[tokio::test]
 async fn unicode_directory_metadata_round_trips() {
     let dir = tempfile::tempdir().unwrap();
-    fs::create_dir(dir.path().join("日本語")).unwrap();
-    fs::write(dir.path().join("日本語").join("f.txt"), "x").unwrap();
+    let dirname = "unicode_dir_日本語";
+    fs::create_dir(dir.path().join(dirname)).unwrap();
+    fs::write(dir.path().join(dirname).join("f.txt"), "x").unwrap();
     let ls = LsTool::new(dir.path().to_path_buf());
     let result = ls
         .execute(
             "uni-d-1",
-            json!({ "path": "日本語" }),
+            json!({ "path": dirname }),
             CancellationToken::new(),
             None,
         )
@@ -531,7 +595,7 @@ async fn unicode_directory_metadata_round_trips() {
     let details = result.details.as_ref().expect("ls details");
     assert_eq!(
         details.get("path").and_then(|v| v.as_str()),
-        Some("日本語"),
+        Some(dirname),
         "unicode directory name must round-trip in details.path"
     );
     assert!(tool_result_text(&result).contains("f.txt"));
@@ -626,7 +690,7 @@ async fn ls_tool_reports_unsupported_encoding_for_non_utf8_names() {
 
 /// ls honors a NESTED `.gitignore` (the only rule for `secret.txt` lives in
 /// `sub/`), matching grep/find/glob. Pre-11.7 ls hand-rolled a root-only
-/// `GitignoreBuilder` and leaked such files — this fixture catches that bug.
+/// `GitignoreBuilder` and leaked such files; this fixture catches that bug.
 #[tokio::test]
 async fn nested_ignore_consistent_across_nav_tools() {
     let dir = tempfile::tempdir().unwrap();

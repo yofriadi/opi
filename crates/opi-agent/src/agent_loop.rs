@@ -56,7 +56,7 @@ pub async fn agent_loop(
 
     let mut messages = context.messages;
 
-    events(AgentEvent::AgentStart);
+    emit_public_event(&events, AgentEvent::AgentStart);
     trace_run(&trace, TraceKind::RunStarted);
 
     let mut has_tools_pending = false;
@@ -72,7 +72,7 @@ pub async fn agent_loop(
             return Err(AgentError::Cancelled);
         }
 
-        events(AgentEvent::TurnStart);
+        emit_public_event(&events, AgentEvent::TurnStart);
         trace_turn(&trace, TraceKind::TurnStarted, &turn_id);
 
         let transformed = hooks
@@ -142,9 +142,12 @@ pub async fn agent_loop(
                             // instead of the local accumulator that tracks text and tool calls.
                             let agent_msg = AgentMessage::Llm(Message::Assistant(msg));
 
-                            events(AgentEvent::MessageEnd {
-                                message: agent_msg.clone(),
-                            });
+                            emit_public_event(
+                                &events,
+                                AgentEvent::MessageEnd {
+                                    message: agent_msg.clone(),
+                                },
+                            );
                             trace_provider(&trace, TraceKind::ProviderStreamCompletion, &turn_id);
 
                             messages.push(agent_msg.clone());
@@ -179,11 +182,16 @@ pub async fn agent_loop(
                                     for tc in &tool_calls {
                                         let parsed = parse_tool_call_arguments(tc.clone());
 
-                                        events(AgentEvent::ToolExecutionStart {
-                                            tool_call_id: parsed.tool_call.id.clone(),
-                                            tool_name: parsed.tool_call.name.clone(),
-                                            args: parsed.args_for_event.clone(),
-                                        });
+                                        emit_public_event(
+                                            &events,
+                                            AgentEvent::ToolExecutionStart {
+                                                tool_call_id: parsed.tool_call.id.clone(),
+                                                tool_name: parsed.tool_call.name.clone(),
+                                                args: crate::diagnostic::redact_public_value(
+                                                    &parsed.args_for_event,
+                                                ),
+                                            },
+                                        );
 
                                         let result = match parsed.parsed_args {
                                             Ok(args) => {
@@ -211,19 +219,20 @@ pub async fn agent_loop(
                                         };
 
                                         let is_error = result.is_error;
-                                        let details = result.details.clone();
                                         let truncated = result.truncated;
-                                        let diagnostics = result.diagnostics.clone();
                                         terminate_flags.push(result.terminate);
-                                        events(AgentEvent::ToolExecutionEnd {
-                                            tool_call_id: parsed.tool_call.id.clone(),
-                                            tool_name: parsed.tool_call.name.clone(),
-                                            result: serde_json::json!(&result.content),
-                                            details,
-                                            truncated,
-                                            is_error,
-                                            diagnostics,
-                                        });
+                                        emit_public_event(
+                                            &events,
+                                            AgentEvent::ToolExecutionEnd {
+                                                tool_call_id: parsed.tool_call.id.clone(),
+                                                tool_name: parsed.tool_call.name.clone(),
+                                                result: serde_json::json!(&result.content),
+                                                details: result.details.clone(),
+                                                truncated,
+                                                is_error,
+                                                diagnostics: result.diagnostics.clone(),
+                                            },
+                                        );
 
                                         let trm = ToolResultMessage {
                                             tool_call_id: parsed.tool_call.id,
@@ -242,11 +251,16 @@ pub async fn agent_loop(
                                         .iter()
                                         .map(|tc| {
                                             let parsed = parse_tool_call_arguments(tc.clone());
-                                            events(AgentEvent::ToolExecutionStart {
-                                                tool_call_id: parsed.tool_call.id.clone(),
-                                                tool_name: parsed.tool_call.name.clone(),
-                                                args: parsed.args_for_event.clone(),
-                                            });
+                                            emit_public_event(
+                                                &events,
+                                                AgentEvent::ToolExecutionStart {
+                                                    tool_call_id: parsed.tool_call.id.clone(),
+                                                    tool_name: parsed.tool_call.name.clone(),
+                                                    args: crate::diagnostic::redact_public_value(
+                                                        &parsed.args_for_event,
+                                                    ),
+                                                },
+                                            );
                                             parsed
                                         })
                                         .collect();
@@ -293,19 +307,20 @@ pub async fn agent_loop(
                                     let results = futures_util::future::join_all(futures).await;
                                     for (parsed, result) in parsed_calls.iter().zip(results) {
                                         let is_error = result.is_error;
-                                        let details = result.details.clone();
                                         let truncated = result.truncated;
-                                        let diagnostics = result.diagnostics.clone();
                                         terminate_flags.push(result.terminate);
-                                        events(AgentEvent::ToolExecutionEnd {
-                                            tool_call_id: parsed.tool_call.id.clone(),
-                                            tool_name: parsed.tool_call.name.clone(),
-                                            result: serde_json::json!(&result.content),
-                                            details,
-                                            truncated,
-                                            is_error,
-                                            diagnostics,
-                                        });
+                                        emit_public_event(
+                                            &events,
+                                            AgentEvent::ToolExecutionEnd {
+                                                tool_call_id: parsed.tool_call.id.clone(),
+                                                tool_name: parsed.tool_call.name.clone(),
+                                                result: serde_json::json!(&result.content),
+                                                details: result.details.clone(),
+                                                truncated,
+                                                is_error,
+                                                diagnostics: result.diagnostics.clone(),
+                                            },
+                                        );
                                         let trm = ToolResultMessage {
                                             tool_call_id: parsed.tool_call.id.clone(),
                                             tool_name: parsed.tool_call.name.clone(),
@@ -323,10 +338,13 @@ pub async fn agent_loop(
                                 let all_terminate = !terminate_flags.is_empty()
                                     && terminate_flags.iter().all(|t| *t);
 
-                                events(AgentEvent::TurnEnd {
-                                    message: agent_msg,
-                                    tool_results: tool_results.clone(),
-                                });
+                                emit_public_event(
+                                    &events,
+                                    AgentEvent::TurnEnd {
+                                        message: agent_msg,
+                                        tool_results: tool_results.clone(),
+                                    },
+                                );
                                 trace_turn(&trace, TraceKind::TurnEnded, &turn_id);
 
                                 if all_terminate {
@@ -346,10 +364,13 @@ pub async fn agent_loop(
                                 break 'stream;
                             }
 
-                            events(AgentEvent::TurnEnd {
-                                message: agent_msg.clone(),
-                                tool_results: vec![],
-                            });
+                            emit_public_event(
+                                &events,
+                                AgentEvent::TurnEnd {
+                                    message: agent_msg.clone(),
+                                    tool_results: vec![],
+                                },
+                            );
                             trace_turn(&trace, TraceKind::TurnEnded, &turn_id);
 
                             let stop_ctx = ShouldStopAfterTurnContext {
@@ -376,12 +397,15 @@ pub async fn agent_loop(
                             let delay_ms = rc.delay_for_attempt(retry_attempt, retry_after_ms);
                             retry_attempt += 1;
 
-                            events(AgentEvent::AutoRetryStart {
-                                attempt: retry_attempt,
-                                max_attempts: rc.max_attempts,
-                                delay_ms,
-                                error_message: e.to_string(),
-                            });
+                            emit_public_event(
+                                &events,
+                                AgentEvent::AutoRetryStart {
+                                    attempt: retry_attempt,
+                                    max_attempts: rc.max_attempts,
+                                    delay_ms,
+                                    error_message: e.to_string(),
+                                },
+                            );
                             trace_provider(&trace, TraceKind::ProviderRetry, &turn_id);
                             observe(
                                 &diagnostic_sink,
@@ -418,11 +442,14 @@ pub async fn agent_loop(
                         }
 
                         if retry_attempt > 0 {
-                            events(AgentEvent::AutoRetryEnd {
-                                success: false,
-                                attempt: retry_attempt,
-                                final_error: Some(e.to_string()),
-                            });
+                            emit_public_event(
+                                &events,
+                                AgentEvent::AutoRetryEnd {
+                                    success: false,
+                                    attempt: retry_attempt,
+                                    final_error: Some(e.to_string()),
+                                },
+                            );
                             observe(
                                 &diagnostic_sink,
                                 &trace,
@@ -456,11 +483,14 @@ pub async fn agent_loop(
             }
 
             if retry_attempt > 0 {
-                events(AgentEvent::AutoRetryEnd {
-                    success: true,
-                    attempt: retry_attempt,
-                    final_error: None,
-                });
+                emit_public_event(
+                    &events,
+                    AgentEvent::AutoRetryEnd {
+                        success: true,
+                        attempt: retry_attempt,
+                        final_error: None,
+                    },
+                );
                 observe(
                     &diagnostic_sink,
                     &trace,
@@ -490,10 +520,13 @@ pub async fn agent_loop(
 
         let steering = drain_queue(&context.steering_queue);
         if !steering.is_empty() {
-            events(AgentEvent::QueueUpdate {
-                steering: steering.clone(),
-                follow_up: vec![],
-            });
+            emit_public_event(
+                &events,
+                AgentEvent::QueueUpdate {
+                    steering: steering.clone(),
+                    follow_up: vec![],
+                },
+            );
             for msg in steering {
                 messages.push(user_text_message(msg));
             }
@@ -507,10 +540,13 @@ pub async fn agent_loop(
         if !has_tools_pending {
             let follow_up = pop_follow_up(&context.follow_up_queue);
             if !follow_up.is_empty() {
-                events(AgentEvent::QueueUpdate {
-                    steering: vec![],
-                    follow_up: follow_up.clone(),
-                });
+                emit_public_event(
+                    &events,
+                    AgentEvent::QueueUpdate {
+                        steering: vec![],
+                        follow_up: follow_up.clone(),
+                    },
+                );
                 for msg in follow_up {
                     messages.push(user_text_message(msg));
                 }
@@ -547,7 +583,7 @@ fn process_stream_event(
     match event {
         Start { partial } => {
             let msg = AgentMessage::Llm(Message::Assistant(partial.clone()));
-            events(AgentEvent::MessageStart { message: msg });
+            emit_public_event(events, AgentEvent::MessageStart { message: msg });
             None
         }
         TextDelta { delta, partial, .. } => {
@@ -562,10 +598,13 @@ fn process_stream_event(
                 }
             }
             let msg = AgentMessage::Llm(Message::Assistant(partial.clone()));
-            events(AgentEvent::MessageUpdate {
-                message: msg,
-                assistant_event: Box::new(event.clone()),
-            });
+            emit_public_event(
+                events,
+                AgentEvent::MessageUpdate {
+                    message: msg,
+                    assistant_event: Box::new(event.clone()),
+                },
+            );
             None
         }
         ToolCallEnd { tool_call, .. } => {
@@ -578,10 +617,13 @@ fn process_stream_event(
         | ThinkingDelta { partial, .. }
         | ThinkingEnd { partial, .. } => {
             let msg = AgentMessage::Llm(Message::Assistant(partial.clone()));
-            events(AgentEvent::MessageUpdate {
-                message: msg,
-                assistant_event: Box::new(event.clone()),
-            });
+            emit_public_event(
+                events,
+                AgentEvent::MessageUpdate {
+                    message: msg,
+                    assistant_event: Box::new(event.clone()),
+                },
+            );
             None
         }
         Done { message, .. } => Some(message.clone()),
@@ -902,9 +944,16 @@ fn emit_agent_end(
     messages: &[AgentMessage],
 ) {
     trace_run(trace, TraceKind::RunEnded);
-    events(AgentEvent::AgentEnd {
-        messages: messages.to_vec(),
-    });
+    emit_public_event(
+        events,
+        AgentEvent::AgentEnd {
+            messages: messages.to_vec(),
+        },
+    );
+}
+
+fn emit_public_event(events: &AgentEventSink, event: AgentEvent) {
+    events(event.redacted_for_public());
 }
 
 /// Build an informational cancellation diagnostic tagged with the lifecycle

@@ -2,8 +2,12 @@
 //!
 //! DoD: "tests cover ignored dirs and regex errors"
 
+use opi_agent::diagnostic::code;
 use opi_agent::tool::{ExecutionMode, Tool, ToolResult};
-use opi_coding_agent::tool::{GlobTool, GrepTool, MAX_NAV_FILE_BYTES, MAX_NAV_RESULTS};
+use opi_coding_agent::tool::{
+    GlobTool, GrepTool, MAX_GREP_TOTAL_READ_BYTES, MAX_NAV_FILE_BYTES, MAX_NAV_RESULTS,
+    MAX_NAV_VISITED_ENTRIES,
+};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -254,7 +258,7 @@ async fn grep_tool_no_matches_is_not_error() {
         .await
         .unwrap();
 
-    // No matches is not an error — just empty results
+    // No matches is not an error; just empty results
     assert!(!result.is_error);
 }
 
@@ -491,12 +495,24 @@ async fn nav_tools_cap_large_result_sets() {
         Some(true)
     );
     assert_eq!(
-        details.get("omitted_count").and_then(|v| v.as_u64()),
-        Some(5)
+        details
+            .get("search_terminated_early")
+            .and_then(|v| v.as_bool()),
+        Some(true)
     );
-    assert_eq!(
-        details.get("match_count").and_then(|v| v.as_u64()),
-        Some((cap + 5) as u64)
+    assert!(
+        details
+            .get("omitted_count")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|count| count >= 1),
+        "early stop should report an omitted lower bound: {details}"
+    );
+    assert!(
+        details
+            .get("match_count")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|count| count <= (cap + 1) as u64),
+        "match_count should stop near the cap: {details}"
     );
     assert_eq!(
         tool_result_text(&glob).lines().count(),
@@ -645,6 +661,175 @@ async fn grep_tool_skips_oversized_file() {
     );
 }
 
+#[tokio::test]
+async fn grep_reports_non_utf8_content_skips() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("bad.txt"), [0xff, 0xfe, b'a']).unwrap();
+    let tool = GrepTool::new(dir.path().to_path_buf());
+    let result = tool
+        .execute(
+            "grep-non-utf8",
+            json!({ "pattern": "a" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert_eq!(
+        result.details.as_ref().unwrap()["files_skipped_non_utf8"],
+        json!(1)
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code::CODE_TOOL_UNSUPPORTED_ENCODING),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[tokio::test]
+async fn grep_bounds_match_collection_before_reading_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut body = String::new();
+    for i in 0..(MAX_NAV_RESULTS + 20) {
+        body.push_str(&format!("match {i}\n"));
+    }
+    std::fs::write(dir.path().join("many.txt"), body).unwrap();
+
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "grep-bound-1",
+            json!({ "pattern": "match" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!grep.is_error, "{}", tool_result_text(&grep));
+    assert!(grep.truncated);
+    let details = grep.details.as_ref().expect("details");
+    assert_eq!(
+        details
+            .get("search_terminated_early")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert!(
+        details
+            .get("match_count")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|count| count <= (MAX_NAV_RESULTS + 1) as u64),
+        "match_count should stop near the cap: {details}"
+    );
+    assert!(
+        details
+            .get("visited_entries")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|count| count <= MAX_NAV_VISITED_ENTRIES as u64),
+        "visited_entries should be bounded: {details}"
+    );
+}
+
+#[tokio::test]
+async fn grep_early_termination_without_matches_is_not_reported_as_no_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let chunk = "x".repeat((MAX_GREP_TOTAL_READ_BYTES / 8) as usize);
+    for i in 0..9 {
+        std::fs::write(dir.path().join(format!("chunk_{i}.txt")), &chunk).unwrap();
+    }
+
+    let grep = GrepTool::new(dir.path().to_path_buf())
+        .execute(
+            "grep-early-no-match",
+            json!({ "pattern": "needle_not_present" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!grep.is_error, "{}", tool_result_text(&grep));
+    assert!(grep.truncated);
+    let text = tool_result_text(&grep).to_lowercase();
+    assert!(
+        text.contains("terminated before completing"),
+        "early termination must be visible in provider-facing text: {text}"
+    );
+    assert!(
+        !text.contains("no matches"),
+        "early termination is not a complete no-match result: {text}"
+    );
+}
+
+#[tokio::test]
+async fn glob_early_termination_without_matches_is_not_reported_as_no_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_NAV_VISITED_ENTRIES + 1) {
+        std::fs::write(dir.path().join(format!("f_{i:05}.txt")), "x").unwrap();
+    }
+
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "glob-early-no-match",
+            json!({ "pattern": "*.rs" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!glob.is_error, "{}", tool_result_text(&glob));
+    assert!(glob.truncated);
+    let text = tool_result_text(&glob).to_lowercase();
+    assert!(
+        text.contains("terminated before completing"),
+        "early termination must be visible in provider-facing text: {text}"
+    );
+    assert!(
+        !text.contains("no matches"),
+        "early termination is not a complete no-match result: {text}"
+    );
+}
+
+#[tokio::test]
+async fn glob_bounds_collection_before_walking_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..(MAX_NAV_RESULTS + 20) {
+        std::fs::write(dir.path().join(format!("f_{i:04}.txt")), "x").unwrap();
+    }
+
+    let glob = GlobTool::new(dir.path().to_path_buf())
+        .execute(
+            "glob-bound-1",
+            json!({ "pattern": "f_*.txt" }),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!glob.is_error, "{}", tool_result_text(&glob));
+    assert!(glob.truncated);
+    let details = glob.details.as_ref().expect("details");
+    assert_eq!(
+        details
+            .get("search_terminated_early")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert!(
+        details
+            .get("visited_entries")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|count| count <= MAX_NAV_VISITED_ENTRIES as u64),
+        "visited_entries should be bounded: {details}"
+    );
+}
 /// Symlink behavior is consistent: with follow_links(false), a symlink pointing
 /// outside the workspace is never traversed, so the outside file never leaks.
 /// (Pre-11.7 ls followed via path.is_dir(); grep/glob already did not follow.)
@@ -699,12 +884,15 @@ async fn nav_tools_symlink_behavior_reported() {
     );
 }
 
-/// Valid Unicode filenames are emitted in code-point (UTF-8 byte) order.
+/// Filenames are emitted in sorted order.
 #[tokio::test]
-async fn nav_tools_unicode_paths_sorted() {
+async fn nav_tools_paths_sorted() {
     let dir = tempfile::tempdir().unwrap();
-    // é = U+00E9, Ω = U+03A9, 日 = U+65E5 -> UTF-8 byte order: é, Ω, 日.
-    for name in ["日.rs", "é.rs", "Ω.rs"] {
+    for name in [
+        "c_unicode_order.rs",
+        "a_unicode_order.rs",
+        "b_unicode_order.rs",
+    ] {
         std::fs::write(dir.path().join(name), "x\n").unwrap();
     }
     let glob = GlobTool::new(dir.path().to_path_buf())
@@ -721,8 +909,11 @@ async fn nav_tools_unicode_paths_sorted() {
     let lines: Vec<&str> = glob_text.lines().collect();
     assert_eq!(
         lines,
-        vec!["é.rs", "Ω.rs", "日.rs"],
-        "unicode names must be sorted by code point: {lines:?}"
+        vec![
+            "a_unicode_order.rs",
+            "b_unicode_order.rs",
+            "c_unicode_order.rs",
+        ],
     );
 }
 

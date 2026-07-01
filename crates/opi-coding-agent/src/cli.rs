@@ -29,7 +29,25 @@ impl From<ShellName> for clap_complete::Shell {
 
 /// opi — AI coding agent.
 #[derive(Debug, Parser)]
-#[command(name = "opi", version, about = "AI coding agent")]
+#[command(
+    name = "opi",
+    version,
+    about = "AI coding agent",
+    after_long_help = "\
+Tool policy:
+  Interactive mode enables read, write, edit, and bash.
+  Non-interactive/RPC mode defaults to read, grep, find, ls, and glob.
+  write, edit, and bash require --allow-mutating or defaults.allow_mutating_tools = true outside interactive mode.
+  --no-tools disables all tools; --tools is an allowlist; --no-builtin-tools removes built-ins.
+
+Bash policy:
+  bash runs one foreground command from the workspace root.
+  Windows uses cmd /C; Unix uses sh -c.
+  The default timeout is 30 seconds; timeout_secs overrides it per call.
+  Combined stdout/stderr are capped at 64 KiB. Larger output sets truncated and may write the complete output path in details.full_output.
+  This is a tool-selection check, not a permission popup or sandbox subsystem.
+"
+)]
 pub struct Cli {
     /// Model spec, e.g. anthropic:claude-sonnet-4.
     #[arg(short = 'm', long)]

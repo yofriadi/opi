@@ -73,6 +73,8 @@ impl Tool for GlobTool {
 
             let mut matched: Vec<String> = Vec::new();
             let mut non_utf8 = 0usize;
+            let mut visited_entries = 0usize;
+            let mut search_terminated_early = false;
             let mut cancelled = false;
             let walker = super::nav_walk_builder(&workspace_root).build();
 
@@ -83,6 +85,11 @@ impl Tool for GlobTool {
                     cancelled = true;
                     break;
                 }
+                if visited_entries >= super::MAX_NAV_VISITED_ENTRIES {
+                    search_terminated_early = true;
+                    break;
+                }
+                visited_entries += 1;
                 if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                     continue;
                 }
@@ -98,12 +105,34 @@ impl Tool for GlobTool {
                     continue;
                 };
                 matched.push(rel_str.to_owned());
+                if matched.len() > super::MAX_NAV_RESULTS {
+                    search_terminated_early = true;
+                    break;
+                }
             }
 
             matched.sort();
             let total = matched.len();
-            let (text, truncated, omitted_count) =
-                super::cap_nav_results(matched, &format!("no matches for pattern: {pattern}"));
+            let mut truncated = total > super::MAX_NAV_RESULTS;
+            let mut omitted_count = total.saturating_sub(super::MAX_NAV_RESULTS);
+            if search_terminated_early {
+                truncated = true;
+                omitted_count = omitted_count.max(1);
+            }
+            if matched.len() > super::MAX_NAV_RESULTS {
+                matched.truncate(super::MAX_NAV_RESULTS);
+            }
+            let text = if matched.is_empty() {
+                if search_terminated_early {
+                    format!(
+                        "search terminated before completing; results are incomplete for pattern: {pattern}"
+                    )
+                } else {
+                    format!("no matches for pattern: {pattern}")
+                }
+            } else {
+                matched.join("\n")
+            };
 
             // glob walks the workspace root directly, so the relation is always `inside`.
             let details = serde_json::json!({
@@ -114,6 +143,8 @@ impl Tool for GlobTool {
                 "truncated": truncated,
                 "omitted_count": omitted_count,
                 "cancelled": cancelled,
+                "visited_entries": visited_entries,
+                "search_terminated_early": search_terminated_early,
             });
             let mut tool_result = result::ok(vec![OutputContent::Text { text }], details);
             tool_result.truncated = truncated;

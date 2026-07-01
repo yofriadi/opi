@@ -13,7 +13,7 @@ pub use find::FindTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use ls::LsTool;
-pub use read::ReadTool;
+pub use read::{MAX_READ_OUTPUT_BYTES, ReadTool};
 pub use write::WriteTool;
 
 use std::path::{Path, PathBuf};
@@ -148,6 +148,45 @@ pub fn fs_error_result(error: FsToolError) -> ToolResult {
     result
 }
 
+/// Best-effort sibling temp-file cleanup guard for atomic write/edit paths.
+///
+/// Known error branches call [`TempFileGuard::cleanup`] so cleanup stays async.
+/// The `Drop` fallback covers future cancellation or early-return paths between
+/// staging and rename; Drop cannot await, so it uses synchronous removal.
+pub(crate) struct TempFileGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TempFileGuard {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) async fn cleanup(&mut self) {
+        if self.armed {
+            let _ = tokio::fs::remove_file(&self.path).await;
+            self.armed = false;
+        }
+    }
+
+    pub(crate) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 /// Shared `ignore::WalkBuilder` configuration for the four read-only navigation
 /// tools (grep/find/ls/glob), so ignore-file handling, hidden-file defaults,
 /// and no-follow symlink behavior are identical across them (Phase 11.7).
@@ -164,7 +203,8 @@ pub(crate) fn nav_walk_builder(root: &std::path::Path) -> ignore::WalkBuilder {
         .git_ignore(true)
         .git_global(false)
         .git_exclude(false)
-        .add_custom_ignore_filename(".gitignore");
+        .add_custom_ignore_filename(".gitignore")
+        .sort_by_file_path(|a, b| a.cmp(b));
     builder
 }
 
@@ -175,39 +215,20 @@ pub(crate) fn nav_walk_builder(root: &std::path::Path) -> ignore::WalkBuilder {
 /// Exposed as `pub` so behavioral tests can build fixtures sized to the cap.
 pub const MAX_NAV_RESULTS: usize = 200;
 
+/// Upper bound on read-only navigation work before grep/find/glob/ls stop
+/// walking. When this cap is hit, `search_terminated_early` is true and
+/// `omitted_count` is a known lower bound rather than an exact total.
+pub const MAX_NAV_VISITED_ENTRIES: usize = 10_000;
+
+/// Upper bound on cumulative file bytes grep will read during one search.
+pub const MAX_GREP_TOTAL_READ_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Upper bound on the size of a single file grep will read. Files whose
 /// metadata length exceeds this are skipped (counted in
 /// `details.files_oversized_skipped`) so one giant file cannot dominate memory
 /// or time. find/glob/ls do not read file content and are bounded by the
 /// result-count cap instead. Exposed as `pub` for behavioral tests.
 pub const MAX_NAV_FILE_BYTES: u64 = 1 << 20; // 1 MiB
-
-/// Join already-sorted nav-tool result lines, applying the [`MAX_NAV_RESULTS`]
-/// cap. Returns `(text, truncated, omitted_count)`. When there are no lines,
-/// `no_match_message` is returned instead, so a zero-match query is never the
-/// empty string (Phase 11.7). Callers sort before invoking so the cap preserves
-/// the lexicographic prefix.
-pub(crate) fn cap_nav_results(
-    mut items: Vec<String>,
-    no_match_message: &str,
-) -> (String, bool, usize) {
-    let total = items.len();
-    let truncated = total > MAX_NAV_RESULTS;
-    let omitted_count = if truncated {
-        total - MAX_NAV_RESULTS
-    } else {
-        0
-    };
-    if truncated {
-        items.truncate(MAX_NAV_RESULTS);
-    }
-    let text = if items.is_empty() {
-        no_match_message.to_string()
-    } else {
-        items.join("\n")
-    };
-    (text, truncated, omitted_count)
-}
 
 fn expand_user_path(user_path: &str) -> PathBuf {
     let path = user_path.strip_prefix('@').unwrap_or(user_path);

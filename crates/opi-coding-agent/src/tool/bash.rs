@@ -1,7 +1,9 @@
+use std::fs::{File, OpenOptions};
 use std::future::Future;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use opi_agent::diagnostic::code::CODE_TOOL_EXECUTION_FAILED;
@@ -82,7 +84,10 @@ impl Tool for BashTool {
             let shell = if cfg!(windows) { "cmd" } else { "sh" };
             let flag = if cfg!(windows) { "/C" } else { "-c" };
             let mut cmd = tokio::process::Command::new(shell);
-            cmd.arg(flag).arg(&command).current_dir(&cwd);
+            cmd.arg(flag)
+                .arg(&command)
+                .current_dir(&cwd)
+                .kill_on_drop(true);
             let mut child = match cmd
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -125,9 +130,7 @@ impl Tool for BashTool {
                         match s.read(&mut buf).await {
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
-                                if out_cap.append(&buf[..n]).is_err() {
-                                    break;
-                                }
+                                out_cap.append(&buf[..n]);
                             }
                         }
                     }
@@ -140,9 +143,7 @@ impl Tool for BashTool {
                         match s.read(&mut buf).await {
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
-                                if err_cap.append(&buf[..n]).is_err() {
-                                    break;
-                                }
+                                err_cap.append(&buf[..n]);
                             }
                         }
                     }
@@ -152,12 +153,12 @@ impl Tool for BashTool {
                 tokio::select! {
                     biased;
                     _ = &mut cancel_future => {
-                        let _ = child.kill().await;
-                        Control::Cancelled
+                        let kill_error = child.kill().await.err().map(|e| e.to_string());
+                        Control::Cancelled { kill_error }
                     }
                     _ = &mut timeout_future => {
-                        let _ = child.kill().await;
-                        Control::TimedOut
+                        let kill_error = child.kill().await.err().map(|e| e.to_string());
+                        Control::TimedOut { kill_error }
                     }
                     status = child.wait() => match status {
                         Ok(s) => Control::Done(s),
@@ -170,7 +171,7 @@ impl Tool for BashTool {
             let (_, _, ctrl) = tokio::join!(drain_out, drain_err, control);
 
             match ctrl {
-                Control::Cancelled => {
+                Control::Cancelled { kill_error } => {
                     cleanup_spill(&mut out_cap);
                     cleanup_spill(&mut err_cap);
                     let details = with_env_policy(result::bash_operation_metadata(
@@ -191,13 +192,13 @@ impl Tool for BashTool {
                         details,
                         true,
                         false,
-                        &command,
                         None,
                         true,
                         false,
+                        kill_error.as_deref(),
                     ))
                 }
-                Control::TimedOut => {
+                Control::TimedOut { kill_error } => {
                     cleanup_spill(&mut out_cap);
                     cleanup_spill(&mut err_cap);
                     let details = with_env_policy(result::bash_operation_metadata(
@@ -218,22 +219,20 @@ impl Tool for BashTool {
                         details,
                         true,
                         false,
-                        &command,
                         None,
                         false,
                         true,
+                        kill_error.as_deref(),
                     ))
                 }
                 Control::WaitFailed => {
                     cleanup_spill(&mut out_cap);
                     cleanup_spill(&mut err_cap);
-                    Ok(result::err(vec![OutputContent::Text {
-                        text: "failed to wait for process".to_string(),
-                    }]))
+                    Ok(wait_failed_result(&workspace_root, &command, &cwd, shell))
                 }
                 Control::Done(status) => {
                     let exit_code = status.code();
-                    let total = out_cap.total + err_cap.total;
+                    let total = out_cap.total.saturating_add(err_cap.total);
                     let truncated = total > MAX_BASH_OUTPUT_BYTES as u64;
 
                     // Merged preview = stdout preview ++ stderr preview (deterministic
@@ -273,10 +272,10 @@ impl Tool for BashTool {
                         details,
                         is_error,
                         truncated,
-                        &command,
                         exit_code,
                         false,
                         false,
+                        None,
                     ))
                 }
             }
@@ -291,8 +290,8 @@ impl Tool for BashTool {
 /// Which control branch won the wait/timeout/cancel race.
 enum Control {
     Done(std::process::ExitStatus),
-    TimedOut,
-    Cancelled,
+    TimedOut { kill_error: Option<String> },
+    Cancelled { kill_error: Option<String> },
     WaitFailed,
 }
 
@@ -302,7 +301,7 @@ enum Control {
 /// present (the stable operation-metadata contract); only `is_error` flips.
 ///
 /// On an error result a [`ToolDiagnostic`] carrying the operation context
-/// (command/exit_code/cancelled/timed_out/truncated) is pushed so the agent
+/// (exit_code/cancelled/timed_out/truncated) is pushed so the agent
 /// loop (Phase 11.8 / S1) lifts it into a Phase 7 Diagnostic + trace.
 #[allow(clippy::too_many_arguments)] // threads the failure discriminators alongside the result builder inputs
 fn bash_result(
@@ -310,34 +309,64 @@ fn bash_result(
     details: Value,
     is_error: bool,
     truncated: bool,
-    command: &str,
     exit_code: Option<i32>,
     cancelled: bool,
     timed_out: bool,
+    kill_error: Option<&str>,
 ) -> ToolResult {
     let mut tool_result = result::ok(content, details);
     tool_result.is_error = is_error;
     tool_result.truncated = truncated;
     if is_error {
         tool_result.diagnostics.push(bash_operation_diagnostic(
-            command, exit_code, cancelled, timed_out, truncated,
+            exit_code, cancelled, timed_out, truncated, kill_error,
         ));
     }
     tool_result
+}
+
+fn wait_failed_result(workspace_root: &Path, command: &str, cwd: &Path, shell: &str) -> ToolResult {
+    let details = with_env_policy(result::bash_operation_metadata(
+        workspace_root,
+        command,
+        cwd,
+        shell,
+        None,
+        false,
+        false,
+        false,
+        None,
+    ));
+    let mut result = bash_result(
+        vec![OutputContent::Text {
+            text: "failed to wait for process".to_string(),
+        }],
+        details,
+        true,
+        false,
+        None,
+        false,
+        false,
+        None,
+    );
+    if let Some(diagnostic) = result.diagnostics.first_mut() {
+        diagnostic.message = "failed to wait for process".to_string();
+    }
+    result
 }
 
 /// Build the bash operation-failure [`ToolDiagnostic`] carrying the stable
 /// operation context the agent loop lifts into a Phase 7 Diagnostic +
 /// DiagnosticLinked trace (Phase 11.8 / S1). Bash failures have no 11.2
 /// filesystem cause, so the code is the generic [`CODE_TOOL_EXECUTION_FAILED`];
-/// the per-cause detail lives in `context`. `command` is content-sensitive and
-/// is scrubbed by the diagnostic sink in Summary mode.
+/// the per-cause detail lives in `context`. Raw command text is intentionally
+/// excluded because commands can contain secrets.
 fn bash_operation_diagnostic(
-    command: &str,
     exit_code: Option<i32>,
     cancelled: bool,
     timed_out: bool,
     truncated: bool,
+    kill_error: Option<&str>,
 ) -> ToolDiagnostic {
     let message = if cancelled {
         "command cancelled"
@@ -346,19 +375,22 @@ fn bash_operation_diagnostic(
     } else {
         "command exited non-zero"
     };
+    let mut context = json!({
+        "exit_code": exit_code,
+        "cancelled": cancelled,
+        "timed_out": timed_out,
+        "truncated": truncated,
+        "command_included": false,
+    });
+    if let Some(kill_error) = kill_error {
+        context["kill_error"] = json!(kill_error);
+    }
     ToolDiagnostic {
         code: CODE_TOOL_EXECUTION_FAILED.to_string(),
         message: message.to_string(),
-        context: json!({
-            "command": command,
-            "exit_code": exit_code,
-            "cancelled": cancelled,
-            "timed_out": timed_out,
-            "truncated": truncated,
-        }),
+        context,
     }
 }
-
 /// Inject the environment-handling policy token into bash operation metadata.
 ///
 /// `details.env = { "inheritance": "inherited", "values_included": false }`.
@@ -391,8 +423,9 @@ fn with_env_policy(mut details: Value) -> Value {
 /// mid-chunk-overflow, exact-boundary, and straddle cases.
 struct StreamCapture {
     preview: Vec<u8>,
-    spill: Option<std::fs::File>,
+    spill: Option<File>,
     spill_path: Option<PathBuf>,
+    spill_failed: bool,
     total: u64,
     cap: usize,
 }
@@ -403,42 +436,47 @@ impl StreamCapture {
             preview: Vec::new(),
             spill: None,
             spill_path: None,
+            spill_failed: false,
             total: 0,
             cap,
         }
     }
 
     /// Append one read chunk. Single-cursor invariant; see struct docs.
-    fn append(&mut self, chunk: &[u8]) -> std::io::Result<()> {
-        let n = chunk.len();
+    fn append(&mut self, chunk: &[u8]) {
+        self.total = self.total.saturating_add(chunk.len() as u64);
+        if self.spill_failed {
+            return;
+        }
+
         if self.preview.len() < self.cap {
             // Fill the preview up to `cap`.
             let room = self.cap - self.preview.len();
-            let take = n.min(room);
+            let take = chunk.len().min(room);
             self.preview.extend_from_slice(&chunk[..take]);
             let rest = &chunk[take..];
             if !rest.is_empty() {
                 // This chunk crossed the cap. ensure_spill seeds the file with
                 // the frozen preview prefix on first creation; append the rest.
-                self.ensure_spill()?;
-                self.spill
-                    .as_mut()
-                    .expect("spill ensured")
-                    .write_all(rest)?;
+                if let Err(_e) = self.write_to_spill(rest) {
+                    self.mark_spill_failed();
+                }
             }
-        } else {
+        } else if let Err(_e) = self.write_to_spill(chunk) {
             // Preview already frozen at `cap`: every byte goes straight to spill.
-            // ensure_spill seeds the frozen preview the first time it opens the
-            // file, so the spill is the COMPLETE stream even when the cap was
-            // reached by an earlier exact-fit chunk with no crossing remainder.
-            self.ensure_spill()?;
-            self.spill
-                .as_mut()
-                .expect("spill ensured")
-                .write_all(chunk)?;
+            // On the first spill error, stop storing but let the pipe drain continue.
+            self.mark_spill_failed();
         }
-        self.total += n as u64;
-        Ok(())
+    }
+
+    fn write_to_spill(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.ensure_spill()?;
+        self.spill.as_mut().expect("spill ensured").write_all(bytes)
+    }
+
+    fn mark_spill_failed(&mut self) {
+        self.spill_failed = true;
+        cleanup_spill(self);
     }
 
     /// Lazily create the spill file the first time output overflows. The file is
@@ -446,10 +484,10 @@ impl StreamCapture {
     /// (preview prefix + every subsequent byte), regardless of which append
     /// branch first overflows (in-chunk crossing, or a later chunk after an
     /// exact-fit freeze). `preview.len()` is exactly `cap` whenever this runs.
-    fn ensure_spill(&mut self) -> std::io::Result<()> {
+    fn ensure_spill(&mut self) -> io::Result<()> {
         if self.spill.is_none() {
             let path = bash_output_temp_path();
-            let mut file = std::fs::File::create(&path)?;
+            let mut file = create_private_temp_file(&path)?;
             file.write_all(&self.preview)?;
             self.spill = Some(file);
             self.spill_path = Some(path);
@@ -460,14 +498,16 @@ impl StreamCapture {
     /// The complete stream bytes: the spill file contents if the stream
     /// overflowed, otherwise the in-memory preview (which holds the whole
     /// stream because `total <= cap`).
-    fn complete_bytes(&self) -> std::io::Result<Vec<u8>> {
+    fn complete_bytes(&self) -> io::Result<Vec<u8>> {
+        if self.spill_failed {
+            return Err(io::Error::other("bash output spill failed"));
+        }
         match &self.spill_path {
             Some(path) => std::fs::read(path),
             None => Ok(self.preview.clone()),
         }
     }
 }
-
 /// Drop the spill file handle (if any) and best-effort remove the temp file.
 fn cleanup_spill(cap: &mut StreamCapture) {
     cap.spill.take();
@@ -486,13 +526,27 @@ fn write_merged_full_output(out: &StreamCapture, err: &StreamCapture) -> Option<
     let out_bytes = out.complete_bytes().ok()?;
     let err_bytes = err.complete_bytes().ok()?;
     let path = bash_output_temp_path();
-    let mut file = std::fs::File::create(&path).ok()?;
+    let mut file = create_private_temp_file(&path).ok()?;
     file.write_all(&out_bytes).ok()?;
     file.write_all(&err_bytes).ok()?;
     let _ = file.sync_all();
     drop(file);
     Some(path.to_string_lossy().into_owned())
 }
+
+/// Create a private spill file at a caller-chosen temp path.
+fn create_private_temp_file(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+static BASH_OUTPUT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A unique OS-temp path for a bash full-output spill file.
 ///
@@ -506,9 +560,9 @@ fn bash_output_temp_path() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("opi-bash-output-{pid}-{nanos}.log"))
+    let counter = BASH_OUTPUT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("opi-bash-output-{pid}-{nanos}-{counter}.log"))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,8 +570,8 @@ mod tests {
     #[test]
     fn stream_capture_holds_small_stream_in_preview() {
         let mut c = StreamCapture::new(8);
-        c.append(b"abc").unwrap();
-        c.append(b"de").unwrap();
+        c.append(b"abc");
+        c.append(b"de");
         assert_eq!(c.total, 5);
         assert_eq!(c.preview, b"abcde");
         assert!(c.spill.is_none());
@@ -528,7 +582,7 @@ mod tests {
     fn stream_capture_spills_complete_stream_on_overflow() {
         let mut c = StreamCapture::new(4);
         // Single huge chunk (6 bytes, cap 4): preview freezes at 4, spill holds all 6.
-        c.append(b"abcdef").unwrap();
+        c.append(b"abcdef");
         assert_eq!(c.total, 6);
         assert_eq!(c.preview, b"abcd");
         assert!(c.spill.is_some());
@@ -538,8 +592,8 @@ mod tests {
     #[test]
     fn stream_capture_mid_chunk_overflow_is_byte_complete() {
         let mut c = StreamCapture::new(4);
-        c.append(b"ab").unwrap(); // preview=2, no spill
-        c.append(b"cdefgh").unwrap(); // fills preview to 4 (cd), spills complete (abcdefgh)
+        c.append(b"ab"); // preview=2, no spill
+        c.append(b"cdefgh"); // fills preview to 4 (cd), spills complete (abcdefgh)
         assert_eq!(c.total, 8);
         assert_eq!(c.preview, b"abcd");
         assert_eq!(c.complete_bytes().unwrap(), b"abcdefgh");
@@ -548,7 +602,7 @@ mod tests {
     #[test]
     fn stream_capture_exact_boundary_does_not_spill() {
         let mut c = StreamCapture::new(4);
-        c.append(b"abcd").unwrap(); // exactly cap, not overflow
+        c.append(b"abcd"); // exactly cap, not overflow
         assert_eq!(c.total, 4);
         assert_eq!(c.preview, b"abcd");
         assert!(c.spill.is_none());
@@ -557,7 +611,7 @@ mod tests {
     #[test]
     fn stream_capture_cap_plus_one_overflows() {
         let mut c = StreamCapture::new(4);
-        c.append(b"abcde").unwrap(); // cap+1 -> overflow
+        c.append(b"abcde"); // cap+1 -> overflow
         assert_eq!(c.total, 5);
         assert_eq!(c.complete_bytes().unwrap(), b"abcde");
     }
@@ -569,8 +623,8 @@ mod tests {
     #[test]
     fn stream_capture_exact_fit_then_overflow_is_byte_complete() {
         let mut c = StreamCapture::new(4);
-        c.append(b"abcd").unwrap(); // freezes preview at exactly cap, no spill
-        c.append(b"e").unwrap(); // ELSE branch -> first overflow
+        c.append(b"abcd"); // freezes preview at exactly cap, no spill
+        c.append(b"e"); // ELSE branch -> first overflow
         assert_eq!(c.total, 5);
         assert_eq!(c.complete_bytes().unwrap(), b"abcde");
     }
@@ -580,10 +634,48 @@ mod tests {
     #[test]
     fn stream_capture_many_small_exact_fit_then_overflow_is_byte_complete() {
         let mut c = StreamCapture::new(4);
-        c.append(b"ab").unwrap();
-        c.append(b"cd").unwrap(); // freezes preview at exactly cap, no spill
-        c.append(b"efg").unwrap(); // ELSE branch -> first overflow
+        c.append(b"ab");
+        c.append(b"cd"); // freezes preview at exactly cap, no spill
+        c.append(b"efg"); // ELSE branch -> first overflow
         assert_eq!(c.total, 7);
         assert_eq!(c.complete_bytes().unwrap(), b"abcdefg");
+    }
+
+    #[test]
+    fn wait_failed_result_carries_operation_metadata_and_diagnostic() {
+        let workspace = PathBuf::from("D:/workspace");
+        let cwd = workspace.clone();
+        let result = wait_failed_result(&workspace, "echo SECRET_IN_COMMAND", &cwd, "cmd");
+
+        assert!(result.is_error);
+        assert!(!result.truncated);
+
+        let details = result.details.as_ref().expect("details");
+        assert_eq!(details["command"], "echo SECRET_IN_COMMAND");
+        assert_eq!(details["exit_code"], serde_json::Value::Null);
+        assert_eq!(details["timed_out"], false);
+        assert_eq!(details["cancelled"], false);
+        assert_eq!(details["truncated"], false);
+        assert_eq!(
+            details["env"],
+            serde_json::json!({
+                "inheritance": "inherited",
+                "values_included": false
+            })
+        );
+
+        assert_eq!(result.diagnostics.len(), 1);
+        let diagnostic = &result.diagnostics[0];
+        assert_eq!(diagnostic.code, CODE_TOOL_EXECUTION_FAILED);
+        assert_eq!(diagnostic.message, "failed to wait for process");
+        assert_eq!(diagnostic.context["exit_code"], serde_json::Value::Null);
+        assert_eq!(diagnostic.context["timed_out"], false);
+        assert_eq!(diagnostic.context["cancelled"], false);
+        assert_eq!(diagnostic.context["truncated"], false);
+        assert_eq!(diagnostic.context["command_included"], false);
+        assert!(
+            diagnostic.context.get("command").is_none(),
+            "diagnostic context must not carry raw command text"
+        );
     }
 }
