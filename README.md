@@ -19,13 +19,15 @@ version; check [CHANGELOG.md](CHANGELOG.md) for the current delta.
 does not read pi config by default, and uses its own TOML config and JSONL
 session format.
 
-The current tree also carries unreleased changes on top of `0.6.2` (see
-[CHANGELOG.md](CHANGELOG.md)); this includes Phase 10 core-architecture-deepening
-work. `opi-agent` documents and guard-tests runtime event order,
-hook/tool/cancellation semantics, SDK/RPC command-state behavior, and public API
-surface tiers; that runtime stabilization shipped in `0.5.4` and remains the
-normative contract. Treat wire protocols, extension/package surfaces, and trace
-payloads as unstable 0.x unless a crate README explicitly says otherwise.
+The `0.6.2` release includes the Phase 10 provider collection/auth,
+generic-harness, session-facade, and runtime-hook boundary seams. The current
+tree also carries unreleased Phase 11 tooling-quality changes on top of `0.6.2`
+(see [CHANGELOG.md](CHANGELOG.md)): built-in tool results now carry consistent
+metadata, truncation flags, and structured diagnostics; public event/session
+surfaces redact sensitive tool details; provider adapters preserve failed
+tool-result semantics. Treat wire protocols, extension/package surfaces, trace
+payloads, and Phase 10/11 seams as unstable 0.x unless a crate README explicitly
+says otherwise.
 
 ## Install
 
@@ -153,6 +155,21 @@ Default active tools depend on run mode:
 File writes and edits are scoped to the harness workspace root. Interactive
 `read` can inspect absolute paths and paths outside the workspace. These rules
 are tool policy, not an operating-system sandbox.
+
+Phase 11 makes tool results more inspectable without expanding the built-in
+tool set:
+
+- Built-in tool results carry `content`, optional `details`, `is_error`,
+  `terminate`, `truncated`, and optional structured diagnostics.
+- `read` returns line and path metadata, caps omitted output by default at 2000
+  lines, and still applies a 64 KiB byte cap.
+- `bash` runs one foreground command, reports cwd/shell/exit/timeout/cancel
+  metadata, caps combined stdout/stderr at 64 KiB, and may spill the complete
+  output path to `details.full_output`.
+- `grep`, `find`, `ls`, and `glob` share gitignore-aware walking, deterministic
+  ordering, bounded result counts, and skipped-file diagnostics.
+- Tool-selection safety is not a permission system. Use external containers,
+  VMs, or sandboxes when OS-level isolation is required.
 
 ## Config and Sessions
 

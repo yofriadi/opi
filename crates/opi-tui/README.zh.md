@@ -17,6 +17,10 @@
 它不调用 Provider、不运行工具、不读取会话、不加载 package，也不管理后台任务。
 这些职责分别留在 `opi-agent` 和 `opi-coding-agent`。
 
+Phase 11 没有改变这个边界。工具执行和 diagnostics 留在本 crate 之外；
+`opi-tui` 负责渲染由上层传入的 transcript、工具状态、图片占位/escape 和编辑 diff
+预览。
+
 ## 组件
 
 | 项 | 作用 |
@@ -27,7 +31,7 @@
 | `StatusBar` | 应用状态、模型、token/费用状态和实时活动。 |
 | `ToolCallView` | 展示工具名、参数和状态的工具调用行。 |
 | `MarkdownView` / `CodeBlock` | Markdown 与 fenced code block 渲染。 |
-| `DiffView` | 为文件编辑 before/after 渲染 unified diff。 |
+| `DiffView` | 为文件编辑 before/after 和编辑预览快照渲染 unified diff。 |
 | `SelectList` / `SelectListState` | 模型、会话和会话树选择器使用的 fuzzy-select 列表。 |
 | `BranchPicker` / `BranchPickerState` | 会话分支选择器，支持活跃分支标记和 Unicode 宽度感知行。 |
 | `terminal_image` | Kitty/iTerm2/Sixel escape 辅助与文本 fallback。 |

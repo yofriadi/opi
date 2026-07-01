@@ -17,6 +17,12 @@ hooks, event emission, steering/follow-up queues, session JSONL storage,
 branch reconstruction, context compaction, SDK/RPC types, extensions, local
 diagnostics, redacted trace envelopes, and streaming proxy support.
 
+Unreleased Phase 11 changes extend the tool contract with `truncated` and
+tool-owned structured diagnostics. The agent loop lifts those diagnostics into
+the shared diagnostic/trace system and exposes them on public
+`ToolExecutionEnd` events, while keeping provider-facing tool-result messages
+limited to LLM-visible content and failure state.
+
 It depends on `opi-ai` for provider and message types. It does not implement the
 `opi` CLI, terminal UI, or built-in filesystem/shell tools; those live in
 `opi-coding-agent` and `opi-tui`.
@@ -143,6 +149,27 @@ Argument validation runs before `before_tool_call` and before `Tool::execute`.
 A validation failure is a normal runtime outcome, not a loop error: an error
 `ToolResult` (`is_error = true`, `terminate = false`) is persisted and the run
 continues; the hook does not run and the tool does not execute.
+
+## Tool Results and Diagnostics
+
+`ToolResult` is the runtime result contract shared by built-in tools, custom
+tools, and extension tools:
+
+| Field | Meaning |
+|---|---|
+| `content` | LLM-visible text or image output. |
+| `details` | Optional structured metadata for runtime, UI, JSON/RPC, and trace boundaries. |
+| `is_error` | Whether the result represents a tool failure. |
+| `terminate` | Whether this result can end the run when every result in the batch also terminates. |
+| `truncated` | Whether output was shortened or bounded. |
+| `diagnostics` | Tool-owned structured cause records (`code`, `message`, `context`). |
+
+The agent loop reads diagnostics after `after_tool_call`, so replacement results
+can replace diagnostic context too. Each `ToolDiagnostic` is lifted into a
+shared `Diagnostic` and diagnostic-linked trace record. Public events are
+redacted before emission; provider requests receive only the tool result
+content, `is_error`, `truncated`, and timestamp fields through
+`opi_ai::message::ToolResultMessage`.
 
 ## Cancellation
 

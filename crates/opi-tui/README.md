@@ -19,6 +19,10 @@ It does not call providers, run tools, read sessions, load packages, or manage
 background tasks. Those responsibilities stay in `opi-agent` and
 `opi-coding-agent`.
 
+Phase 11 did not change that boundary. Tool execution and diagnostics stay
+outside this crate; `opi-tui` renders the resulting transcript, tool status,
+image placeholders/escapes, and edit diff previews.
+
 ## Components
 
 | Item | Purpose |
@@ -29,7 +33,7 @@ background tasks. Those responsibilities stay in `opi-agent` and
 | `StatusBar` | App state, model, token/cost status, and live activity. |
 | `ToolCallView` | Tool-call line with name, args, and status. |
 | `MarkdownView` / `CodeBlock` | Markdown and fenced code-block rendering. |
-| `DiffView` | Unified diff rendering for before/after file edits. |
+| `DiffView` | Unified diff rendering for before/after file edits and edit-preview snapshots. |
 | `SelectList` / `SelectListState` | Fuzzy-select list for model, session, and tree pickers. |
 | `BranchPicker` / `BranchPickerState` | Session branch picker with active-branch marking and Unicode-width-aware rows. |
 | `terminal_image` | Kitty/iTerm2/Sixel escape helpers plus text fallback. |

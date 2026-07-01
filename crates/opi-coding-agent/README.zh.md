@@ -24,6 +24,10 @@
 - 配置、上下文文件加载、会话持久化、压缩、重试、用量、费用摘要、package/资源发现、
   诊断和可选 trace。
 
+未发布的 Phase 11 变更在不新增核心工作流工具的前提下强化了内置工具：文件系统失败
+现在携带类型化诊断，read/bash 输出截断是显式状态，write/edit 记录审计元数据，导航
+工具共享有界的 gitignore-aware 遍历，失败工具结果会保留到 provider adapter。
+
 本 crate 也可以通过 `CodingHarness` 作为库使用，但多数用户应先从 CLI 开始。
 
 ## 安装
@@ -132,6 +136,22 @@ Provider 凭据环境变量名、base URL、模型列表和代理都可以在配
 非交互/RPC 模式下，显式 allowlist 如果包含 `write`、`edit` 或 `bash`，必须同时设置
 `--allow-mutating` 或 `defaults.allow_mutating_tools = true`。
 
+## 工具结果契约
+
+每个内置工具都返回同一运行时形状：
+
+| 字段 | 含义 |
+|---|---|
+| `content` | LLM 可见的文本或图片输出。 |
+| `details` | 面向 UI、JSON/RPC、会话和 trace 边界的结构化元数据。 |
+| `is_error` | 操作失败或 `bash` 非零退出时设置。 |
+| `terminate` | 预留给明确结束运行的工具。 |
+| `truncated` | 输出因行数、字节或遍历上限被缩短时设置。 |
+| `diagnostics` | 会提升为 opi diagnostics 和 traces 的结构化原因记录。 |
+
+失败 details 在公共边界会被界定和脱敏。Provider 请求接收 LLM 可见内容和失败状态，
+不会接收原始命令或路径敏感诊断上下文。
+
 ## 工具策略
 
 八个内置工具分为只读和修改性两组。修改性工具仅在已解析策略允许时运
@@ -177,6 +197,14 @@ Provider 凭据环境变量名、base URL、模型列表和代理都可以在配
 |------|------|----------|
 | `read` | 默认 2000 行 | 置 `truncated`，追加 `... N lines omitted` 标记，并记录 `details.truncated` / `omitted` / `line_count`。显式 `limit` 不受默认行数上限约束，但仍受 64 KiB 字节上限约束；`limit: 0` 不返回任何行并置 `truncated`。 |
 | `bash` | 合并 stdout+stderr 64 KiB | 当总输出超过上限时，预览为合并后 stdout-then-stderr 的前 64 KiB，置 `truncated` 与 `details.truncated`，并尽力把完整合并输出落盘到临时文件，路径报告在 `details.full_output`。若无法创建该文件，则仅置 `truncated`。 |
+
+### 导航边界
+
+`grep`、`find`、`ls` 和 `glob` 使用同一个 gitignore-aware walker，包含 dotfile，
+不跟随 symlink，并按确定性路径排序。`grep`、`find` 和 `glob` 每次最多返回 200 个
+inline 结果；四个导航工具都会在访问 10,000 个条目后停止遍历。`grep` 还会跳过大于
+1 MiB 的文件，并在累计读取 8 MiB 后停止。跳过文件和提前终止会尽量通过 `details`
+和 diagnostics 报告。
 
 ### 非目标
 

@@ -16,6 +16,10 @@
 JSONL 存储、分支重建、上下文压缩、SDK/RPC 类型、扩展、本地诊断、已脱敏 trace
 envelope，以及 streaming proxy。
 
+未发布的 Phase 11 变更把 `truncated` 和工具自有结构化诊断加入工具契约。Agent
+主循环会把这些诊断提升为共享 diagnostic/trace 记录，并在公共 `ToolExecutionEnd`
+事件上暴露；面向 provider 的工具结果消息仍只携带 LLM 可见内容和失败状态。
+
 它依赖 `opi-ai` 的 Provider 和消息类型。它不实现 `opi` CLI、终端 UI 或具体的
 文件/ shell 内置工具；这些能力分别位于 `opi-coding-agent` 和 `opi-tui`。
 
@@ -129,6 +133,25 @@ Rate limit 和 timeout 等可重试 Provider 错误可通过 `AgentLoopConfig.re
 参数校验在 `before_tool_call` 和 `Tool::execute` 之前执行。校验失败是正常的
 运行时结果，而非循环错误：会持久化一个错误 `ToolResult`（`is_error = true`、
 `terminate = false`）并继续运行；hook 不会执行，工具也不会执行。
+
+## 工具结果与诊断
+
+`ToolResult` 是内置工具、自定义工具和扩展工具共享的运行时结果契约：
+
+| 字段 | 含义 |
+|---|---|
+| `content` | LLM 可见的文本或图片输出。 |
+| `details` | 面向运行时、UI、JSON/RPC 和 trace 边界的可选结构化元数据。 |
+| `is_error` | 该结果是否表示工具失败。 |
+| `terminate` | 当同一批次中的每个结果也终止时，该结果是否可以结束运行。 |
+| `truncated` | 输出是否被缩短或受界限限制。 |
+| `diagnostics` | 工具自有结构化原因记录（`code`、`message`、`context`）。 |
+
+Agent 主循环会在 `after_tool_call` 之后读取 diagnostics，因此替换后的结果也能替换
+诊断上下文。每个 `ToolDiagnostic` 会提升为共享 `Diagnostic` 和 diagnostic-linked
+trace 记录。公共事件在发出前会脱敏；provider 请求只通过
+`opi_ai::message::ToolResultMessage` 接收工具结果 content、`is_error`、
+`truncated` 和时间戳字段。
 
 ## 取消（Cancellation）
 

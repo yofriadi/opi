@@ -24,6 +24,12 @@ with a provider-side auth contract (`AuthDescriptor` / `AuthStatus`),
 OpenAI-compatible compatibility metadata, and stream/complete dispatch. OAuth
 and subscription auth are explicit non-goals.
 
+Unreleased Phase 11 changes also pin provider-side tool-result failure
+semantics. `ToolResultMessage::is_error` stays visible to provider wire
+converters: providers with native error fields use them, while OpenAI-family
+wire formats that lack one use a deterministic text marker. This is a
+correctness fix for existing providers, not a provider-breadth phase.
+
 ## Providers
 
 | Module | Provider id | Backend |
@@ -50,6 +56,7 @@ added through registry overrides or configured OpenAI-compatible profiles.
 | `Request` | Provider request: model, messages, tools, token limits, thinking config, metadata, cancellation. |
 | `Message` | Provider-facing user, assistant, and tool-result messages. |
 | `InputContent` / `OutputContent` | Text and image content blocks. |
+| `ToolResultMessage` | Provider-facing tool-result message: content, optional details, `is_error`, `truncated`, and timestamp metadata. |
 | `AssistantStreamEvent` | Provider-neutral stream events for start, text, thinking, tool calls, done, and error. |
 | `ModelInfo` | Model metadata: context window, output limit, image, streaming, and thinking support. |
 | `ProviderError` / `ProviderErrorCategory` | Provider failure taxonomy: auth, rate limit, timeout, request, and stream errors. |
@@ -70,6 +77,23 @@ format when the selected model supports images.
 `validate_request_capabilities` rejects known text-only models before a network
 call. Bedrock supports byte/base64 image sources through Converse, but URL
 images are rejected locally because Bedrock Converse expects image bytes.
+
+## Tool Result Error Semantics
+
+Failed tool results remain distinguishable on every supported provider wire:
+
+| Provider family | Failure signal |
+|-----------------|----------------|
+| Anthropic | Native `is_error: true` on the `tool_result` content block. |
+| AWS Bedrock | Native `toolResult.status = "error"`. |
+| Gemini / Vertex | `error: true` inside the `functionResponse.response` object. |
+| OpenAI Chat / Azure / OpenRouter / Mistral | `[tool_error] ` prefix on the tool-output string. |
+| OpenAI Responses | `[tool_error] ` prefix on the `function_call_output.output` string. |
+
+Successful (`is_error = false`) tool-result bodies keep their pre-fix wire
+shape. `ToolResultMessage::details` is for opi runtime/UI/session boundaries;
+provider request bodies use the LLM-visible content plus the provider-specific
+failure signal.
 
 ## Minimal Example
 

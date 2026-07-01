@@ -25,6 +25,12 @@ agent. It provides:
 - config, context-file loading, session persistence, compaction, retry, usage,
   cost summaries, package/resource discovery, diagnostics, and opt-in traces.
 
+Unreleased Phase 11 changes harden the built-in tools without adding new core
+workflow tools: filesystem failures now carry typed diagnostics, read/bash
+output truncation is explicit, write/edit record audit metadata, navigation
+tools share bounded gitignore-aware walking, and failed tool results remain
+visible to provider adapters.
+
 The crate is usable as a library through `CodingHarness`, but most users should
 start with the CLI.
 
@@ -136,6 +142,23 @@ Default active tools:
 In non-interactive/RPC mode, explicit allowlists containing `write`, `edit`, or
 `bash` require `--allow-mutating` or `defaults.allow_mutating_tools = true`.
 
+## Tool Result Contract
+
+Every built-in tool returns the same runtime shape:
+
+| Field | Meaning |
+|---|---|
+| `content` | LLM-visible text or image output. |
+| `details` | Structured metadata for UI, JSON/RPC, session, and trace boundaries. |
+| `is_error` | Set when the operation failed or `bash` exited nonzero. |
+| `terminate` | Reserved for tools that deliberately end the run. |
+| `truncated` | Set when output is shortened by line, byte, or walk limits. |
+| `diagnostics` | Structured cause records lifted into opi diagnostics and traces. |
+
+Failure details are deliberately bounded and redacted at public boundaries.
+Provider requests receive the LLM-visible content and failure state, not raw
+command/path-sensitive diagnostic context.
+
 ## Tool Policy
 
 The eight built-in tools split into a read-only set and a mutating set. Mutating
@@ -185,6 +208,15 @@ available; otherwise the mode default applies.
 |------|-----|---------------------|
 | `read` | 2000 lines by default | Sets `truncated`, appends an `... N lines omitted` marker, and records `details.truncated` / `omitted` / `line_count`. An explicit `limit` is not capped by the default line cap, but the 64 KiB byte cap still applies; `limit: 0` returns no lines and flags `truncated`. |
 | `bash` | 64 KiB combined stdout+stderr | When total output exceeds the cap, the preview is the first 64 KiB of merged stdout-then-stderr, `truncated` and `details.truncated` are set, and opi best-effort spills the complete merged output to a temp file reported in `details.full_output`. If the spill file cannot be created, only `truncated` is set. |
+
+### Navigation bounds
+
+`grep`, `find`, `ls`, and `glob` use the same gitignore-aware walker, include
+dotfiles, do not follow symlinks, and sort paths deterministically. `grep`,
+`find`, and `glob` return at most 200 inline results per call; all four
+navigation tools stop walking after 10,000 visited entries. `grep` also skips
+files larger than 1 MiB and stops after reading 8 MiB total. Skipped files and
+early termination are reported through `details` and diagnostics when available.
 
 ### Non-goals
 
